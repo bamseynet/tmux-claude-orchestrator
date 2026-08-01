@@ -21,6 +21,7 @@ case "$cmd" in
     ;;
   attach)       exec tmux attach -t "$SESSION_NAME" ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
+  clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
   help|--help|-h|*)
     cat <<EOF
@@ -38,6 +39,10 @@ orch — tmux + Claude Code orchestrator
                                      perm (opt-in):
                                        --allow "cmd,cmd"  pre-approve commands
   ./orch send  <id> "message"        message a running worker
+  ./orch clean <id>                  retire ONE worker: its tmux window, worktree
+                                     ../wt/<id>, branch orch/<id>, status file and
+                                     watchdog scratch (idempotent)
+  ./orch kill  <id>                  alias for clean
   ./orch status                      list worker states
   ./orch attach                      attach to the tmux session
   ./orch down                        stop background loops (session stays up)
