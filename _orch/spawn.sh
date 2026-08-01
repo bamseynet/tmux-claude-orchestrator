@@ -7,15 +7,14 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd" | --accept-edits | --yolo]}"
+id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]}"
 model="${2:?model required}"
 task="${3:?task prompt required}"
 mode=""
 resume=""        # optional claude resume flag: "--continue" or "--resume <session-id>"
 allow_csv=""     # --allow "cmd,cmd,..." -> permissions.allow in settings.local.json
-perm_flag=""     # extra flag(s) on the `claude` launch (acceptEdits / skip-permissions)
 # optional flags after the task, any order:
-#   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd" | --accept-edits | --yolo]
+#   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
 args=("${@:4}"); i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
@@ -23,8 +22,6 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --continue)     resume="--continue" ;;
     --resume)       i=$((i+1)); resume="--resume ${args[$i]:?--resume needs a <session-id>}" ;;
     --allow)        i=$((i+1)); allow_csv="${args[$i]:?--allow needs a \"cmd,cmd\" list}" ;;
-    --accept-edits) perm_flag="--permission-mode acceptEdits" ;;
-    --yolo|--auto)  perm_flag="--dangerously-skip-permissions" ;;
     *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
   esac
   i=$((i+1))
@@ -79,7 +76,7 @@ jq -Rn --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%T
 #  on base-index 0 sessions, so target an explicit end-of-session slot)
 tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude${resume:+ $resume}${perm_flag:+ $perm_flag}" Enter
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude${resume:+ $resume}" Enter
 
 # 5) wait for the REPL, then set the model
 if wait_ready "$S:$id" 60; then

@@ -80,30 +80,17 @@ do X and a Haiku worker to research Y."* It calls `./orch` for you. See
 
 By default a spawned worker launches bare `claude`, so every Bash/edit/network action blocks on
 an interactive prompt — the orchestrator has to babysit each window. Opt into reduced prompting
-per worker, tiered by risk (pick **one**):
+per worker with an allowlist:
 
 ```bash
-# 1) Allowlist (safest, recommended) — pre-approve specific commands; everything else still gates.
+# Allowlist — pre-approve specific commands; everything else still gates.
 ./orch spawn w1 sonnet "run the tests" --allow "git status,git diff,ls,cat,python -m pytest"
-
-# 2) Accept edits — auto-approve file edits, still gate shell commands.
-./orch spawn w1 sonnet "refactor src/auth" --accept-edits
-
-# 3) Full bypass — no prompts at all (claude --dangerously-skip-permissions).
-./orch spawn w1 sonnet "green-field prototype" --yolo   # alias: --auto
 ```
 
 `--allow` merges a `permissions.allow` block into the worker's generated
-`.claude/settings.local.json` (alongside the report hooks). `--accept-edits` launches
-`claude --permission-mode acceptEdits`; `--yolo` launches `claude --dangerously-skip-permissions`.
-These compose with `--no-worktree`. The allowlist tier gives ~90% of the ergonomic win (no more
-prompt-babysitting) without opening arbitrary command execution, and is the sensible default.
-
-> ⚠️ **`--yolo` runs *any* shell command with your full privileges** — `rm -rf`, `git push`,
-> `curl | sh`, reading `~/.ssh` / cloud creds. A git worktree isolates only *tracked files in
-> that one repo*; it does **not** sandbox the shell, so prompt-injected content a worker reads
-> would execute immediately. Only reasonably safe for **worktree-isolated, disposable** workers
-> on well-scoped tasks — **never** for `--no-worktree` workers operating on the live repo.
+`.claude/settings.local.json` (alongside the report hooks). This composes with `--no-worktree`.
+The allowlist gives ~90% of the ergonomic win (no more prompt-babysitting) without opening
+arbitrary command execution.
 
 ## How notifications work
 
@@ -143,11 +130,10 @@ If a Claude Code TUI update changes the spinner or input box, adjust `is_busy`/`
 ## ⚠️ Caveats — read before unattended runs
 
 - **Security.** For hands-off operation you'll opt workers into reduced prompting (see
-  [Worker permissions](#worker-permissions)). Prefer `--allow` allowlists; reserve `--yolo`
-  (`--dangerously-skip-permissions`) for worktree-isolated, disposable workers — a worker can
-  then read/write/execute anything with no confirmation. **Dev machines and version-controlled
+  [Worker permissions](#worker-permissions)) via `--allow` allowlists, which pre-approve
+  specific commands while everything else still gates. **Dev machines and version-controlled
   code only. No production. No sensitive credentials.** Keep the *master* on the permission
-  allowlist rather than full skip, and keep a review gate before any merge.
+  allowlist too, and keep a review gate before any merge.
 - **Cost.** Each worker is a full session (reportedly ~40K tokens overhead before any work) plus
   its own context; a worker running its own team multiplies that. This can drain a weekly plan
   fast. Lead=Opus, workers=Sonnet, research=Haiku; cap concurrency; watch `/usage`.
