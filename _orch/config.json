@@ -9,7 +9,8 @@
   "watchdog": {
     "enabled": true,
     "check_interval": 15,
-    "cooldown_seconds": 65
+    "cooldown_seconds": 65,
+    "stall_seconds": 90
   },
   "models": {
     "orchestrator": "opus",
