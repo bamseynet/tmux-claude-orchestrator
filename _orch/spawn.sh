@@ -76,13 +76,11 @@ jq -Rn --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%T
 #  on base-index 0 sessions, so target an explicit end-of-session slot)
 tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude${resume:+ $resume}" Enter
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${resume:+ $resume}" Enter
 
-# 5) wait for the REPL, then set the model
-if wait_ready "$S:$id" 60; then
-  send_prompt "$S:$id" "/$model"
-  wait_ready "$S:$id" 20 || true
-else
+# 5) wait for the REPL to be ready before injecting the task.
+#    Model is now set at launch via --model (see #30), so no slash-command dance.
+if ! wait_ready "$S:$id" 60; then
   log "worker $id not ready in 60s; sending task anyway"
 fi
 
