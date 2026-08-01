@@ -7,6 +7,12 @@
 #       reacts to inbox events, so a worker whose pane has not changed for a while
 #       (idle at an empty prompt / stuck on the startup banner) would otherwise go
 #       unnoticed. When one is found, append a single "stalled" event to the inbox.
+#   (3) Dead-worker reconciliation: if a worker window is killed or its claude
+#       session dies, no Stop hook fires and workers/<id>.json stays "working"
+#       forever, so the task is silently lost. Detect a status file that still says
+#       "spawning"/"working" but has NO live tmux window, mark it "dead", and notify
+#       the master once. Unlike (1)/(2) this iterates STATUS FILES (the window is
+#       gone, so a window sweep would never see it).
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
@@ -17,9 +23,59 @@ interval="$(jq -r '.watchdog.check_interval // 15' "$cfg")"
 cooldown="$(jq -r '.watchdog.cooldown_seconds // 65' "$cfg")"
 stall="$(jq -r '.watchdog.stall_seconds // 90' "$cfg")"
 
+# Consecutive ticks a worker must show "active status but no window" before we
+# declare it dead. Debounces the sub-second gap in spawn.sh between writing the
+# "spawning" status file and creating the tmux window, so a just-spawned worker is
+# never mis-flagged. Overridable via env for tests.
+DEAD_CONFIRM_TICKS="${DEAD_CONFIRM_TICKS:-2}"
+
+# Pure predicate (no tmux, no fs): is a worker an orphan? True only when its status
+# is still active (spawning/working) AND its id is not among the live window names.
+# <live_windows> is a newline-separated list of tmux window names.
+worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
+  case "$2" in working | spawning) ;; *) return 1 ;; esac
+  printf '%s\n' "$1" | grep -Fxq "$3" && return 1
+  return 0
+}
+
+# (3) Dead-worker reconciliation sweep. Given the live window-name list, scan every
+# worker status file; a worker that is "active" but has no window is confirmed over
+# DEAD_CONFIRM_TICKS ticks (via a per-worker debounce marker), then marked "dead"
+# with a single inbox event. Reuses report.sh, whose contract is exactly
+# {"id","event":"dead","ts"} + status=dead — so the master is notified once and the
+# now-"dead" status keeps later ticks from re-emitting.
+dead_sweep() { # <live_windows>
+  local windows="$1" f id status dm misses
+  for f in "$WORKERS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    id="$(basename "$f" .json)"
+    status="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+    dm="$STATE_DIR/.dead-$id"
+    if worker_is_orphaned "$windows" "$status" "$id"; then
+      misses="$(cat "$dm" 2>/dev/null || echo 0)"
+      misses=$((misses + 1))
+      if [ "$misses" -ge "$DEAD_CONFIRM_TICKS" ]; then
+        "$here/report.sh" "$id" dead >/dev/null 2>&1 || true
+        rm -f "$dm"
+        log "watchdog: worker '$id' dead (no live window, was $status); notified master"
+      else
+        printf '%s\n' "$misses" > "$dm"
+      fi
+    else
+      # Window present, or a terminal status -> clear any pending debounce.
+      rm -f "$dm"
+    fi
+  done
+}
+
+# Only run the long-lived loop when executed as a script; when sourced (e.g. by the
+# hermetic bats tests) the helpers above are exposed without starting the loop.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 log "watchdog start (interval=${interval}s cooldown=${cooldown}s stall=${stall}s)"
 
 while [ ! -f "$STATE_DIR/.stop" ]; do
+  # Capture the live window names once per tick; reused by both sweeps below.
+  windows="$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)"
   while IFS= read -r w; do
     [ -n "$w" ] || continue
     # Capture the pane once per window per tick and reuse it (keeps the sweep cheap).
@@ -62,7 +118,12 @@ while [ ! -f "$STATE_DIR/.stop" ]; do
       fi
       printf '%s\n%s\n%s\n' "$sig" "$first" "$alerted" > "$wf"
     fi
-  done < <(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)
+  done < <(printf '%s\n' "$windows")
+
+  # (3) reconcile killed/dead workers against the same live window list.
+  dead_sweep "$windows"
+
   sleep "$interval"
 done
 log "watchdog stop"
+fi
