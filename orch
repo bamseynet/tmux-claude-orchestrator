@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# orch — single entrypoint for the tmux + Claude Code orchestrator.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ORCH_ROOT="$here"
+export PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+export SESSION_NAME="${SESSION_NAME:-orch}"
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  up|bootstrap) exec "$here/_orch/bootstrap.sh" "$@" ;;
+  spawn)        exec "$here/_orch/spawn.sh" "$@" ;;
+  send)         exec "$here/_orch/send.sh" "$@" ;;
+  status)
+    shopt -s nullglob
+    any=0
+    for f in "$here/_orch/state/workers"/*.json; do
+      any=1; jq -c '{id, status, model, task, updated}' "$f"
+    done
+    [ "$any" = 0 ] && echo "no workers yet"
+    ;;
+  attach)       exec tmux attach -t "$SESSION_NAME" ;;
+  down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
+  hud)          exec "$here/_orch/hud.sh" ;;
+  help|--help|-h|*)
+    cat <<EOF
+orch — tmux + Claude Code orchestrator
+
+  ./orch up                          start session + master + heartbeat + watchdog
+  ./orch spawn <id> <model> "task"   spawn a worker (own worktree + window)
+                                     model: opus | sonnet | haiku
+  ./orch send  <id> "message"        message a running worker
+  ./orch status                      list worker states
+  ./orch attach                      attach to the tmux session
+  ./orch down                        stop background loops (session stays up)
+
+Env overrides: SESSION_NAME (default: orch), PROJECT_ROOT (default: cwd)
+EOF
+    ;;
+esac

@@ -1,0 +1,9 @@
+# orchestrator runtime state (never commit)
+_orch/state/
+*.log
+
+# git worktrees created for workers
+wt/
+
+# local Claude settings (hooks/permissions are machine-specific)
+.claude/settings.local.json
