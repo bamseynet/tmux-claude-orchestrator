@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: CI only needs to read the repo. No deploy/publish/release steps.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (e.g. rapid PR pushes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: shellcheck + bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install shellcheck and shfmt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt
+          shellcheck --version
+          shfmt --version
+
+      - name: Discover, syntax-check, and lint shell scripts
+        run: |
+          # All tracked shell scripts: every *.sh plus the extensionless `orch`
+          # entrypoint (a bare *.sh glob would miss it).
+          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files 'orch'; } | sort -u)
+          printf 'Found %d shell scripts:\n' "${#scripts[@]}"
+          printf '  %s\n' "${scripts[@]}"
+
+          echo "== bash -n (syntax check, each script) =="
+          for f in "${scripts[@]}"; do
+            bash -n "$f" && echo "ok: $f"
+          done
+
+          echo "== shellcheck (all scripts; uses .shellcheckrc) =="
+          shellcheck "${scripts[@]}"
+
+      - name: shfmt formatting diff (advisory, non-blocking)
+        continue-on-error: true
+        run: |
+          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files 'orch'; } | sort -u)
+          # Advisory only: surfaces formatting drift without gating CI. The repo has
+          # not adopted a shfmt style, so this never fails the build.
+          shfmt -d "${scripts[@]}"
+
+  actionlint:
+    name: actionlint (workflow lint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+        run: |
+          # Pinned binary install (no third-party action), verified against the
+          # published checksum. actionlint runs the runner's preinstalled linter
+          # over each run block too.
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color
+
+  test:
+    name: bats (hermetic unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+          bats --version
+
+      - name: Run bats tests
+        run: bats tests/
