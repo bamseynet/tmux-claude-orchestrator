@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# _orch/spawn.sh <id> <model> "<task>" [--no-worktree]
+# _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>]
 # Creates an isolated worker: new git worktree, new tmux window, a full Claude Code
 # session with report hooks wired back to the orchestrator, then injects the task.
 set -euo pipefail
@@ -10,7 +10,24 @@ source "$here/lib.sh"
 id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku> "<task>" [--no-worktree]}"
 model="${2:?model required}"
 task="${3:?task prompt required}"
-mode="${4:-}"
+mode=""
+resume=""   # optional claude resume flag: "--continue" or "--resume <session-id>"
+# optional flags after the task, any order: [--no-worktree] [--continue] [--resume <session-id>]
+args=("${@:4}"); i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[$i]}" in
+    --no-worktree) mode="--no-worktree" ;;
+    --continue)    resume="--continue" ;;
+    --resume)      i=$((i+1)); resume="--resume ${args[$i]:?--resume needs a <session-id>}" ;;
+    *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
+  esac
+  i=$((i+1))
+done
+# Claude keys sessions by project dir, so a resumed worker must run in that dir.
+if [ -n "$resume" ] && [ "$mode" != "--no-worktree" ]; then
+  mode="--no-worktree"
+  log "resume requested -> forcing --no-worktree (Claude keys sessions by project dir)"
+fi
 
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
@@ -51,7 +68,7 @@ jq -Rn --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%T
 #  on base-index 0 sessions, so target an explicit end-of-session slot)
 tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude" Enter
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude${resume:+ $resume}" Enter
 
 # 5) wait for the REPL, then set the model
 if wait_ready "$S:$id" 60; then
