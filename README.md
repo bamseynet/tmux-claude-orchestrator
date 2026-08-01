@@ -58,6 +58,20 @@ cd /path/to/your/project
 ./orch down          # stop background loops
 ```
 
+### Resuming a session
+
+By default `spawn` launches a fresh Claude session. To resume prior context instead, pass a
+resume flag after the task:
+
+```bash
+./orch spawn w1 sonnet "Continue the auth work" --continue          # newest session in that dir
+./orch spawn w1 sonnet "Continue the auth work" --resume <session-id>
+```
+
+Claude keys sessions by project directory, so a resumed worker must run in the same dir the
+session was recorded in. `--continue`/`--resume` therefore **force `--no-worktree`** (running in
+`PROJECT_ROOT` rather than an isolated `orch/<id>` worktree); a note is logged when this happens.
+
 Inside the master session you can skip the CLI and just talk to it: *"Spawn a Sonnet worker to
 do X and a Haiku worker to research Y."* It calls `./orch` for you. See
 [`examples/quickstart.md`](examples/quickstart.md).
