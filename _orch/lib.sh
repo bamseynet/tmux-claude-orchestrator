@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # _orch/lib.sh — shared helpers. Source this; do not execute directly.
 # Provides: paths, log(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
-#           wait_ready(), send_prompt().
+#           wait_ready(), send_prompt(), and spawn-injection guards
+#           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject().
 
 # Resolve toolkit root (parent of _orch/) from this file's location.
 ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -51,6 +52,35 @@ wait_ready() { # <target> [timeout_s]
   local t="${2:-60}" i=0
   while [ "$i" -lt "$t" ]; do
     if is_ready "$1"; then sleep 0.4; return 0; fi
+    sleep 1; i=$((i+1))
+  done
+  return 1
+}
+
+# Spawn-time injection guards. When a send lands before the REPL is truly ready it
+# is silently lost and the worker sits idle at the startup screen. The startup
+# "Welcome" banner scrolls away once a prompt is actually accepted, so its absence
+# (or a live activity marker) is a robust "the task landed" signal.
+
+# Startup "Welcome" banner still on screen? (0 = banner present)
+pane_has_welcome() { pane_tail "$1" 25 | grep -qi 'Welcome'; }
+
+# Pane shows live activity (spinner / interrupt hint / tool-run glyph)? (0 = active)
+pane_active() { pane_tail "$1" 25 | grep -qE 'esc to interrupt|Running…|Compacting|[✻✽✳✶●]'; }
+
+# An injected prompt appears to have landed: the pane is active and/or the startup
+# banner has scrolled away.
+inject_confirmed() { # <target>  -> 0 if the injection looks accepted
+  pane_active "$1" && return 0
+  pane_has_welcome "$1" && return 1
+  return 0
+}
+
+# Poll until an injected prompt is confirmed, or timeout. Never hangs.
+confirm_inject() { # <target> [timeout_s]
+  local t="${2:-15}" i=0
+  while [ "$i" -lt "$t" ]; do
+    inject_confirmed "$1" && return 0
     sleep 1; i=$((i+1))
   done
   return 1

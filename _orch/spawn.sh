@@ -86,10 +86,37 @@ else
   log "worker $id not ready in 60s; sending task anyway"
 fi
 
-# 6) inject the task
-send_prompt "$S:$id" "$task"
-jq '.status="working"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
-  && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+# 6) inject the task.
+#    Guard 2 (anti-skill preamble): shape ONLY the injected prompt so the worker
+#    completes the task directly instead of detouring into a skill. It keeps every
+#    skill available for later legitimate use — this changes the first message, not
+#    the session config.
+preamble='[Orchestrated task — complete it directly. Do not invoke any skill unless this task explicitly requires one.] '
+send_prompt "$S:$id" "${preamble}${task}"
 
-log "spawned $id ($model) in $wdir"
-echo "spawned $id ($model)  ->  window $S:$id   dir $wdir"
+# Guard 1 (inject verification + retry): a send can land before the REPL is ready
+# and be lost, leaving the worker idle at the startup screen so it never fires a
+# report hook. Confirm the injection landed (banner scrolled away / pane active);
+# re-inject once; if still unconfirmed, mark spawn-failed and notify the master.
+# Bounded polling — never hangs.
+if confirm_inject "$S:$id" 15; then
+  spawn_ok=1
+else
+  log "worker $id: task injection unconfirmed; re-injecting once"
+  send_prompt "$S:$id" "${preamble}${task}"
+  if confirm_inject "$S:$id" 15; then spawn_ok=1; else spawn_ok=0; fi
+fi
+
+if [ "$spawn_ok" -eq 1 ]; then
+  jq '.status="working"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
+    && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+  log "spawned $id ($model) in $wdir"
+  echo "spawned $id ($model)  ->  window $S:$id   dir $wdir"
+else
+  # Never-started worker: record it and tell the master so the spawn is not lost.
+  jq '.status="spawn-failed"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
+    && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+  printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+  log "worker $id: spawn-failed (task injection unconfirmed after retry)"
+  echo "spawn-failed $id ($model)  ->  window $S:$id   dir $wdir" >&2
+fi
