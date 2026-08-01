@@ -1,0 +1,13 @@
+# ShellCheck configuration for tmux-claude-orchestrator.
+# CI scopes lint results green here rather than editing runtime scripts.
+# Both suppressions below are for benign, pre-existing findings (documented for review):
+#
+#   SC2034 (unused variable): INBOX is declared in _orch/lib.sh but consumed by
+#     _orch/heartbeat.sh and _orch/report.sh, which source lib.sh. ShellCheck analyses
+#     each file in isolation and cannot see the cross-file use, so this is a false positive.
+#
+#   SC2015 (A && B || C is not if-then-else): the `jq ... && mv ... || true` line in
+#     _orch/report.sh is intentional — the report hook must never fail the worker session,
+#     so it swallows errors from both jq and mv. The `|| true` is the desired behaviour.
+disable=SC2034
+disable=SC2015
