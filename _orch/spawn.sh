@@ -47,7 +47,9 @@ jq -Rn --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%T
   '{id:$id, status:"spawning", model:$m, task:$t, updated:$u}' > "$WORKERS_DIR/$id.json"
 
 # 4) new window + launch a full Claude Code session
-tmux new-window -t "$S" -n "$id" -c "$wdir"
+# (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
+#  on base-index 0 sessions, so target an explicit end-of-session slot)
+tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
 tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude" Enter
 
