@@ -27,13 +27,18 @@ case "$cmd" in
 orch — tmux + Claude Code orchestrator
 
   ./orch up                          start session + master + heartbeat + watchdog
-  ./orch spawn <id> <model> "task"   spawn a worker (own worktree + window)
+  ./orch spawn <id> <model> "task" [--no-worktree] [perm]
+                                     spawn a worker (own worktree + window)
                                      model: opus | sonnet | haiku
                                      [--no-worktree]        run in PROJECT_ROOT, no worktree
                                      [--continue]           resume newest session in that dir
                                      [--resume <id>]        resume a specific session id
                                      (--continue/--resume force --no-worktree: Claude keys
                                       sessions by project dir)
+                                     perm (opt-in, pick one):
+                                       --allow "cmd,cmd"  pre-approve commands (safest)
+                                       --accept-edits     auto-approve file edits
+                                       --yolo             skip ALL prompts (see README caveats)
   ./orch send  <id> "message"        message a running worker
   ./orch status                      list worker states
   ./orch attach                      attach to the tmux session
