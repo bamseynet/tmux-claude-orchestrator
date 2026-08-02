@@ -41,6 +41,36 @@ drain_inbox() {
   rm -f "$proc"
 }
 
+# Drain one pending spawn from the queue (issues #21/#31/#24) if the unified
+# resource gate now allows it — e.g. a worker just freed a concurrency slot by
+# reporting "done". Re-checks the gate itself, so it's safe to call every tick.
+drain_queue_if_room() {
+  [ -s "$QUEUE" ] || return 0
+  if ! check_spawn_gate; then
+    log "queue drain: still blocked ($GATE_REASON)"
+    return 0
+  fi
+  local item id model task mode resume allow
+  item="$(queue_pop)" || return 0
+  id="$(jq -r '.id' <<<"$item")"
+  model="$(jq -r '.model' <<<"$item")"
+  task="$(jq -r '.task' <<<"$item")"
+  mode="$(jq -r '.mode' <<<"$item")"
+  resume="$(jq -r '.resume' <<<"$item")"
+  allow="$(jq -r '.allow_csv' <<<"$item")"
+
+  local args=("$id" "$model" "$task")
+  [ "$mode" = "--no-worktree" ] && args+=(--no-worktree)
+  if [ -n "$resume" ]; then
+    local rargs=(); read -ra rargs <<< "$resume"
+    args+=("${rargs[@]}")
+  fi
+  [ -n "$allow" ] && args+=(--allow "$allow")
+
+  log "queue drain: spawning queued worker $id"
+  "$here/spawn.sh" "${args[@]}" >> "$LOG" 2>&1 &
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   local cfg="$here/config.json"
@@ -52,6 +82,8 @@ heartbeat_main() {
   log "heartbeat start (session=$S)"
 
   while [ ! -f "$STATE_DIR/.stop" ]; do
+    drain_queue_if_room
+
     if events="$(drain_inbox)"; then
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
       if wait_ready "$S:$ORCH_WINDOW" 45; then

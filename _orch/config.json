@@ -4,7 +4,14 @@
     "idle_seconds": 60
   },
   "thresholds": {
-    "max_workers": 4
+    "max_workers": 4,
+    "min_free_mb": 512,
+    "est_worker_mb": 400
+  },
+  "budget": {
+    "enabled": true,
+    "max_usd": 5.0,
+    "est_usd_per_worker": 0.5
   },
   "watchdog": {
     "enabled": true,

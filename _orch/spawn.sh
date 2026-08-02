@@ -40,6 +40,23 @@ if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; t
   echo "worker '$id' already exists in session '$S'"; exit 1
 fi
 
+# Unified resource guard (issues #21 concurrency, #31 memory, #24 budget): refuse
+# to launch another full Claude Code session when any cap is at/over the line, and
+# persist the spawn to the pending queue instead. heartbeat.sh drains the queue as
+# soon as the gate allows it again (typically once a worker reports "done").
+if ! check_spawn_gate; then
+  ts="$(date -u +%FT%TZ)"
+  queue_item="$(jq -nc --arg id "$id" --arg model "$model" --arg task "$task" --arg mode "$mode" \
+        --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" --arg reason "$GATE_REASON" \
+    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason}')"
+  queue_push "$queue_item"
+  jq -n --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
+    '{id:$id, status:"queued", model:$m, task:$t, updated:$u}' > "$WORKERS_DIR/$id.json"
+  log "spawn refused for $id: $GATE_REASON; queued"
+  echo "spawn queued: $id ($model) refused — $GATE_REASON"
+  exit 0
+fi
+
 # 1) working directory: isolated worktree (default) or the project root
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
@@ -108,6 +125,7 @@ fi
 if [ "$spawn_ok" -eq 1 ]; then
   jq '.status="working"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
     && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+  record_spend
   log "spawned $id ($model) in $wdir"
   echo "spawned $id ($model)  ->  window $S:$id   dir $wdir"
 else

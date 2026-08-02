@@ -48,6 +48,11 @@ orch — tmux + Claude Code orchestrator
   ./orch down                        stop background loops (session stays up)
 
 Env overrides: SESSION_NAME (default: orch), PROJECT_ROOT (default: cwd)
+
+Spawns are refused-and-queued (not dropped) when at capacity: concurrency
+(thresholds.max_workers), free memory (thresholds.min_free_mb/est_worker_mb), or
+estimated spend (budget.max_usd) in _orch/config.json. The heartbeat drains the
+queue once a worker frees a slot.
 EOF
     ;;
 esac

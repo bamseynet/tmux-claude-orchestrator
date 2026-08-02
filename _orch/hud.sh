@@ -14,9 +14,22 @@ for f in "$WORKERS_DIR"/*.json; do
     blocked|needs-input|error) c="#[fg=red,bold]" ;;
     done|subagent-done)        c="#[fg=green]" ;;
     working|spawning)          c="#[fg=yellow]" ;;
+    queued)                    c="#[fg=cyan]" ;;
     *)                         c="#[fg=white]" ;;
   esac
   out+="${c}${id}:${st}#[default] "
 done
 [ -z "$out" ] && out="#[fg=colour244]no workers#[default]"
-printf '%s' "$out"
+
+# Coarse per-session spend estimate (issue #24): spawns * budget.est_usd_per_worker,
+# against the configured cap. Purely informational — not exact token metering.
+budget_out=""
+if [ -f "$here/config.json" ]; then
+  budget_max="$(jq -r '.budget.max_usd // empty' "$here/config.json" 2>/dev/null)"
+  if [ -n "$budget_max" ]; then
+    spent="$(est_spend_usd 2>/dev/null || echo 0)"
+    budget_out="#[fg=colour244]~\$${spent}/\$${budget_max}#[default] "
+  fi
+fi
+
+printf '%s' "${budget_out}${out}"
