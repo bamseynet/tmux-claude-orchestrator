@@ -20,7 +20,10 @@ ORCH_DIR="$BATS_TEST_DIRNAME/../_orch"
 }
 
 @test "watchdog.sh emits a stalled inbox event" {
-  grep -Fq '"event":"stalled"' "$ORCH_DIR/watchdog.sh"
+  # event name is interpolated (liveness_check also emits "needs-input-stalled"
+  # and "ready-for-review" via the same printf, issue #50), so assert on the
+  # literal "stalled" event-name assignment instead of the full inbox line.
+  grep -Fq 'ev="stalled"' "$ORCH_DIR/watchdog.sh"
 }
 
 @test "watchdog.sh reads the stall threshold from config" {
