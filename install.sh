@@ -2,11 +2,23 @@
 # install.sh [TARGET_REPO_DIR]
 # Copies the orchestrator toolkit into a target git repo and writes a local Claude
 # settings file (teams enabled + permission allowlist for the master). Defaults to cwd.
+# Safe to re-run against an already-installed target: it's an idempotent update that
+# preserves the target's own _orch/config.json (thresholds/budget tuning) instead of
+# clobbering it with the source defaults.
 set -euo pipefail
 src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 target="${1:-$(pwd)}"
+version="$(cat "$src/VERSION" 2>/dev/null || echo unknown)"
+prev_version=""
+[ -f "$target/.orch-version" ] && prev_version="$(cat "$target/.orch-version")"
 
-echo "Installing orchestrator toolkit into: $target"
+if [ -n "$prev_version" ] && [ "$prev_version" != "$version" ]; then
+  echo "Updating orchestrator toolkit in: $target ($prev_version -> $version)"
+elif [ -n "$prev_version" ]; then
+  echo "Re-installing orchestrator toolkit in: $target (already at $version)"
+else
+  echo "Installing orchestrator toolkit into: $target ($version)"
+fi
 
 for dep in tmux jq claude perl git; do
   if ! command -v "$dep" >/dev/null; then
@@ -20,11 +32,25 @@ if [ ! -d "$target/.git" ]; then
 fi
 
 mkdir -p "$target/.claude"
+
+# Idempotent update: preserve the target's own config.json (thresholds/budget the
+# user has already tuned) across a re-install, instead of overwriting it with the
+# source defaults every time.
+cfg_backup=""
+[ -f "$target/_orch/config.json" ] && cfg_backup="$(cat "$target/_orch/config.json")"
+
 cp -R "$src/_orch" "$target/"
 cp -R "$src/tmux" "$target/"
 cp "$src/orch" "$target/"
 chmod +x "$target/orch" "$target/_orch/"*.sh
 rm -rf "$target/_orch/state"   # never copy runtime state
+
+if [ -n "$cfg_backup" ]; then
+  printf '%s' "$cfg_backup" > "$target/_orch/config.json"
+  echo "  . preserved existing $target/_orch/config.json"
+fi
+
+echo "$version" > "$target/.orch-version"
 
 # Orchestrator (master) settings: enable teams + allow it to drive tmux and the toolkit.
 settings="$target/.claude/settings.local.json"
