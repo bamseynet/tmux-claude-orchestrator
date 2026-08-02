@@ -184,7 +184,9 @@ liveness_check() { # <w> <pane_text> <now>
 
   if [ -n "$thr" ] && [ "$age" -ge "$thr" ] \
      && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$realert_base" "$realert_max" "$now"; }; then
-    printf '{"id":"%s","event":"%s","ts":"%s"}\n' "$w" "$ev" "$(date -u +%FT%TZ)" >> "$INBOX"
+    ev_line="$(printf '{"id":"%s","event":"%s","ts":"%s"}' "$w" "$ev" "$(date -u +%FT%TZ)")"
+    printf '%s\n' "$ev_line" >> "$INBOX"
+    printf '%s\n' "$ev_line" >> "$STATE_DIR/events.jsonl"
     log "watchdog: worker '$w' $ev (${age}s no change, status=$status, alert #$((alert_count + 1))); notified master"
     last_alert="$now"
     alert_count=$((alert_count + 1))
@@ -204,7 +206,9 @@ liveness_check() { # <w> <pane_text> <now>
   : "${r_last:=0}"; : "${r_count:=0}"
   if [ "${ahead:-0}" -gt 0 ] 2>/dev/null; then
     if [ "$r_count" -eq 0 ] || realert_due "$r_last" "$r_count" "$realert_base" "$realert_max" "$now"; then
-      printf '{"id":"%s","event":"ready-for-review","ts":"%s"}\n' "$w" "$(date -u +%FT%TZ)" >> "$INBOX"
+      rfr_line="$(printf '{"id":"%s","event":"ready-for-review","ts":"%s"}' "$w" "$(date -u +%FT%TZ)")"
+      printf '%s\n' "$rfr_line" >> "$INBOX"
+      printf '%s\n' "$rfr_line" >> "$STATE_DIR/events.jsonl"
       log "watchdog: worker '$w' ready-for-review (${ahead} commit(s) ahead, idle ${age}s, alert #$((r_count + 1))); notified master"
       r_last="$now"; r_count=$((r_count + 1))
     fi
