@@ -42,16 +42,37 @@ pane_tail() { # <target> [lines]
   tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "${2:-15}" | strip_ansi
 }
 
+# --- TUI match patterns (issue #12) -------------------------------------------------
+# Every regex used to read the Claude Code TUI's pane state is centralized here,
+# sourced from _orch/config.json's `tui_patterns` block, so a future Claude Code UI
+# change is a one-line config edit instead of a code change. Defaults below (used
+# when config.json is missing the block, e.g. in older checkouts) match the
+# patterns this file shipped with historically.
+_tui_pattern() { # <key> <default>
+  local v
+  v="$(jq -r ".tui_patterns.$1 // empty" "$CONFIG" 2>/dev/null)"
+  [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$2"
+}
+TUI_BUSY_REGEX="$(_tui_pattern busy_regex 'esc to interrupt|Running…|Compacting')"
+# Deliberately excludes the "●" busy dot: it also appears in idle output (e.g. a
+# status-line mode indicator), so matching it here caused inject_confirmed to
+# report a dropped task as landed (issue #12). Only the animated spinner frames,
+# which are exclusive to an active turn, count as an activity glyph.
+TUI_ACTIVE_GLYPH_REGEX="$(_tui_pattern active_glyph_regex '✻|✽|✳|✶')"
+TUI_READY_REGEX="$(_tui_pattern ready_regex '│ *>|❯|for shortcuts|Try "')"
+TUI_WELCOME_REGEX="$(_tui_pattern welcome_regex 'Welcome')"
+TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
+
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
 is_busy() { # <target>  -> 0 if busy
-  pane_tail "$1" 15 | grep -qiE 'esc to interrupt|Running…|Compacting'
+  pane_tail "$1" 15 | grep -qiE "$TUI_BUSY_REGEX"
 }
 
 # Ready if not busy AND the input prompt box is visible.
 is_ready() { # <target>  -> 0 if idle & ready for input
   is_busy "$1" && return 1
-  pane_tail "$1" 15 | grep -qE '│ >|❯|for shortcuts|Try "'
+  pane_tail "$1" 15 | grep -qE "$TUI_READY_REGEX"
 }
 
 # Block until a pane is ready or timeout. Adds a short settle after ready.
@@ -70,17 +91,22 @@ wait_ready() { # <target> [timeout_s]
 # (or a live activity marker) is a robust "the task landed" signal.
 
 # Startup "Welcome" banner still on screen? (0 = banner present)
-pane_has_welcome() { pane_tail "$1" 25 | grep -qi 'Welcome'; }
+pane_has_welcome() { pane_tail "$1" 25 | grep -qi "$TUI_WELCOME_REGEX"; }
 
-# Pane shows live activity (spinner / interrupt hint / tool-run glyph)? (0 = active)
-pane_active() { pane_tail "$1" 25 | grep -qE 'esc to interrupt|Running…|Compacting|[✻✽✳✶●]'; }
+# Pane shows live activity (spinner / interrupt hint)? (0 = active)
+pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_REGEX"; }
 
-# An injected prompt appears to have landed: the pane is active and/or the startup
-# banner has scrolled away.
+# An injected prompt appears to have landed. Requires positive evidence rather than
+# defaulting to "landed" (issue #12): either the pane is actively working the task,
+# or the startup banner has scrolled away AND the pane is back to a ready prompt
+# (i.e. it landed and finished fast). Anything else — including "banner already
+# gone but no activity and no ready prompt either" — is treated as NOT confirmed,
+# so spawn.sh's retry/failure path can kick in instead of silently trusting it.
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   pane_active "$1" && return 0
   pane_has_welcome "$1" && return 1
-  return 0
+  is_ready "$1" && return 0
+  return 1
 }
 
 # Poll until an injected prompt is confirmed, or timeout. Never hangs.

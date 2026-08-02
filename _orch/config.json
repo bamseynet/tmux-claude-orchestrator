@@ -24,5 +24,12 @@
   "models": {
     "orchestrator": "opus",
     "default_worker": "sonnet"
+  },
+  "tui_patterns": {
+    "busy_regex": "esc to interrupt|Running…|Compacting",
+    "active_glyph_regex": "✻|✽|✳|✶",
+    "ready_regex": "│ *>|❯|for shortcuts|Try \"",
+    "welcome_regex": "Welcome",
+    "input_glyph_regex": "│ *>|❯"
   }
 }
