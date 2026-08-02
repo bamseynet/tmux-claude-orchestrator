@@ -22,6 +22,7 @@ cfg="$here/config.json"
 interval="$(jq -r '.watchdog.check_interval // 15' "$cfg")"
 cooldown="$(jq -r '.watchdog.cooldown_seconds // 65' "$cfg")"
 stall="$(jq -r '.watchdog.stall_seconds // 90' "$cfg")"
+rl_regex="$(jq -r '.watchdog.rate_limit_regex // "rate limit|429|overloaded|too many requests|usage limit"' "$cfg")"
 
 # Consecutive ticks a worker must show "active status but no window" before we
 # declare it dead. Debounces the sub-second gap in spawn.sh between writing the
@@ -36,6 +37,52 @@ worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
   case "$2" in working | spawning) ;; *) return 1 ;; esac
   printf '%s\n' "$1" | grep -Fxq "$3" && return 1
   return 0
+}
+
+# Pure predicate (no tmux, no fs): does this pane text show a rate-limit error?
+# Broadened beyond "rate limit"/429/overloaded to also catch phrasing like
+# "usage limit reached" that providers use instead of a literal "rate limit".
+rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
+  printf '%s\n' "$1" | grep -qiE "$rl_regex"
+}
+
+# (1) Non-blocking rate-limit cooldown. Per-worker cooldown-until timestamp lives in
+# $STATE_DIR/.rl-<window> instead of an inline `sleep`, so a rate-limited worker is
+# skipped on subsequent ticks WITHOUT blocking the sweep of every other window.
+# Once the cooldown elapses we verify the limit actually cleared before nudging the
+# worker to retry: if it is still rate-limited we simply extend the cooldown rather
+# than nudging into a wall.
+#
+# Prints exactly one of:
+#   detected  - just started a new cooldown
+#   skip      - still inside an existing cooldown window
+#   extended  - cooldown elapsed but the pane is still rate-limited; cooldown reset
+#   nudge     - cooldown elapsed and the limit cleared; caller should send the retry
+#   (empty)   - not rate-limited and no cooldown in progress (exit status 1)
+rl_action() { # <window> <pane_text> <now> <cooldown_seconds>
+  local w="$1" pane="$2" now="$3" cd="$4"
+  local f="$STATE_DIR/.rl-$w" until
+  if [ -f "$f" ]; then
+    until="$(cat "$f" 2>/dev/null || echo 0)"
+    if [ "$now" -lt "$until" ]; then
+      echo "skip"
+      return 0
+    fi
+    if rate_limited "$pane"; then
+      echo $((now + cd)) > "$f"
+      echo "extended"
+      return 0
+    fi
+    rm -f "$f"
+    echo "nudge"
+    return 0
+  fi
+  if rate_limited "$pane"; then
+    echo $((now + cd)) > "$f"
+    echo "detected"
+    return 0
+  fi
+  return 1
 }
 
 # (3) Dead-worker reconciliation sweep. Given the live window-name list, scan every
@@ -81,14 +128,28 @@ while [ ! -f "$STATE_DIR/.stop" ]; do
     # Capture the pane once per window per tick and reuse it (keeps the sweep cheap).
     pane="$(pane_tail "$S:$w" 25)"
 
-    # (1) rate-limit cooldown + retry nudge
-    if printf '%s\n' "$pane" | grep -qiE 'rate limit|429|overloaded|too many requests'; then
-      log "rate limit detected on '$w'; cooling ${cooldown}s"
-      sleep "$cooldown"
-      wait_ready "$S:$w" 10 || true
-      send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
-      log "sent retry nudge to '$w'"
-      continue  # pane just changed; skip the stall check for this tick
+    # (1) non-blocking rate-limit cooldown + retry nudge (per-worker, never sleeps
+    # the sweep — see rl_action() above).
+    now="$(date +%s)"
+    rl_result="$(rl_action "$w" "$pane" "$now" "$cooldown")" && rl_hit=1 || rl_hit=0
+    if [ "$rl_hit" = "1" ]; then
+      case "$rl_result" in
+        detected)
+          log "rate limit detected on '$w'; cooling ${cooldown}s (non-blocking)"
+          ;;
+        skip)
+          : # still cooling; nothing to do this tick
+          ;;
+        extended)
+          log "rate limit still active on '$w' after cooldown; extending ${cooldown}s"
+          ;;
+        nudge)
+          wait_ready "$S:$w" 10 || true
+          send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
+          log "rate limit cleared on '$w'; sent retry nudge"
+          ;;
+      esac
+      continue  # cooling, extending, or pane just changed -> skip the stall check
     fi
 
     # (2) liveness sweep: flag a stalled/never-started worker once per stall episode.
