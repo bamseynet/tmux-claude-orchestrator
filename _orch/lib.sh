@@ -3,6 +3,7 @@
 # Provides: paths, log(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject(),
+#           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
 #           spend_count(), est_spend_usd(), record_spend(), check_spawn_gate(),
 #           queue_push(), queue_pop().
@@ -94,16 +95,63 @@ confirm_inject() { # <target> [timeout_s]
 
 # Deliver text into a pane reliably:
 #  - load-buffer/paste-buffer handles multiline (send-keys breaks on newlines)
-#  - -p -d pastes bracketed then deletes the buffer
-#  - a SEPARATE Enter avoids racing Claude's input buffer
+#  - a buffer name unique per call (target + pid + $RANDOM + a call counter) so two
+#    concurrent sends to the same target (e.g. a watchdog nudge racing `orch send`)
+#    never collide on the same tmux buffer (issue #14)
+#  - -p -d pastes bracketed then deletes the buffer; Enter is gated on that delete
+#    actually landing (polled via `show-buffer`) instead of a fixed timing guess
+: "${_SEND_PROMPT_SEQ:=0}"
 send_prompt() { # <target> <text...>
   local target="$1"; shift
   local text="$*"
-  local buf="b-${target//[^a-zA-Z0-9]/_}"
+  _SEND_PROMPT_SEQ=$((_SEND_PROMPT_SEQ + 1))
+  local buf="b-${target//[^a-zA-Z0-9]/_}-$$-${RANDOM}-${_SEND_PROMPT_SEQ}"
   printf '%s' "$text" | tmux load-buffer -b "$buf" -
   tmux paste-buffer -p -d -b "$buf" -t "$target"
-  sleep 0.4
+  # -d deletes the buffer once the paste is delivered; poll for that instead of
+  # a blind sleep, capped so a stuck/renamed buffer can never hang the send.
+  local i=0
+  while tmux show-buffer -b "$buf" >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -ge 50 ] && break
+    sleep 0.1
+  done
   tmux send-keys -t "$target" Enter
+}
+
+# --- Locked worker-status writers (issue #11) ---------------------------------------
+# report.sh (Stop/Notification/SubagentStop hooks) and spawn.sh both mutate
+# workers/<id>.json. Unlocked, a Stop hook firing during spawn's post-inject window
+# can race spawn.sh's own "working" write and land in either order (e.g. flipping a
+# real `done` back to `working`). Both writers now go through the same per-id
+# flock, so one write always fully lands before the next begins.
+
+# Path to the per-worker lock file backing write_worker_status/update_worker_status.
+_worker_lock_file() { echo "$WORKERS_DIR/.$1.lock"; } # <id>
+
+# Overwrite (create or replace) a worker's status file under its lock.
+# write_worker_status <id> <jq -n args...> <filter>
+write_worker_status() {
+  local id="$1"; shift
+  local f="$WORKERS_DIR/$id.json" lock; lock="$(_worker_lock_file "$id")"
+  (
+    flock -x 200
+    jq -n "$@" > "$f.tmp" && mv "$f.tmp" "$f"
+  ) 200>"$lock"
+}
+
+# In-place jq update of a worker's status file under the same lock. Seeds the file
+# with `{}` first if it doesn't exist yet, so callers can rely on a plain jq filter
+# (e.g. `.status=$s`) whether or not the worker has been spawned yet.
+# update_worker_status <id> <jq args...> <filter>
+update_worker_status() {
+  local id="$1"; shift
+  local f="$WORKERS_DIR/$id.json" lock; lock="$(_worker_lock_file "$id")"
+  (
+    flock -x 200
+    [ -f "$f" ] || printf '{}' > "$f"
+    jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  ) 200>"$lock"
 }
 
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
