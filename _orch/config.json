@@ -11,7 +11,8 @@
   "thresholds": {
     "max_workers": 4,
     "min_free_mb": 512,
-    "est_worker_mb": 400
+    "est_worker_mb": 400,
+    "spawn_inject_retries": 2
   },
   "budget": {
     "enabled": true,
