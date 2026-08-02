@@ -1,21 +1,57 @@
 #!/usr/bin/env bash
 # _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>]
+#   or: _orch/spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
 # Creates an isolated worker: new git worktree, new tmux window, a full Claude Code
 # session with report hooks wired back to the orchestrator, then injects the task.
+# model may be "" to fall back to models.default_worker in config.json (issue #25).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]}"
-model="${2:?model required}"
-task="${3:?task prompt required}"
+id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
+   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]}"
 mode=""
 resume=""        # optional claude resume flag: "--continue" or "--resume <session-id>"
 allow_csv=""     # --allow "cmd,cmd,..." -> permissions.allow in settings.local.json
-# optional flags after the task, any order:
+preset_allow=""  # --allow additions bundled by --preset, merged with any explicit --allow
+
+# --preset review|test|docs (issue #25): a canned model + task + --allow bundle, so a
+# common one-off ("review this branch", "get tests green", "sync the docs") is one
+# flag instead of retyping the same model/prompt/permissions every time.
+if [ "${2:-}" = "--preset" ]; then
+  preset="${3:?--preset needs a name: review|test|docs}"
+  case "$preset" in
+    review)
+      model="sonnet"
+      task="Review the current branch/diff for correctness, security, and style issues. Report findings; do not fix unless asked."
+      preset_allow="Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+      ;;
+    test)
+      model="sonnet"
+      task="Write and run tests for the recent changes until they are green. Do not modify unrelated code."
+      preset_allow="Bash(npm test:*),Bash(pytest:*),Bash(bats tests/*:*)"
+      ;;
+    docs)
+      model="haiku"
+      task="Update documentation (README, comments, docstrings) to match the current code. Do not change behavior."
+      preset_allow="Bash(git diff:*)"
+      ;;
+    *) echo "spawn: unknown preset '$preset' (expected review|test|docs)" >&2; exit 1 ;;
+  esac
+  args=("${@:4}")
+else
+  model="${2:-}"
+  task="${3:?task prompt required}"
+  if [ -z "$model" ]; then
+    model="$(jq -r '.models.default_worker // empty' "$CONFIG" 2>/dev/null)"
+    [ -n "$model" ] || { echo "spawn: model required (or set models.default_worker in $CONFIG)" >&2; exit 1; }
+  fi
+  args=("${@:4}")
+fi
+# optional flags after model/task (or after --preset <name>), any order:
 #   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
-args=("${@:4}"); i=0
+i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
     --no-worktree)  mode="--no-worktree" ;;
@@ -26,6 +62,11 @@ while [ "$i" -lt "${#args[@]}" ]; do
   esac
   i=$((i+1))
 done
+
+if [ -n "$preset_allow" ]; then
+  allow_csv="${allow_csv:+$allow_csv,}$preset_allow"
+fi
+
 # Claude keys sessions by project dir, so a resumed worker must run in that dir.
 if [ -n "$resume" ] && [ "$mode" != "--no-worktree" ]; then
   mode="--no-worktree"

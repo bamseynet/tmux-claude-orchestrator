@@ -30,7 +30,9 @@ if ! tmux has-session -t "$S" 2>/dev/null; then
   # Launch the master and give it its role (cwd-independent).
   # The master runs unattended, so it skips permission prompts. Workers do NOT
   # (see PR #7): only this orchestrator window is trusted to self-approve.
-  tmux send-keys -t "$S:$ORCH_WINDOW" "claude --dangerously-skip-permissions" Enter
+  # models.orchestrator (issue #25): optional model pin for the master session.
+  master_model="$(jq -r '.models.orchestrator // empty' "$here/config.json" 2>/dev/null)"
+  tmux send-keys -t "$S:$ORCH_WINDOW" "claude --dangerously-skip-permissions${master_model:+ --model $master_model}" Enter
   if wait_ready "$S:$ORCH_WINDOW" 90; then
     send_prompt "$S:$ORCH_WINDOW" "You are the ORCHESTRATOR for this project. First read the file $here/CLAUDE.md and follow it exactly. Your control CLI is $ORCH_ROOT/orch (e.g. '$ORCH_ROOT/orch spawn w1 sonnet \"task\"', '$ORCH_ROOT/orch status', '$ORCH_ROOT/orch send w1 \"msg\"'). Worker completion and blocked events arrive automatically, prefixed [orchestrator heartbeat]. Acknowledge briefly, then wait for my tasks."
   else
