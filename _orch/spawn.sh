@@ -9,12 +9,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
-   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]}"
+id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]
+   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]}"
 mode=""
 resume=""        # optional claude resume flag: "--continue" or "--resume <session-id>"
 allow_csv=""     # --allow "cmd,cmd,..." -> permissions.allow in settings.local.json
 preset_allow=""  # --allow additions bundled by --preset, merged with any explicit --allow
+after_id=""      # --after <id> (issue #22): hold this spawn until worker <id> reaches "done"
 
 # --preset review|test|docs (issue #25): a canned model + task + --allow bundle, so a
 # common one-off ("review this branch", "get tests green", "sync the docs") is one
@@ -50,7 +51,7 @@ else
   args=("${@:4}")
 fi
 # optional flags after model/task (or after --preset <name>), any order:
-#   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
+#   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]
 i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
@@ -58,6 +59,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --continue)     resume="--continue" ;;
     --resume)       i=$((i+1)); resume="--resume ${args[$i]:?--resume needs a <session-id>}" ;;
     --allow)        i=$((i+1)); allow_csv="${args[$i]:?--allow needs a \"cmd,cmd\" list}" ;;
+    --after)        i=$((i+1)); after_id="${args[$i]:?--after needs a worker <id>}" ;;
     *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
   esac
   i=$((i+1))
@@ -119,6 +121,28 @@ fi
 # refuse duplicate window
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   echo "worker '$id' already exists in session '$S'"; exit 1
+fi
+
+# Task dependencies (issue #22): --after <id> holds this spawn in the pending
+# queue unconditionally — never attempt to launch now, regardless of the resource
+# gate — until worker <id> reaches status "done". heartbeat.sh's drain_queue_if_room
+# already scans the queue every tick and launches whatever is ready; it just also
+# needs to skip an item whose dependency has not finished yet, so `after` rides
+# along in the same queue record and worker-status file the gate-refusal path
+# below already uses for its own no-slot-available case.
+if [ -n "$after_id" ]; then
+  ts="$(date -u +%FT%TZ)"
+  queue_item="$(jq -nc --arg id "$id" --arg model "$model" --arg task "$task" --arg mode "$mode" \
+        --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" \
+        --arg reason "waiting for dependency '$after_id' to reach done" --arg after "$after_id" \
+    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason, after:$after}')"
+  queue_push "$queue_item"
+  # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u/$a are jq --arg vars, not shell
+  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" --arg a "$after_id" \
+    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u, after:$a}'
+  log "spawn queued for $id: waiting for dependency $after_id to reach done"
+  echo "spawn queued: $id ($model) waiting on '$after_id' to reach done"
+  exit 0
 fi
 
 # Unified resource guard (issues #21 concurrency, #31 memory, #24 budget): refuse

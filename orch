@@ -79,7 +79,7 @@ case "$cmd" in
       if [ "${#files[@]}" = 0 ]; then
         echo "[]"
       else
-        jq -s -c '[.[] | {id, status, model, task, created, updated}]' "${files[@]}"
+        jq -s -c '[.[] | {id, status, model, task, created, updated, after}]' "${files[@]}"
       fi
       exit 0
     fi
@@ -200,6 +200,8 @@ orch — tmux + Claude Code orchestrator
                                      [--resume <id>]        resume a specific session id
                                      (--continue/--resume force --no-worktree: Claude keys
                                       sessions by project dir)
+                                     [--after <id>]          hold this spawn queued until
+                                     worker <id> reaches status "done", then auto-launch it
                                      perm (opt-in):
                                        --allow "cmd,cmd"  pre-approve commands
   ./orch send  <id> "message"        message a running worker (one-way)
@@ -250,6 +252,10 @@ Spawns are refused-and-queued (not dropped) when at capacity: concurrency
 (thresholds.max_workers), free memory (thresholds.min_free_mb/est_worker_mb), or
 estimated spend (budget.max_usd) in _orch/config.json. The heartbeat drains the
 queue once a worker frees a slot.
+
+Task dependencies (issue #22): 'orch spawn <id> ... --after <dep-id>' always
+queues <id> (regardless of capacity) and holds it until worker <dep-id> reaches
+status "done"; the heartbeat auto-launches it then, same drain loop as above.
 EOF
     ;;
 esac
