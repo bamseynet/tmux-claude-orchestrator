@@ -3,6 +3,15 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ORCH_ROOT="$here"
+# shellcheck disable=SC1091
+source "$here/_orch/lib.sh"
+
+# --- dependency check (issue #20) -----------------------------------------------
+# Previously only bootstrap.sh checked for required binaries, so a missing
+# jq/tmux/perl/claude/git surfaced as a cryptic failure mid-command instead of a
+# clear message up front. Every command now goes through this entrypoint, so
+# checking here catches it for all of them, not just `up`.
+check_deps tmux jq claude perl git
 
 # --- target-repo resolution (issue #35) ---------------------------------------
 # The toolkit's own directory ($ORCH_ROOT) is NOT necessarily the repo workers
@@ -104,7 +113,17 @@ case "$cmd" in
     done
     ;;
   collect)      exec "$here/_orch/collect.sh" "$@" ;;
-  attach)       exec tmux attach -t "$SESSION_NAME" ;;
+  attach)
+    if [ -n "${1:-}" ]; then
+      id="$1"
+      if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
+        echo "no worker window '$id' in session '$SESSION_NAME'" >&2
+        exit 1
+      fi
+      exec tmux attach -t "$SESSION_NAME:$id"
+    fi
+    exec tmux attach -t "$SESSION_NAME"
+    ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
@@ -153,6 +172,7 @@ orch — tmux + Claude Code orchestrator
                                      "Target repo" below.
 
   ./orch up                          start session + master + heartbeat + watchdog
+                                     (alias: bootstrap)
   ./orch spawn <id> <model> "task" [--no-worktree] [perm]
                                      spawn a worker (own worktree + window)
                                      model: opus | sonnet | haiku
@@ -171,14 +191,17 @@ orch — tmux + Claude Code orchestrator
   ./orch prune                       reap ALL terminal (done/spawn-failed)
                                      workers right now, ignoring retention —
                                      same teardown as clean, on demand
-  ./orch status                      list worker states
+  ./orch status [--json]             list worker states
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
                                      (git diff <base>...orch/<id>, default
                                      base: main) + the worker's status JSON —
                                      the uniform deliverable surface for
                                      review/merge flows
-  ./orch attach                      attach to the tmux session
+  ./orch attach [<id>]               attach to the tmux session, or jump straight
+                                     to one worker's window
   ./orch down                        stop background loops (session stays up)
+                                     (alias: stop)
+  ./orch hud                         print the one-line status HUD
   ./orch logs <heartbeat|watchdog|orch|events> [-f]
                                      view a log (-f to follow); events shows the
                                      raw durable event history (see "orch events")
