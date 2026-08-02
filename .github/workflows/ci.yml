@@ -76,16 +76,26 @@ jobs:
           ./actionlint -color
 
   test:
-    name: bats (hermetic unit tests)
+    name: bats (hermetic unit tests + mocked tmux/claude smoke)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install bats
+      - name: Install bats (pinned)
+        env:
+          BATS_VERSION: 1.11.0
+          BATS_SHA256: aeff09fdc8b0c88b3087c99de00cf549356d7a2f6a69e3fcec5e0e861d2f9063
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+          # Pinned source tarball (no third-party action, no unpinned apt-get),
+          # verified against the published checksum — mirrors the actionlint job.
+          # bats-core ships no prebuilt binary; its own install.sh lays down the
+          # bats/lib/exec scripts under the given prefix.
+          curl -fsSL -o bats.tar.gz \
+            "https://github.com/bats-core/bats-core/archive/refs/tags/v${BATS_VERSION}.tar.gz"
+          echo "${BATS_SHA256}  bats.tar.gz" | sha256sum -c -
+          tar -xzf bats.tar.gz
+          sudo "./bats-core-${BATS_VERSION}/install.sh" /usr/local
           bats --version
 
       - name: Run bats tests
