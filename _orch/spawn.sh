@@ -50,6 +50,7 @@ if ! check_spawn_gate; then
         --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" --arg reason "$GATE_REASON" \
     '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason}')"
   queue_push "$queue_item"
+  # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
   write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
     '{id:$id, status:"queued", model:$m, task:$t, updated:$u}'
   log "spawn refused for $id: $GATE_REASON; queued"
@@ -85,6 +86,7 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
 ' > "$wdir/.claude/settings.local.json"
 
 # 3) initial status file
+# shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
   '{id:$id, status:"spawning", model:$m, task:$t, updated:$u}'
 

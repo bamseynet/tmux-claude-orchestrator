@@ -13,6 +13,7 @@ ts="$(date -u +%FT%TZ)"
 
 printf '{"id":"%s","event":"%s","ts":"%s"}\n' "$id" "$event" "$ts" >> "$INBOX"
 
+# shellcheck disable=SC2016  # jq filter in single quotes; $id/$s/$t are jq --arg vars, not shell
 update_worker_status "$id" --arg id "$id" --arg s "$event" --arg t "$ts" \
   '.id = (.id // $id) | .status=$s | .updated=$t' || true
 exit 0
