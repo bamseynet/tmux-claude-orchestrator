@@ -17,7 +17,8 @@
     "enabled": true,
     "check_interval": 15,
     "cooldown_seconds": 65,
-    "stall_seconds": 90
+    "stall_seconds": 90,
+    "rate_limit_regex": "rate limit|429|overloaded|too many requests|usage limit"
   },
   "models": {
     "orchestrator": "opus",
