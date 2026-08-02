@@ -194,6 +194,59 @@ ensure_related_repo() { # <toolkit_dir> <target_dir>  -> 0 if related/overridden
   return 1
 }
 
+# --- Worktree preflight (issue #37) -------------------------------------------------
+# Before creating a worker's worktree, decide deterministically whether a
+# pre-existing path at that location may be reused, instead of relying on
+# `git worktree add`'s exit code (which fails identically whether the path is a
+# stale leftover, a worktree of some OTHER repo, or a legitimate match). "Verifiably
+# a clean worktree of the expected repo on the expected branch" means: it appears in
+# `git -C <expected_repo> worktree list` at exactly this path, on exactly this
+# branch, with no uncommitted changes (tracked or untracked).
+worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> -> 0 if safe to reuse
+  local expected="$1" wdir="$2" branch="$3" real_wdir
+  [ -d "$wdir" ] || return 1
+  real_wdir="$(cd "$wdir" 2>/dev/null && pwd)" || return 1
+
+  local line path="" head_branch="" matched=1
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *) path="${line#worktree }" ;;
+      branch\ refs/heads/*) head_branch="${line#branch refs/heads/}" ;;
+      "")
+        if [ "$path" = "$real_wdir" ]; then
+          [ "$head_branch" = "$branch" ] && matched=0
+          break
+        fi
+        path=""; head_branch=""
+        ;;
+    esac
+  done < <(git -C "$expected" worktree list --porcelain 2>/dev/null; printf '\n')
+
+  [ "$matched" -eq 0 ] || return 1
+  [ -z "$(git -C "$real_wdir" status --porcelain 2>/dev/null)" ] || return 1
+  return 0
+}
+
+# --- Dead-worker worktree pruning (issue #37) ---------------------------------------
+# A killed/crashed worker leaves its ../wt/<id> worktree and orch/<id> branch behind
+# (no Stop hook fires to tear anything down). Mirrors clean.sh's worktree+branch
+# teardown so a dead worker's path frees up the same way an explicit `orch clean
+# <id>` would, without waiting for an operator to notice. Idempotent: a missing
+# worktree/branch is a no-op, not an error.
+prune_dead_worktree() { # <project_root> <id>
+  local proj="$1" id="$2"
+  local wdir="$proj/../wt/$id"
+  if [ -d "$wdir" ]; then
+    git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
+    log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+  fi
+  git -C "$proj" worktree prune >/dev/null 2>&1 || true
+  if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
+    git -C "$proj" branch -D "orch/$id" >/dev/null 2>&1 || true
+    log "prune_dead_worktree: deleted branch orch/$id for dead worker $id"
+  fi
+}
+
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
 # Workers actually holding a tmux window + claude process right now: every status
