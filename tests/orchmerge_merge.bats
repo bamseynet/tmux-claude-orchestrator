@@ -1,0 +1,221 @@
+#!/usr/bin/env bats
+# Hermetic tests for _orch/merge.sh (issue #36): opt-in CI-gated auto-merge.
+# `gh` is fully stubbed (no real GitHub calls, ever) and `git` is stubbed only for
+# `push` (no real network) while delegating every other subcommand to the real
+# git binary against a throwaway local repo, so branch/PR-adjacent state (branch
+# existence, etc.) stays real and meaningful. No real merge, push, or network
+# call is ever made.
+
+MERGE="$BATS_TEST_DIRNAME/../_orch/merge.sh"
+
+setup() {
+  REALGIT="$(command -v git)"
+  STUBBIN="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$STUBBIN"
+
+  GIT_LOG="$BATS_TEST_TMPDIR/git.log"
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  : > "$GIT_LOG"
+  : > "$GH_LOG"
+  export GIT_LOG GH_LOG
+
+  cat > "$STUBBIN/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = "push" ]; then
+    echo "git \$*" >> "$GIT_LOG"
+    exit "\${GIT_PUSH_EXIT:-0}"
+  fi
+done
+exec "$REALGIT" "\$@"
+EOF
+  chmod +x "$STUBBIN/git"
+
+  # GH_EXISTING_PR=1        -> `gh pr view --json url -q .url` returns a PR (reuse, no create)
+  # GH_MERGEABLE=<val>      -> mergeable field on `gh pr view` full JSON (default MERGEABLE)
+  # GH_MERGE_STATE=<val>    -> mergeStateStatus field (default CLEAN)
+  # GH_CHECKS_MODE=pass|fail|pending -> `gh pr checks` outcome (default pass)
+  # GH_MERGE_FAIL=1         -> `gh pr merge` exits nonzero
+  cat > "$STUBBIN/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh $*" >> "$GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  if [[ "$*" == *"-q .url"* ]]; then
+    if [ "${GH_EXISTING_PR:-0}" = "1" ]; then
+      echo "https://github.com/org/repo/pull/1"
+    fi
+    exit 0
+  fi
+  jq -n --arg mergeable "${GH_MERGEABLE:-MERGEABLE}" --arg state "${GH_MERGE_STATE:-CLEAN}" \
+    '{number:1,url:"https://github.com/org/repo/pull/1",state:"OPEN",mergeable:$mergeable,mergeStateStatus:$state}'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  echo "https://github.com/org/repo/pull/1"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
+  case "${GH_CHECKS_MODE:-pass}" in
+    pass)    echo '[{"name":"ci","bucket":"pass","state":"SUCCESS"}]' ;;
+    fail)    echo '[{"name":"ci","bucket":"fail","state":"FAILURE"}]' ;;
+    pending) echo '[{"name":"ci","bucket":"pending","state":"IN_PROGRESS"}]' ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then
+  if [ "${GH_MERGE_FAIL:-0}" = "1" ]; then
+    echo "merge blocked by branch protection" >&2
+    exit 1
+  fi
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$STUBBIN/gh"
+
+  PATH="$STUBBIN:$PATH"
+  export PATH
+
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch"
+  cat > "$ORCH_ROOT/_orch/config.json" <<'JSON'
+{
+  "merge": {
+    "auto": false,
+    "required_checks": [],
+    "poll_interval_seconds": 1,
+    "timeout_seconds": 2
+  }
+}
+JSON
+
+  export PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
+  git init -q -b main "$PROJECT_ROOT"
+  git -C "$PROJECT_ROOT" config user.email test@example.com
+  git -C "$PROJECT_ROOT" config user.name test
+  echo hello > "$PROJECT_ROOT/f.txt"
+  git -C "$PROJECT_ROOT" add f.txt
+  git -C "$PROJECT_ROOT" commit -q -m init
+}
+
+mkbranch() { # <id>
+  git -C "$PROJECT_ROOT" branch "orch/$1" main >/dev/null
+}
+
+@test "merge.sh fails for a nonexistent branch" {
+  run "$MERGE" nope
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not exist"* ]]
+}
+
+@test "merge.sh without --auto only pushes + opens a PR, never merges" {
+  mkbranch w1
+  run "$MERGE" w1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"https://github.com/org/repo/pull/1"* ]]
+  grep -q "push" "$GIT_LOG"
+  ! grep -q "pr merge" "$GH_LOG"
+  [ ! -f "$ORCH_ROOT/_orch/state/events.jsonl" ]
+}
+
+@test "merge.sh reuses an existing PR instead of creating a new one" {
+  mkbranch w2
+  GH_EXISTING_PR=1 run "$MERGE" w2
+  [ "$status" -eq 0 ]
+  ! grep -q "pr create" "$GH_LOG"
+}
+
+@test "merge.sh --auto merges and emits a merged event when checks pass" {
+  mkbranch w3
+  GH_CHECKS_MODE=pass run "$MERGE" w3 --auto
+  [ "$status" -eq 0 ]
+  grep -q "pr merge" "$GH_LOG"
+  grep -q -- "--squash" "$GH_LOG"
+  grep -q -- "--delete-branch" "$GH_LOG"
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w3.json"
+  [ "$output" = "merged" ]
+
+  run jq -rs '.[-1].event' "$ORCH_ROOT/_orch/state/events.jsonl"
+  [ "$output" = "merged" ]
+  run jq -rs '.[-1].event' "$ORCH_ROOT/_orch/state/inbox.jsonl"
+  [ "$output" = "merged" ]
+}
+
+@test "merge.sh honors config merge.auto=true without the --auto flag" {
+  mkbranch w4
+  jq '.merge.auto = true' "$ORCH_ROOT/_orch/config.json" > "$ORCH_ROOT/_orch/config.json.tmp"
+  mv "$ORCH_ROOT/_orch/config.json.tmp" "$ORCH_ROOT/_orch/config.json"
+
+  GH_CHECKS_MODE=pass run "$MERGE" w4
+  [ "$status" -eq 0 ]
+  grep -q "pr merge" "$GH_LOG"
+}
+
+@test "merge.sh --auto blocks (does not merge) when a required check fails" {
+  mkbranch w5
+  GH_CHECKS_MODE=fail run "$MERGE" w5 --auto
+  [ "$status" -ne 0 ]
+  ! grep -q "pr merge" "$GH_LOG"
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w5.json"
+  [ "$output" = "blocked" ]
+  run jq -rs '.[-1].event' "$ORCH_ROOT/_orch/state/events.jsonl"
+  [ "$output" = "merge-blocked" ]
+}
+
+@test "merge.sh --auto times out and blocks when checks never finish" {
+  mkbranch w6
+  GH_CHECKS_MODE=pending run "$MERGE" w6 --auto
+  [ "$status" -ne 0 ]
+  ! grep -q "pr merge" "$GH_LOG"
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w6.json"
+  [ "$output" = "blocked" ]
+  run jq -rs '.[-1].reason' "$ORCH_ROOT/_orch/state/events.jsonl"
+  [[ "$output" == *"timed out"* ]]
+}
+
+@test "merge.sh --auto refuses a CONFLICTING PR without waiting on checks" {
+  mkbranch w7
+  GH_MERGEABLE=CONFLICTING run "$MERGE" w7 --auto
+  [ "$status" -ne 0 ]
+  ! grep -q "pr checks" "$GH_LOG"
+  ! grep -q "pr merge" "$GH_LOG"
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w7.json"
+  [ "$output" = "blocked" ]
+  run jq -rs '.[-1].event' "$ORCH_ROOT/_orch/state/events.jsonl"
+  [ "$output" = "merge-blocked" ]
+}
+
+@test "merge.sh --auto refuses a DIRTY PR without waiting on checks" {
+  mkbranch w8
+  GH_MERGE_STATE=DIRTY run "$MERGE" w8 --auto
+  [ "$status" -ne 0 ]
+  ! grep -q "pr checks" "$GH_LOG"
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w8.json"
+  [ "$output" = "blocked" ]
+}
+
+@test "merge.sh --auto blocks when gh pr merge itself fails (e.g. branch protection)" {
+  mkbranch w9
+  GH_CHECKS_MODE=pass GH_MERGE_FAIL=1 run "$MERGE" w9 --auto
+  [ "$status" -ne 0 ]
+
+  run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w9.json"
+  [ "$output" = "blocked" ]
+  run jq -rs '.[-1].event' "$ORCH_ROOT/_orch/state/events.jsonl"
+  [ "$output" = "merge-blocked" ]
+}
+
+@test "merge.sh honors merge.required_checks: ignores non-required check names" {
+  mkbranch w10
+  jq '.merge.required_checks = ["ci"]' "$ORCH_ROOT/_orch/config.json" > "$ORCH_ROOT/_orch/config.json.tmp"
+  mv "$ORCH_ROOT/_orch/config.json.tmp" "$ORCH_ROOT/_orch/config.json"
+
+  GH_CHECKS_MODE=pass run "$MERGE" w10 --auto
+  [ "$status" -eq 0 ]
+  grep -q "pr merge" "$GH_LOG"
+}
