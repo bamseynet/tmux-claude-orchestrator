@@ -71,6 +71,40 @@ drain_queue_if_room() {
   "$here/spawn.sh" "${args[@]}" >> "$LOG" 2>&1 &
 }
 
+# --- Master-liveness alert (issue #15) -----------------------------------------
+# wait_ready only ever polls a pane's CONTENT, so a dead/absent master window (the
+# tmux session killed, the window closed, the pane's process gone) looks
+# indistinguishable from "just busy": is_ready keeps returning false, the events
+# get requeued, and the loop retries forever with nothing ever telling anyone the
+# master is gone. Detect the window's existence directly and surface it via log()
+# instead of silently requeuing — heartbeat has no other channel once the master
+# itself is the thing that's dead.
+master_window_alive() { # <session:window> -> 0 if that tmux window exists
+  local target="$1"
+  local s="${target%%:*}" w="${target#*:}"
+  tmux list-windows -t "$s" -F '#{window_name}' 2>/dev/null | grep -qxF "$w"
+}
+
+# $STATE_DIR/.master-dead holds "<first-seen-ts>\n<last-alert-ts>" so the alert
+# re-fires on an interval instead of firing exactly once (and getting missed) or
+# spamming the log every tick.
+master_dead_alert() { # <target> <now> <interval_s>
+  local target="$1" now="$2" interval="$3"
+  local mf="$STATE_DIR/.master-dead" first="$now" last=0
+  if [ -f "$mf" ]; then
+    { IFS= read -r first; IFS= read -r last; } < "$mf" || true
+    : "${first:=$now}"; : "${last:=0}"
+  fi
+  if [ "$last" -eq 0 ] || [ "$((now - last))" -ge "$interval" ]; then
+    log "ALERT: master window '$target' is not alive (down $((now - first))s); worker events cannot be delivered — attach tmux and re-run bootstrap.sh"
+    last="$now"
+  fi
+  printf '%s\n%s\n' "$first" "$last" > "$mf"
+}
+
+# Drop the standing alert once the master window is back.
+master_dead_clear() { rm -f "$STATE_DIR/.master-dead"; }
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -78,6 +112,8 @@ heartbeat_main() {
   local normal idle events
   normal="$(jq -r '.intervals.normal_seconds // 20' "$CONFIG")"
   idle="$(jq -r '.intervals.idle_seconds // 60' "$CONFIG")"
+  local master_alert_interval
+  master_alert_interval="$(jq -r '.heartbeat.master_alert_interval_seconds // 60' "$CONFIG")"
 
   # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
   # single misdetection (or a genuinely long-lived operator draft) must never be
@@ -93,9 +129,21 @@ heartbeat_main() {
   while [ ! -f "$STATE_DIR/.stop" ]; do
     drain_queue_if_room
 
+    if master_window_alive "$S:$ORCH_WINDOW"; then
+      master_dead_clear
+    else
+      master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
+    fi
+
     if events="$(drain_inbox)"; then
+      if ! master_window_alive "$S:$ORCH_WINDOW"; then
+        # Master window is gone outright — wait_ready would just poll a dead
+        # target until its own timeout every tick. Requeue and move on instead
+        # of burning that timeout; master_dead_alert above already surfaced it.
+        printf '%s\n' "$events" >> "$INBOX"
+        log "master window down; requeued events"
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
-      if ! wait_ready "$S:$ORCH_WINDOW" 45; then
+      elif ! wait_ready "$S:$ORCH_WINDOW" 45; then
         # Master busy — requeue and try again next tick.
         printf '%s\n' "$events" >> "$INBOX"
         log "master busy; requeued events"
