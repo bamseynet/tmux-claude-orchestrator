@@ -51,12 +51,57 @@ case "$cmd" in
   spawn)        exec "$here/_orch/spawn.sh" "$@" ;;
   send)         exec "$here/_orch/send.sh" "$@" ;;
   status)
+    json_mode=0
+    if [ "${1:-}" = "--json" ]; then json_mode=1; shift || true; fi
+
     shopt -s nullglob
-    any=0
-    for f in "$here/_orch/state/workers"/*.json; do
-      any=1; jq -c '{id, status, model, task, updated}' "$f"
+    files=("$here/_orch/state/workers"/*.json)
+
+    if [ "$json_mode" = 1 ]; then
+      if [ "${#files[@]}" = 0 ]; then
+        echo "[]"
+      else
+        jq -s -c '[.[] | {id, status, model, task, created, updated}]' "${files[@]}"
+      fi
+      exit 0
+    fi
+
+    if [ "${#files[@]}" = 0 ]; then
+      echo "no workers yet"
+      exit 0
+    fi
+
+    # age (issue #17): elapsed time since `created` (falling back to `updated`
+    # for status files written before this issue), rendered coarsely (Xs/Xm/XhYm/XdYh)
+    # so the table stays scannable rather than exact-to-the-second.
+    age_str() { # <iso8601-utc-ts>
+      local ts="$1" epoch now secs
+      [ -n "$ts" ] && [ "$ts" != "null" ] || { echo "?"; return; }
+      epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || { echo "?"; return; }
+      now="$(date -u +%s)"
+      secs=$((now - epoch))
+      [ "$secs" -lt 0 ] && secs=0
+      if [ "$secs" -lt 60 ]; then
+        printf '%ds' "$secs"
+      elif [ "$secs" -lt 3600 ]; then
+        printf '%dm' $((secs / 60))
+      elif [ "$secs" -lt 86400 ]; then
+        printf '%dh%dm' $((secs / 3600)) $(((secs % 3600) / 60))
+      else
+        printf '%dd%dh' $((secs / 86400)) $(((secs % 86400) / 3600))
+      fi
+    }
+
+    printf '%-12s %-8s %-12s %-8s %s\n' "ID" "MODEL" "STATUS" "AGE" "TASK"
+    for f in "${files[@]}"; do
+      id="$(jq -r '.id // "?"' "$f")"
+      model="$(jq -r '.model // "?"' "$f")"
+      st="$(jq -r '.status // "?"' "$f")"
+      ts="$(jq -r '.created // .updated // empty' "$f")"
+      task="$(jq -r '.task // "" | gsub("\\s+"; " ")' "$f")"
+      age="$(age_str "$ts")"
+      printf '%-12s %-8s %-12s %-8s %s\n' "$id" "$model" "$st" "$age" "$task"
     done
-    [ "$any" = 0 ] && echo "no workers yet"
     ;;
   attach)       exec tmux attach -t "$SESSION_NAME" ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;

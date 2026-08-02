@@ -6,10 +6,32 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/lib.sh" 2>/dev/null || true
 shopt -s nullglob
 
+# age (issue #17): elapsed time since `created` (falling back to `updated` for
+# status files written before this issue), rendered coarsely (Xs/Xm/XhYm/XdYh).
+age_str() { # <iso8601-utc-ts>
+  local ts="$1" epoch now secs
+  [ -n "$ts" ] && [ "$ts" != "null" ] || { echo ""; return; }
+  epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || { echo ""; return; }
+  now="$(date -u +%s)"
+  secs=$((now - epoch))
+  [ "$secs" -lt 0 ] && secs=0
+  if [ "$secs" -lt 60 ]; then
+    printf '%ds' "$secs"
+  elif [ "$secs" -lt 3600 ]; then
+    printf '%dm' $((secs / 60))
+  elif [ "$secs" -lt 86400 ]; then
+    printf '%dh%dm' $((secs / 3600)) $(((secs % 3600) / 60))
+  else
+    printf '%dd%dh' $((secs / 86400)) $(((secs % 86400) / 3600))
+  fi
+}
+
 out=""
 for f in "$WORKERS_DIR"/*.json; do
   id="$(basename "$f" .json)"
   st="$(jq -r '.status // "?"' "$f" 2>/dev/null)"
+  ts="$(jq -r '.created // .updated // empty' "$f" 2>/dev/null)"
+  age="$(age_str "$ts")"
   case "$st" in
     blocked|needs-input|error) c="#[fg=red,bold]" ;;
     done|subagent-done)        c="#[fg=green]" ;;
@@ -17,7 +39,7 @@ for f in "$WORKERS_DIR"/*.json; do
     queued)                    c="#[fg=cyan]" ;;
     *)                         c="#[fg=white]" ;;
   esac
-  out+="${c}${id}:${st}#[default] "
+  out+="${c}${id}:${st}${age:+:${age}}#[default] "
 done
 [ -z "$out" ] && out="#[fg=colour244]no workers#[default]"
 

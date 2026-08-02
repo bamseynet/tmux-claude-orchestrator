@@ -103,7 +103,7 @@ if ! check_spawn_gate; then
   queue_push "$queue_item"
   # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
   write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
-    '{id:$id, status:"queued", model:$m, task:$t, updated:$u}'
+    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u}'
   log "spawn refused for $id: $GATE_REASON; queued"
   echo "spawn queued: $id ($model) refused — $GATE_REASON"
   exit 0
@@ -156,9 +156,11 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
 ' > "$wdir/.claude/settings.local.json"
 
 # 3) initial status file
+# `created` is stamped once here so downstream tools (orch status, hud.sh) can
+# compute worker age; report.sh's later writes only ever touch `updated`.
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
-  '{id:$id, status:"spawning", model:$m, task:$t, updated:$u}'
+  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
