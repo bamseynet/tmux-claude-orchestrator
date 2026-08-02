@@ -154,6 +154,99 @@ update_worker_status() {
   ) 200>"$lock"
 }
 
+# --- Target-repo relatedness guard (issue #35) -------------------------------------
+# The toolkit's own directory and the repo workers operate on are two different
+# things. When the toolkit is vendored/copied into another repo (or a scaffold with
+# unrelated git history and no remote), spawning must not silently worktree the
+# wrong tree. "Related" means one of:
+#   (a) same git top-level (toolkit dir IS the target repo),
+#   (b) sibling worktrees of the same repo (shared git-common-dir),
+#   (c) matching `origin` remote URLs, or
+#   (d) shared history — either HEAD commit exists in the other's object database
+#       (e.g. one is a clone/fork of the other).
+# A toolkit dir that is not a git repo at all has nothing to contradict, so it is
+# treated as related. Set ORCH_ALLOW_UNRELATED_REPO=1 to bypass entirely (a
+# vendored copy with genuinely no shared history, by design).
+ensure_related_repo() { # <toolkit_dir> <target_dir>  -> 0 if related/overridden
+  [ "${ORCH_ALLOW_UNRELATED_REPO:-0}" = "1" ] && return 0
+  local toolkit="$1" target="$2"
+  local t_top g_top
+  t_top="$(git -C "$toolkit" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  g_top="$(git -C "$target" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ "$t_top" = "$g_top" ] && return 0
+
+  local t_common g_common
+  t_common="$(git -C "$t_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || t_common=""
+  g_common="$(git -C "$g_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || g_common=""
+  [ -n "$t_common" ] && [ "$t_common" = "$g_common" ] && return 0
+
+  local t_remote g_remote
+  t_remote="$(git -C "$t_top" remote get-url origin 2>/dev/null)" || t_remote=""
+  g_remote="$(git -C "$g_top" remote get-url origin 2>/dev/null)" || g_remote=""
+  [ -n "$t_remote" ] && [ "$t_remote" = "$g_remote" ] && return 0
+
+  local t_head g_head
+  t_head="$(git -C "$t_top" rev-parse HEAD 2>/dev/null)" || t_head=""
+  g_head="$(git -C "$g_top" rev-parse HEAD 2>/dev/null)" || g_head=""
+  [ -n "$g_head" ] && git -C "$t_top" cat-file -e "${g_head}^{commit}" 2>/dev/null && return 0
+  [ -n "$t_head" ] && git -C "$g_top" cat-file -e "${t_head}^{commit}" 2>/dev/null && return 0
+
+  return 1
+}
+
+# --- Worktree preflight (issue #37) -------------------------------------------------
+# Before creating a worker's worktree, decide deterministically whether a
+# pre-existing path at that location may be reused, instead of relying on
+# `git worktree add`'s exit code (which fails identically whether the path is a
+# stale leftover, a worktree of some OTHER repo, or a legitimate match). "Verifiably
+# a clean worktree of the expected repo on the expected branch" means: it appears in
+# `git -C <expected_repo> worktree list` at exactly this path, on exactly this
+# branch, with no uncommitted changes (tracked or untracked).
+worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> -> 0 if safe to reuse
+  local expected="$1" wdir="$2" branch="$3" real_wdir
+  [ -d "$wdir" ] || return 1
+  real_wdir="$(cd "$wdir" 2>/dev/null && pwd)" || return 1
+
+  local line path="" head_branch="" matched=1
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *) path="${line#worktree }" ;;
+      branch\ refs/heads/*) head_branch="${line#branch refs/heads/}" ;;
+      "")
+        if [ "$path" = "$real_wdir" ]; then
+          [ "$head_branch" = "$branch" ] && matched=0
+          break
+        fi
+        path=""; head_branch=""
+        ;;
+    esac
+  done < <(git -C "$expected" worktree list --porcelain 2>/dev/null; printf '\n')
+
+  [ "$matched" -eq 0 ] || return 1
+  [ -z "$(git -C "$real_wdir" status --porcelain 2>/dev/null)" ] || return 1
+  return 0
+}
+
+# --- Dead-worker worktree pruning (issue #37) ---------------------------------------
+# A killed/crashed worker leaves its ../wt/<id> worktree and orch/<id> branch behind
+# (no Stop hook fires to tear anything down). Mirrors clean.sh's worktree+branch
+# teardown so a dead worker's path frees up the same way an explicit `orch clean
+# <id>` would, without waiting for an operator to notice. Idempotent: a missing
+# worktree/branch is a no-op, not an error.
+prune_dead_worktree() { # <project_root> <id>
+  local proj="$1" id="$2"
+  local wdir="$proj/../wt/$id"
+  if [ -d "$wdir" ]; then
+    git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
+    log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+  fi
+  git -C "$proj" worktree prune >/dev/null 2>&1 || true
+  if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
+    git -C "$proj" branch -D "orch/$id" >/dev/null 2>&1 || true
+    log "prune_dead_worktree: deleted branch orch/$id for dead worker $id"
+  fi
+}
+
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
 # Workers actually holding a tmux window + claude process right now: every status

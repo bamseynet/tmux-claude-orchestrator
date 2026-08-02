@@ -35,6 +35,16 @@ fi
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
 
+# Guard 0 (issue #35): the toolkit dir and target repo must be provably related
+# before we create anything against $proj — see ensure_related_repo() in lib.sh.
+if ! ensure_related_repo "$ORCH_ROOT" "$proj"; then
+  log "spawn refused for $id: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated"
+  echo "orch: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated (no shared git history or remote)." >&2
+  echo "Set _orch/config.json's target_repo, ORCH_TARGET_REPO, or --repo explicitly if this is intentional," >&2
+  echo "or set ORCH_ALLOW_UNRELATED_REPO=1 to override." >&2
+  exit 1
+fi
+
 # refuse duplicate window
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   echo "worker '$id' already exists in session '$S'"; exit 1
@@ -63,8 +73,27 @@ if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
 else
   wdir="$proj/../wt/$id"
-  if ! git -C "$proj" worktree add -B "orch/$id" "$wdir" >/dev/null 2>&1; then
-    log "worktree add failed/exists for $id; reusing $wdir"
+  # Guard (issue #37): a pre-existing path at $wdir must not be silently reused
+  # just because `worktree add` failed on it. Decide deterministically instead:
+  # reuse only if it is verifiably a clean worktree of THIS repo on orch/<id>;
+  # otherwise fail loudly rather than run the worker against an unknown tree.
+  if [ -e "$wdir" ]; then
+    if worktree_matches_expected "$proj" "$wdir" "orch/$id"; then
+      log "worktree add: $wdir already a clean worktree of $proj on orch/$id; reusing"
+    else
+      log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on orch/$id"
+      update_worker_status "$id" '.status="spawn-failed"'
+      printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+      echo "spawn-failed $id: $wdir exists and is not a valid worktree for this repo/branch." >&2
+      echo "Run 'orch clean $id' to remove it, or use a different id." >&2
+      exit 1
+    fi
+  elif ! git -C "$proj" worktree add -B "orch/$id" "$wdir" >/dev/null 2>&1; then
+    log "spawn refused for $id: git worktree add failed for $wdir"
+    update_worker_status "$id" '.status="spawn-failed"'
+    printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+    echo "spawn-failed $id: git worktree add failed for $wdir" >&2
+    exit 1
   fi
 fi
 mkdir -p "$wdir/.claude"

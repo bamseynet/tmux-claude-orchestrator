@@ -10,9 +10,11 @@
 #   (3) Dead-worker reconciliation: if a worker window is killed or its claude
 #       session dies, no Stop hook fires and workers/<id>.json stays "working"
 #       forever, so the task is silently lost. Detect a status file that still says
-#       "spawning"/"working" but has NO live tmux window, mark it "dead", and notify
-#       the master once. Unlike (1)/(2) this iterates STATUS FILES (the window is
-#       gone, so a window sweep would never see it).
+#       "spawning"/"working" but has NO live tmux window, mark it "dead", notify
+#       the master once, and prune its ../wt/<id> worktree + orch/<id> branch (issue
+#       #37) so the path frees up for a respawn without waiting on `orch clean`.
+#       Unlike (1)/(2) this iterates STATUS FILES (the window is gone, so a window
+#       sweep would never see it).
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
@@ -104,6 +106,7 @@ dead_sweep() { # <live_windows>
       if [ "$misses" -ge "$DEAD_CONFIRM_TICKS" ]; then
         "$here/report.sh" "$id" dead >/dev/null 2>&1 || true
         rm -f "$dm"
+        prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id"
         log "watchdog: worker '$id' dead (no live window, was $status); notified master"
       else
         printf '%s\n' "$misses" > "$dm"

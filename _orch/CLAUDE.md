@@ -59,6 +59,15 @@ Run these with Bash (paths are relative to the repo root where `./orch` lives):
    (typically when another worker reports "done"). No manual retry needed — but don't
    assume a queued worker is running.
 
+## Target repo (issue #35)
+
+Workers always operate on the resolved **target repo**, not wherever this toolkit
+happens to live. Resolution order: `--repo <path>` > `$PROJECT_ROOT` >
+`$ORCH_TARGET_REPO` > `.target_repo` in `_orch/config.json` > cwd. If the toolkit
+dir and the target repo share no git history or remote, `./orch spawn` refuses
+(set `ORCH_ALLOW_UNRELATED_REPO=1` to override deliberately). Run `./orch help`
+for the full precedence and the vendored-copy update path.
+
 ## Anti-patterns
 
 - Don't parallelize sequential or same-file work — run it in a single worker.
