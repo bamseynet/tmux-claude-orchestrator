@@ -154,6 +154,46 @@ update_worker_status() {
   ) 200>"$lock"
 }
 
+# --- Target-repo relatedness guard (issue #35) -------------------------------------
+# The toolkit's own directory and the repo workers operate on are two different
+# things. When the toolkit is vendored/copied into another repo (or a scaffold with
+# unrelated git history and no remote), spawning must not silently worktree the
+# wrong tree. "Related" means one of:
+#   (a) same git top-level (toolkit dir IS the target repo),
+#   (b) sibling worktrees of the same repo (shared git-common-dir),
+#   (c) matching `origin` remote URLs, or
+#   (d) shared history — either HEAD commit exists in the other's object database
+#       (e.g. one is a clone/fork of the other).
+# A toolkit dir that is not a git repo at all has nothing to contradict, so it is
+# treated as related. Set ORCH_ALLOW_UNRELATED_REPO=1 to bypass entirely (a
+# vendored copy with genuinely no shared history, by design).
+ensure_related_repo() { # <toolkit_dir> <target_dir>  -> 0 if related/overridden
+  [ "${ORCH_ALLOW_UNRELATED_REPO:-0}" = "1" ] && return 0
+  local toolkit="$1" target="$2"
+  local t_top g_top
+  t_top="$(git -C "$toolkit" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  g_top="$(git -C "$target" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ "$t_top" = "$g_top" ] && return 0
+
+  local t_common g_common
+  t_common="$(git -C "$t_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || t_common=""
+  g_common="$(git -C "$g_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || g_common=""
+  [ -n "$t_common" ] && [ "$t_common" = "$g_common" ] && return 0
+
+  local t_remote g_remote
+  t_remote="$(git -C "$t_top" remote get-url origin 2>/dev/null)" || t_remote=""
+  g_remote="$(git -C "$g_top" remote get-url origin 2>/dev/null)" || g_remote=""
+  [ -n "$t_remote" ] && [ "$t_remote" = "$g_remote" ] && return 0
+
+  local t_head g_head
+  t_head="$(git -C "$t_top" rev-parse HEAD 2>/dev/null)" || t_head=""
+  g_head="$(git -C "$g_top" rev-parse HEAD 2>/dev/null)" || g_head=""
+  [ -n "$g_head" ] && git -C "$t_top" cat-file -e "${g_head}^{commit}" 2>/dev/null && return 0
+  [ -n "$t_head" ] && git -C "$g_top" cat-file -e "${t_head}^{commit}" 2>/dev/null && return 0
+
+  return 1
+}
+
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
 # Workers actually holding a tmux window + claude process right now: every status

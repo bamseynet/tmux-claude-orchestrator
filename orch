@@ -3,7 +3,46 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ORCH_ROOT="$here"
-export PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+
+# --- target-repo resolution (issue #35) ---------------------------------------
+# The toolkit's own directory ($ORCH_ROOT) is NOT necessarily the repo workers
+# should operate on (e.g. the toolkit vendored into another repo, or run from a
+# scaffold). Resolve the target repo explicitly, most to least specific:
+#   1. --repo <path>                    (this invocation only)
+#   2. $PROJECT_ROOT                    (already set by the caller)
+#   3. $ORCH_TARGET_REPO                (env, persists across invocations)
+#   4. .target_repo in _orch/config.json (relative paths resolve against $ORCH_ROOT)
+#   5. cwd                              (legacy default)
+repo_flag=""
+if [ "${1:-}" = "--repo" ]; then
+  repo_flag="${2:?--repo needs a path}"
+  shift 2
+fi
+
+if [ -n "$repo_flag" ]; then
+  target_repo="$repo_flag"
+elif [ -n "${PROJECT_ROOT:-}" ]; then
+  target_repo="$PROJECT_ROOT"
+elif [ -n "${ORCH_TARGET_REPO:-}" ]; then
+  target_repo="$ORCH_TARGET_REPO"
+else
+  cfg_target="$(jq -r '.target_repo // empty' "$here/_orch/config.json" 2>/dev/null || true)"
+  if [ -n "$cfg_target" ]; then
+    case "$cfg_target" in
+      /*) target_repo="$cfg_target" ;;
+      *) target_repo="$here/$cfg_target" ;;
+    esac
+  else
+    target_repo="$(pwd)"
+  fi
+fi
+
+target_repo="$(cd "$target_repo" 2>/dev/null && pwd)" || {
+  echo "orch: target repo path does not exist: $target_repo" >&2
+  exit 1
+}
+export PROJECT_ROOT="$target_repo"
+
 export SESSION_NAME="${SESSION_NAME:-orch}"
 
 cmd="${1:-help}"; shift || true
@@ -27,6 +66,11 @@ case "$cmd" in
     cat <<EOF
 orch — tmux + Claude Code orchestrator
 
+  ./orch [--repo <path>] <command> ...
+                                     --repo pins the TARGET repo workers operate on,
+                                     independent of where this toolkit lives. See
+                                     "Target repo" below.
+
   ./orch up                          start session + master + heartbeat + watchdog
   ./orch spawn <id> <model> "task" [--no-worktree] [perm]
                                      spawn a worker (own worktree + window)
@@ -48,6 +92,16 @@ orch — tmux + Claude Code orchestrator
   ./orch down                        stop background loops (session stays up)
 
 Env overrides: SESSION_NAME (default: orch), PROJECT_ROOT (default: cwd)
+
+Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGET_REPO
+> .target_repo in _orch/config.json > cwd. Workers' worktrees are always created
+against the resolved target repo, never inferred from where this toolkit lives.
+If the toolkit dir and the resolved target repo share no git history or remote,
+spawn refuses to run (set ORCH_ALLOW_UNRELATED_REPO=1 to override intentionally).
+To update a vendored copy of this toolkit, pull _orch/*.sh + orch from upstream
+(subtree/submodule, or a manual diff-and-copy of files you have not customized) —
+do not \`git pull\` inside the target repo expecting toolkit changes; by design its
+history is unrelated to the toolkit's own.
 
 Spawns are refused-and-queued (not dropped) when at capacity: concurrency
 (thresholds.max_workers), free memory (thresholds.min_free_mb/est_worker_mb), or

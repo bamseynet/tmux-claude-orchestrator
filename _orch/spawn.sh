@@ -35,6 +35,16 @@ fi
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
 
+# Guard 0 (issue #35): the toolkit dir and target repo must be provably related
+# before we create anything against $proj — see ensure_related_repo() in lib.sh.
+if ! ensure_related_repo "$ORCH_ROOT" "$proj"; then
+  log "spawn refused for $id: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated"
+  echo "orch: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated (no shared git history or remote)." >&2
+  echo "Set _orch/config.json's target_repo, ORCH_TARGET_REPO, or --repo explicitly if this is intentional," >&2
+  echo "or set ORCH_ALLOW_UNRELATED_REPO=1 to override." >&2
+  exit 1
+fi
+
 # refuse duplicate window
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   echo "worker '$id' already exists in session '$S'"; exit 1

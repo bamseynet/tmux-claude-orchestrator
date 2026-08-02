@@ -1,4 +1,5 @@
 {
+  "target_repo": "",
   "intervals": {
     "normal_seconds": 20,
     "idle_seconds": 60
