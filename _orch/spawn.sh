@@ -74,7 +74,37 @@ if [ -n "$resume" ] && [ "$mode" != "--no-worktree" ]; then
 fi
 
 S="$SESSION_NAME"
-proj="${PROJECT_ROOT:-$(pwd)}"
+
+# --- target-repo resolution fallback (issue #47) ------------------------------------
+# `./orch` resolves the target repo (--repo > $PROJECT_ROOT > $ORCH_TARGET_REPO >
+# .target_repo in config.json > cwd) and exports PROJECT_ROOT before exec'ing this
+# script. If spawn.sh is ever invoked directly instead of via `./orch spawn`, mirror
+# the same precedence here (minus --repo, which is an ./orch-only flag) so the
+# config-file/env-var levels are never silently skipped in favor of cwd.
+_resolve_target_repo() {
+  if [ -n "${PROJECT_ROOT:-}" ]; then
+    printf '%s' "$PROJECT_ROOT"; return
+  fi
+  if [ -n "${ORCH_TARGET_REPO:-}" ]; then
+    printf '%s' "$ORCH_TARGET_REPO"; return
+  fi
+  local cfg_target
+  cfg_target="$(jq -r '.target_repo // empty' "$CONFIG" 2>/dev/null || true)"
+  if [ -n "$cfg_target" ]; then
+    case "$cfg_target" in
+      /*) printf '%s' "$cfg_target" ;;
+      *) printf '%s' "$ORCH_ROOT/$cfg_target" ;;
+    esac
+    return
+  fi
+  pwd
+}
+
+proj="$(_resolve_target_repo)"
+proj="$(cd "$proj" 2>/dev/null && pwd)" || {
+  echo "spawn: target repo path does not exist: $proj" >&2
+  exit 1
+}
 
 # Guard 0 (issue #35): the toolkit dir and target repo must be provably related
 # before we create anything against $proj — see ensure_related_repo() in lib.sh.
