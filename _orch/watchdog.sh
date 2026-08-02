@@ -24,6 +24,16 @@ cfg="$here/config.json"
 interval="$(jq -r '.watchdog.check_interval // 15' "$cfg")"
 cooldown="$(jq -r '.watchdog.cooldown_seconds // 65' "$cfg")"
 stall="$(jq -r '.watchdog.stall_seconds // 90' "$cfg")"
+# needs_input_realert: how long a worker may sit in "needs-input" with an
+# unchanged pane before the sweep treats it as un-serviced (issue #50 point 1/2).
+needs_input_realert="$(jq -r '.watchdog.needs_input_realert_seconds // 600' "$cfg")"
+# review_idle: how long ANY idle (pane-unchanged) worker must sit before its
+# worktree is checked for unmerged commits (issue #50 point 3).
+review_idle="$(jq -r '.watchdog.review_idle_seconds // 300' "$cfg")"
+# realert base/cap: bounded exponential backoff shared by every re-alerting signal
+# below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
+realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
+realert_max="$(jq -r '.watchdog.realert_max_seconds // 1800' "$cfg")"
 rl_regex="$(jq -r '.watchdog.rate_limit_regex // "rate limit|429|overloaded|too many requests|usage limit"' "$cfg")"
 
 # Consecutive ticks a worker must show "active status but no window" before we
@@ -46,6 +56,44 @@ worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
 # "usage limit reached" that providers use instead of a literal "rate limit".
 rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
   printf '%s\n' "$1" | grep -qiE "$rl_regex"
+}
+
+# Pure predicate (no tmux, no fs): is a re-alert due now, given bounded exponential
+# backoff? <count>=0 means "never yet alerted" -> always due (the caller gates the
+# very first alert on its own age>=threshold check). Each subsequent alert waits
+# base*2^(count-1), capped at <max>, since the last alert. Replaces the old
+# fire-once "alerted" flag (issue #50 point 4) so a single lost signal can't strand
+# a worker — the sweep just keeps re-emitting, slower each time, until acknowledged.
+realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  -> 0 if due
+  local last="$1" count="$2" base="$3" max="$4" now="$5"
+  [ "$count" -le 0 ] && return 0
+  local mult=$((1 << (count - 1)))
+  local wait=$((base * mult))
+  [ "$wait" -gt "$max" ] && wait="$max"
+  [ "$now" -ge $((last + wait)) ]
+}
+
+# Pure-ish predicate (git only, no tmux): how many commits is <id>'s worktree
+# branch ahead of the upstream default branch? Prints 0 (and fails) when the
+# worktree does not exist, so callers can treat "no worktree" as "nothing to
+# review" without a separate existence check. Prefers origin/main, falling back to
+# origin/HEAD then a local `main` for repos without that exact remote branch
+# (e.g. hermetic test repos with no remote at all).
+worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
+  local proj="$1" id="$2" wdir base
+  wdir="$proj/../wt/$id"
+  [ -d "$wdir" ] || { echo 0; return 1; }
+  if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+    base="origin/main"
+  elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
+    base="origin/HEAD"
+  elif git -C "$wdir" rev-parse --verify -q main >/dev/null 2>&1; then
+    base="main"
+  else
+    echo 0
+    return 1
+  fi
+  git -C "$wdir" rev-list --count "$base..HEAD" 2>/dev/null || echo 0
 }
 
 # (1) Non-blocking rate-limit cooldown. Per-worker cooldown-until timestamp lives in
@@ -85,6 +133,82 @@ rl_action() { # <window> <pane_text> <now> <cooldown_seconds>
     return 0
   fi
   return 1
+}
+
+# (2) Liveness + review sweep for one window/worker per tick. Flags a stalled
+# worker, a worker abandoned in needs-input, and/or an idle worker sitting on
+# unmerged commits — each with bounded/backoff re-alerting instead of firing once
+# (issue #50). State lives in two per-worker files:
+#   $STATE_DIR/.wd-<w>      sig / first-seen / last-alert-ts / alert-count
+#   $STATE_DIR/.review-<w>  last-alert-ts / alert-count (ready-for-review only)
+liveness_check() { # <w> <pane_text> <now>
+  local w="$1" pane="$2" now="$3"
+  local sig wf prev_sig first last_alert alert_count
+  sig="$(printf '%s' "$pane" | cksum | cut -d' ' -f1)"
+  wf="$STATE_DIR/.wd-$w"
+  prev_sig=""; first="$now"; last_alert=0; alert_count=0
+  if [ -f "$wf" ]; then
+    { IFS= read -r prev_sig; IFS= read -r first; IFS= read -r last_alert; IFS= read -r alert_count; } < "$wf" || true
+    : "${first:=$now}"; : "${last_alert:=0}"; : "${alert_count:=0}"
+  fi
+
+  if [ "$sig" != "$prev_sig" ]; then
+    # Pane changed -> reset the stall episode (first-seen now, not yet alerted).
+    printf '%s\n%s\n%s\n%s\n' "$sig" "$now" "0" "0" > "$wf"
+    return 0
+  fi
+
+  local age status thr="" ev=""
+  age=$(( now - first ))
+  status="$(jq -r '.status // ""' "$WORKERS_DIR/$w.json" 2>/dev/null || echo "")"
+  case "$status" in
+    spawning | working)
+      # Idle if no spinner, or still parked on the startup Welcome banner.
+      if ! printf '%s\n' "$pane" | grep -qiE 'esc to interrupt|Running…|Compacting' \
+         || printf '%s\n' "$pane" | grep -qi 'Welcome'; then
+        thr="$stall"; ev="stalled"
+      fi
+      ;;
+    needs-input)
+      # Abandoned wait, not a fresh input request -> a distinct event name so the
+      # master can tell "worker is asking something new" apart from "this ask has
+      # been sitting unserviced" (issue #50 point 2).
+      thr="$needs_input_realert"; ev="needs-input-stalled"
+      ;;
+  esac
+
+  if [ -n "$thr" ] && [ "$age" -ge "$thr" ] \
+     && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$realert_base" "$realert_max" "$now"; }; then
+    printf '{"id":"%s","event":"%s","ts":"%s"}\n' "$w" "$ev" "$(date -u +%FT%TZ)" >> "$INBOX"
+    log "watchdog: worker '$w' $ev (${age}s no change, status=$status, alert #$((alert_count + 1))); notified master"
+    last_alert="$now"
+    alert_count=$((alert_count + 1))
+  fi
+  printf '%s\n%s\n%s\n%s\n' "$sig" "$first" "$last_alert" "$alert_count" > "$wf"
+
+  # (4) committed-work-idle detector: an idle worker (pane unchanged for
+  # review_idle_seconds) whose branch has commits ahead of the upstream default
+  # branch gets a "ready-for-review" event even if it never sent a clean "done"
+  # (issue #50 point 3, the highest-value check here).
+  [ "$age" -ge "$review_idle" ] || return 0
+  local ahead rf r_last r_count
+  ahead="$(worker_branch_ahead "${PROJECT_ROOT:-$(pwd)}" "$w")" || true
+  rf="$STATE_DIR/.review-$w"
+  r_last=0; r_count=0
+  [ -f "$rf" ] && { IFS= read -r r_last; IFS= read -r r_count; } < "$rf" || true
+  : "${r_last:=0}"; : "${r_count:=0}"
+  if [ "${ahead:-0}" -gt 0 ] 2>/dev/null; then
+    if [ "$r_count" -eq 0 ] || realert_due "$r_last" "$r_count" "$realert_base" "$realert_max" "$now"; then
+      printf '{"id":"%s","event":"ready-for-review","ts":"%s"}\n' "$w" "$(date -u +%FT%TZ)" >> "$INBOX"
+      log "watchdog: worker '$w' ready-for-review (${ahead} commit(s) ahead, idle ${age}s, alert #$((r_count + 1))); notified master"
+      r_last="$now"; r_count=$((r_count + 1))
+    fi
+    printf '%s\n%s\n' "$r_last" "$r_count" > "$rf"
+  else
+    # Nothing ahead (merged, or no worktree) -> clear so a future commit starts a
+    # fresh alert episode instead of inheriting old backoff state.
+    rm -f "$rf"
+  fi
 }
 
 # (3) Dead-worker reconciliation sweep. Given the live window-name list, scan every
@@ -155,33 +279,9 @@ while [ ! -f "$STATE_DIR/.stop" ]; do
       continue  # cooling, extending, or pane just changed -> skip the stall check
     fi
 
-    # (2) liveness sweep: flag a stalled/never-started worker once per stall episode.
-    sig="$(printf '%s' "$pane" | cksum | cut -d' ' -f1)"
-    wf="$STATE_DIR/.wd-$w"
+    # (2) liveness sweep (stalled / abandoned needs-input / ready-for-review).
     now="$(date +%s)"
-    prev_sig=""; first="$now"; alerted=0
-    if [ -f "$wf" ]; then
-      { IFS= read -r prev_sig; IFS= read -r first; IFS= read -r alerted; } < "$wf" || true
-      : "${first:=$now}"; : "${alerted:=0}"
-    fi
-
-    if [ "$sig" != "$prev_sig" ]; then
-      # Pane changed -> reset the stall episode (first-seen now, not yet alerted).
-      printf '%s\n%s\n%s\n' "$sig" "$now" "0" > "$wf"
-    else
-      age=$(( now - first ))
-      status="$(jq -r '.status // ""' "$WORKERS_DIR/$w.json" 2>/dev/null || echo "")"
-      # Idle if no spinner, or still parked on the startup Welcome banner.
-      if [ "$age" -ge "$stall" ] && [ "$alerted" != "1" ] \
-         && { [ "$status" = "spawning" ] || [ "$status" = "working" ]; } \
-         && { ! printf '%s\n' "$pane" | grep -qiE 'esc to interrupt|Running…|Compacting' \
-              || printf '%s\n' "$pane" | grep -qi 'Welcome'; }; then
-        printf '{"id":"%s","event":"stalled","ts":"%s"}\n' "$w" "$(date -u +%FT%TZ)" >> "$INBOX"
-        log "watchdog: worker '$w' stalled (${age}s no change, status=$status); notified master"
-        alerted=1
-      fi
-      printf '%s\n%s\n%s\n' "$sig" "$first" "$alerted" > "$wf"
-    fi
+    liveness_check "$w" "$pane" "$now"
   done < <(printf '%s\n' "$windows")
 
   # (3) reconcile killed/dead workers against the same live window list.
