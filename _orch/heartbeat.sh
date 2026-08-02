@@ -80,9 +80,7 @@ drain_queue_if_room() {
 # instead of silently requeuing — heartbeat has no other channel once the master
 # itself is the thing that's dead.
 master_window_alive() { # <session:window> -> 0 if that tmux window exists
-  local target="$1"
-  local s="${target%%:*}" w="${target#*:}"
-  tmux list-windows -t "$s" -F '#{window_name}' 2>/dev/null | grep -qxF "$w"
+  tmux capture-pane -t "$1" -p >/dev/null 2>&1
 }
 
 # $STATE_DIR/.master-dead holds "<first-seen-ts>\n<last-alert-ts>" so the alert

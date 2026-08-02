@@ -7,6 +7,13 @@
 # master_dead_clear() directly, and heartbeat_main() can be run in the background
 # against a stubbed tmux (same technique as
 # injectfix_heartbeat_safety_valve.bats) without a real tmux session.
+#
+# master_window_alive() probes via `tmux capture-pane` (the same primitive every
+# other pane-reading helper in lib.sh already relies on) rather than
+# `list-windows`, specifically so it degrades the same way those helpers' stubs
+# already do: any test stub that unconditionally answers capture-pane (as
+# injectfix_heartbeat_safety_valve.bats's does) correctly reads as "master
+# alive" without needing to also implement list-windows.
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -16,12 +23,23 @@ setup() {
   : > "$CALLS"
   printf 'orchestrator\n' > "$WINDOWS_FILE"
 
+  # capture-pane fails (as real tmux does) when the -t target's window isn't in
+  # $WINDOWS_FILE, so master_window_alive can be driven the same way a real dead
+  # window would behave.
   cat > "$STUBBIN/tmux" <<EOF
 #!/usr/bin/env bash
 echo "\$@" >> "$CALLS"
 case "\${1:-}" in
-  list-windows) cat "$WINDOWS_FILE" ;;
-  capture-pane) printf '%s' '❯ ' ;;
+  capture-pane)
+    tgt=""
+    args=("\$@")
+    for ((i=0; i<\${#args[@]}; i++)); do
+      [ "\${args[i]}" = "-t" ] && tgt="\${args[i+1]}"
+    done
+    win="\${tgt#*:}"
+    grep -qxF "\$win" "$WINDOWS_FILE" || exit 1
+    printf '%s' '❯ '
+    ;;
   load-buffer)  cat > /dev/null ;;
   show-buffer)  exit 1 ;;
 esac
@@ -54,7 +72,7 @@ wait_for() { # <predicate...>  -- poll up to 5s
   return 1
 }
 
-@test "master_window_alive: true when the window is in tmux's list" {
+@test "master_window_alive: true when the window is in tmux's window list" {
   printf 'w1\norchestrator\nw2\n' > "$WINDOWS_FILE"
   run master_window_alive "orch:orchestrator"
   [ "$status" -eq 0 ]
@@ -66,10 +84,10 @@ wait_for() { # <predicate...>  -- poll up to 5s
   [ "$status" -ne 0 ]
 }
 
-@test "master_window_alive: false when the whole session is gone (list-windows fails)" {
+@test "master_window_alive: false when the whole session is gone (capture-pane fails outright)" {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
-[ "${1:-}" = "list-windows" ] && exit 1
+[ "${1:-}" = "capture-pane" ] && exit 1
 exit 0
 EOF
   chmod +x "$STUBBIN/tmux"
