@@ -104,6 +104,51 @@ for the full precedence and the vendored-copy update path.
    copy and bounce the loops. Repeat this full loop every round — don't skip steps
    because a previous round went smoothly.
 
+## Context & recovery (issue #41)
+
+You run unattended for long periods, and your context window is a **cache, not the
+source of truth**. Treat `_orch/state/*` as durable orchestration state that must
+be able to reconstruct "what's in flight" even if your transcript is compacted,
+lost, or you're a fresh session after a restart:
+
+- `_orch/state/workers/*.json` — per-worker status (already maintained by
+  `spawn.sh`/`report.sh`).
+- `_orch/state/queue.jsonl` — spawns queued but not yet launched.
+- `_orch/state/review-log.jsonl` — **you** append one line per review decision
+  (`{ts, worker_id, branch, verdict: approved|rejected|redo, reason, commit_sha}`)
+  right after you make it. Use `_orch/rehydrate.sh`'s `review_log_append` helper
+  (`source _orch/rehydrate.sh && review_log_append <id> <branch> <verdict>
+  "<reason>" [sha]`) so concurrent writers can never corrupt the file, or append a
+  matching JSON line yourself with the Write/Edit tools. This is the one piece of
+  orchestration memory that previously lived only in your transcript — a rejected
+  worker's diff and *why* you rejected it, so a later heartbeat can't accidentally
+  re-approve it or repeat an instruction without the context that prompted it.
+- `_orch/state/master-notes.md` — a short scratchpad you overwrite (not append)
+  with your current plan/priorities, e.g. right after acting on a heartbeat. Keep
+  it to a few lines — it's a todo list, not a log.
+
+**Rehydrate** whenever you're unsure of orchestration state — after a compaction,
+right after a restart, or as a periodic sanity check: run `_orch/rehydrate.sh`
+(prints workers, the queue, the last 10 review decisions, and your own notes in
+one shot) and reconcile it against `./orch status` before taking any further
+spawn/merge/review action. On a bootstrap that reuses an already-running session
+(a restart with the tmux session still alive), `bootstrap.sh` injects this same
+summary into your pane automatically — but don't rely solely on that; re-run
+`_orch/rehydrate.sh` yourself any time you're not confident of current state.
+
+**Review diffs on demand, not pasted-in-full.** Prefer reading a worker's diff
+with the Read tool / a scoped `git diff` over having a worker paste its full diff
+into chat — same information, retrievable any time from git, without permanently
+bloating your context.
+
+**PreCompact.** Claude Code exposes a `PreCompact` hook. This repo does not wire
+one up yet (a hook scoped to only the orchestrator's tmux session/window, that is
+purely observational and never blocks or delays compaction, is a reasonable
+follow-up) — for now, treat *every* heartbeat you act on as a checkpoint boundary:
+refresh `master-notes.md` and `review-log.jsonl` as the last step of handling it,
+so state is never more than one heartbeat-tick stale regardless of when
+compaction actually lands.
+
 ## Anti-patterns
 
 - Don't parallelize sequential or same-file work — run it in a single worker.
