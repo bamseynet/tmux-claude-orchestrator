@@ -2,7 +2,25 @@
 # orch — single entrypoint for the tmux + Claude Code orchestrator.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ORCH_ROOT="$here"
+export ORCH_ROOT="${ORCH_ROOT:-$here}"
+
+# --- dependency check (issue #20) -----------------------------------------------
+# Previously only bootstrap.sh checked for required binaries, so a missing
+# jq/tmux/perl surfaced as a cryptic failure mid-command instead of a clear
+# message up front. Every command now goes through this entrypoint, so checking
+# here catches it for all of them, not just `up`. Scoped to the binaries every
+# command actually touches (jq for config/status, tmux for window ops, perl for
+# strip_ansi) — `claude` and `git` are only needed by specific subcommands
+# (up/spawn, spawn/collect) and are checked there instead, same as bootstrap.sh.
+# lib.sh is sourced only if present alongside this script: some hermetic tests
+# invoke a standalone copy of just this file (no sibling _orch/), exercising
+# commands (logs/events/help) that need neither check_deps nor lib.sh's other
+# helpers, so a missing lib.sh there must not be fatal.
+if [ -f "$here/_orch/lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$here/_orch/lib.sh"
+  check_deps tmux jq perl
+fi
 
 # --- target-repo resolution (issue #35) ---------------------------------------
 # The toolkit's own directory ($ORCH_ROOT) is NOT necessarily the repo workers
@@ -104,13 +122,33 @@ case "$cmd" in
     done
     ;;
   collect)      exec "$here/_orch/collect.sh" "$@" ;;
-  attach)       exec tmux attach -t "$SESSION_NAME" ;;
+  ask)          exec "$here/_orch/ask.sh" "$@" ;;
+  tail)
+    id="${1:?usage: orch tail <id> [lines]}"; shift || true
+    lines="${1:-15}"
+    if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
+      echo "no worker window '$id' in session '$SESSION_NAME'" >&2
+      exit 1
+    fi
+    pane_tail "$SESSION_NAME:$id" "$lines"
+    ;;
+  attach)
+    if [ -n "${1:-}" ]; then
+      id="$1"
+      if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
+        echo "no worker window '$id' in session '$SESSION_NAME'" >&2
+        exit 1
+      fi
+      exec tmux attach -t "$SESSION_NAME:$id"
+    fi
+    exec tmux attach -t "$SESSION_NAME"
+    ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
   logs)
-    state_dir="$here/_orch/state"
+    state_dir="$ORCH_ROOT/_orch/state"
     log_name="${1:-}"; shift || true
     case "$log_name" in
       heartbeat) log_file="$state_dir/heartbeat.log" ;;
@@ -132,7 +170,7 @@ case "$cmd" in
     tail -n "${ORCH_LOG_LINES:-200}" "$log_file"
     ;;
   events)
-    events_file="$here/_orch/state/events.jsonl"
+    events_file="$ORCH_ROOT/_orch/state/events.jsonl"
     if [ ! -f "$events_file" ]; then
       echo "no events recorded yet"
       exit 0
@@ -153,6 +191,7 @@ orch — tmux + Claude Code orchestrator
                                      "Target repo" below.
 
   ./orch up                          start session + master + heartbeat + watchdog
+                                     (alias: bootstrap)
   ./orch spawn <id> <model> "task" [--no-worktree] [perm]
                                      spawn a worker (own worktree + window)
                                      model: opus | sonnet | haiku
@@ -163,7 +202,13 @@ orch — tmux + Claude Code orchestrator
                                       sessions by project dir)
                                      perm (opt-in):
                                        --allow "cmd,cmd"  pre-approve commands
-  ./orch send  <id> "message"        message a running worker
+  ./orch send  <id> "message"        message a running worker (one-way)
+  ./orch tail  <id> [lines]          print a worker's recent pane output
+                                     (default 15 lines)
+  ./orch ask   <id> "question"       send a question, wait for the worker to
+                                     finish answering, and print its reply
+                                     (request/response; see ORCH_ASK_TIMEOUT
+                                     and ORCH_ASK_LINES to tune the wait/output)
   ./orch clean <id>                  retire ONE worker: its tmux window, worktree
                                      ../wt/<id>, branch orch/<id>, status file and
                                      watchdog scratch (idempotent)
@@ -171,14 +216,17 @@ orch — tmux + Claude Code orchestrator
   ./orch prune                       reap ALL terminal (done/spawn-failed)
                                      workers right now, ignoring retention —
                                      same teardown as clean, on demand
-  ./orch status                      list worker states
+  ./orch status [--json]             list worker states
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
                                      (git diff <base>...orch/<id>, default
                                      base: main) + the worker's status JSON —
                                      the uniform deliverable surface for
                                      review/merge flows
-  ./orch attach                      attach to the tmux session
+  ./orch attach [<id>]               attach to the tmux session, or jump straight
+                                     to one worker's window
   ./orch down                        stop background loops (session stays up)
+                                     (alias: stop)
+  ./orch hud                         print the one-line status HUD
   ./orch logs <heartbeat|watchdog|orch|events> [-f]
                                      view a log (-f to follow); events shows the
                                      raw durable event history (see "orch events")

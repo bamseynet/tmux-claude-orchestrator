@@ -179,6 +179,19 @@ send_prompt() { # <target> <text...>
   tmux send-keys -t "$target" Enter
 }
 
+# --- Dependency check (issue #20) ----------------------------------------------------
+# Previously only bootstrap.sh verified required binaries were present, so a missing
+# jq/tmux/perl (etc.) surfaced as a cryptic failure mid-command instead of a clear
+# message up front. Centralized here so every entrypoint can share the same check
+# instead of duplicating the loop.
+check_deps() { # <dep>...  -> 0 if all present; prints one line per missing dep otherwise
+  local dep missing=0
+  for dep in "$@"; do
+    command -v "$dep" >/dev/null 2>&1 || { echo "missing dependency: $dep" >&2; missing=1; }
+  done
+  return "$missing"
+}
+
 # --- Locked worker-status writers (issue #11) ---------------------------------------
 # report.sh (Stop/Notification/SubagentStop hooks) and spawn.sh both mutate
 # workers/<id>.json. Unlocked, a Stop hook firing during spawn's post-inject window
