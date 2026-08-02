@@ -86,16 +86,23 @@ heartbeat_main() {
 
     if events="$(drain_inbox)"; then
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
-      if wait_ready "$S:$ORCH_WINDOW" 45; then
+      if ! wait_ready "$S:$ORCH_WINDOW" 45; then
+        # Master busy — requeue and try again next tick.
+        printf '%s\n' "$events" >> "$INBOX"
+        log "master busy; requeued events"
+      elif pane_has_draft "$S:$ORCH_WINDOW"; then
+        # Issue #38: an idle-looking input box can still hold the operator's
+        # unsent draft. Injecting here would paste into it and submit it via the
+        # Enter in send_prompt, wiping the draft. Requeue instead of injecting —
+        # never clear the line — and retry next tick.
+        printf '%s\n' "$events" >> "$INBOX"
+        log "master has an unsent draft; requeued events"
+      else
         send_prompt "$S:$ORCH_WINDOW" "[orchestrator heartbeat] Worker events since last check:
 $events
 
 Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, review, or shut down)."
         log "woke master with: $(echo "$events" | tr '\n' ' ')"
-      else
-        # Master busy — requeue and try again next tick.
-        printf '%s\n' "$events" >> "$INBOX"
-        log "master busy; requeued events"
       fi
       sleep "$normal"
     else
