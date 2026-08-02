@@ -41,9 +41,44 @@ drain_inbox() {
   rm -f "$proc"
 }
 
-# Drain one pending spawn from the queue (issues #21/#31/#24) if the unified
-# resource gate now allows it — e.g. a worker just freed a concurrency slot by
-# reporting "done". Re-checks the gate itself, so it's safe to call every tick.
+# Status of worker <id>, or empty if its status file doesn't exist yet.
+_worker_status() { # <id>
+  local f="$WORKERS_DIR/$1.json"
+  [ -f "$f" ] && jq -r '.status // empty' "$f" 2>/dev/null
+}
+
+# Task dependencies (issue #22): pop the first queue item whose `after` worker
+# (if any) has reached "done", without disturbing the relative order of the
+# items behind it. A dependency-less item is always eligible. Prints the item
+# and rewrites the queue file minus that one line; returns 1 (no output, queue
+# untouched) if the queue is empty or nothing in it is ready yet.
+queue_pop_ready() {
+  [ -s "$QUEUE" ] || return 1
+  local line after found="" tmp="$QUEUE.tmp.$$"
+  : > "$tmp"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ -n "$found" ]; then
+      printf '%s\n' "$line" >> "$tmp"
+      continue
+    fi
+    after="$(jq -r '.after // empty' <<<"$line")"
+    if [ -z "$after" ] || [ "$(_worker_status "$after")" = "done" ]; then
+      found="$line"
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$QUEUE"
+  mv "$tmp" "$QUEUE"
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+# Drain one pending spawn from the queue (issues #21/#31/#24, #22 task deps) if
+# the unified resource gate now allows it AND at least one queued item's
+# dependency (if any) is satisfied — e.g. a worker just freed a concurrency slot
+# or a dependency worker just reported "done". Re-checks the gate itself, so
+# it's safe to call every tick.
 drain_queue_if_room() {
   [ -s "$QUEUE" ] || return 0
   if ! check_spawn_gate; then
@@ -51,7 +86,7 @@ drain_queue_if_room() {
     return 0
   fi
   local item id model task mode resume allow
-  item="$(queue_pop)" || return 0
+  item="$(queue_pop_ready)" || return 0
   id="$(jq -r '.id' <<<"$item")"
   model="$(jq -r '.model' <<<"$item")"
   task="$(jq -r '.task' <<<"$item")"
