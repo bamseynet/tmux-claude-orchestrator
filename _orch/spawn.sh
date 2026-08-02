@@ -154,7 +154,9 @@ else
     else
       log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on orch/$id"
       update_worker_status "$id" '.status="spawn-failed"'
-      printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+      sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
+      printf '%s\n' "$sf_line" >> "$INBOX"
+      printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
       echo "spawn-failed $id: $wdir exists and is not a valid worktree for this repo/branch." >&2
       echo "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
@@ -162,7 +164,9 @@ else
   elif ! git -C "$proj" worktree add -B "orch/$id" "$wdir" >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
-    printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+    sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
+    printf '%s\n' "$sf_line" >> "$INBOX"
+    printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
     echo "spawn-failed $id: git worktree add failed for $wdir" >&2
     exit 1
   fi
@@ -273,7 +277,9 @@ if [ "$spawn_ok" -eq 1 ]; then
 else
   # Never-started worker: record it and tell the master so the spawn is not lost.
   update_worker_status "$id" '.status="spawn-failed"'
-  printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
+  sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
+  printf '%s\n' "$sf_line" >> "$INBOX"
+  printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
   log "worker $id: spawn-failed (task injection unconfirmed after retry)"
   echo "spawn-failed $id ($model)  ->  window $S:$id   dir $wdir" >&2
 fi

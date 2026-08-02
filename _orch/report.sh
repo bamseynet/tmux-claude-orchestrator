@@ -11,7 +11,9 @@ id="${1:-${ORCH_WORKER_ID:-unknown}}"
 event="${2:-update}"
 ts="$(date -u +%FT%TZ)"
 
-printf '{"id":"%s","event":"%s","ts":"%s"}\n' "$id" "$event" "$ts" >> "$INBOX"
+line="$(printf '{"id":"%s","event":"%s","ts":"%s"}' "$id" "$event" "$ts")"
+printf '%s\n' "$line" >> "$INBOX"
+printf '%s\n' "$line" >> "$STATE_DIR/events.jsonl"
 
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$s/$t are jq --arg vars, not shell
 update_worker_status "$id" --arg id "$id" --arg s "$event" --arg t "$ts" \

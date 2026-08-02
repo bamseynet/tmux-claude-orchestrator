@@ -109,6 +109,40 @@ case "$cmd" in
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
+  logs)
+    state_dir="$here/_orch/state"
+    log_name="${1:-}"; shift || true
+    case "$log_name" in
+      heartbeat) log_file="$state_dir/heartbeat.log" ;;
+      watchdog)  log_file="$state_dir/watchdog.log" ;;
+      orch)      log_file="$state_dir/orch.log" ;;
+      events)    log_file="$state_dir/events.jsonl" ;;
+      *)
+        echo "orch logs: choose one of heartbeat|watchdog|orch|events" >&2
+        exit 1
+        ;;
+    esac
+    if [ ! -f "$log_file" ]; then
+      echo "no $log_name log yet ($log_file)"
+      exit 0
+    fi
+    if [ "${1:-}" = "-f" ]; then
+      exec tail -f "$log_file"
+    fi
+    tail -n "${ORCH_LOG_LINES:-200}" "$log_file"
+    ;;
+  events)
+    events_file="$here/_orch/state/events.jsonl"
+    if [ ! -f "$events_file" ]; then
+      echo "no events recorded yet"
+      exit 0
+    fi
+    printf '%-21s %-12s %s\n' "TIME" "ID" "EVENT"
+    jq -r '[.ts, .id, .event] | @tsv' "$events_file" | \
+      while IFS=$'\t' read -r ev_ts ev_id ev_event; do
+        printf '%-21s %-12s %s\n' "$ev_ts" "$ev_id" "$ev_event"
+      done
+    ;;
   help|--help|-h|*)
     cat <<EOF
 orch — tmux + Claude Code orchestrator
@@ -145,6 +179,12 @@ orch — tmux + Claude Code orchestrator
                                      review/merge flows
   ./orch attach                      attach to the tmux session
   ./orch down                        stop background loops (session stays up)
+  ./orch logs <heartbeat|watchdog|orch|events> [-f]
+                                     view a log (-f to follow); events shows the
+                                     raw durable event history (see "orch events")
+  ./orch events                      formatted view of the durable event history
+                                     (every done/needs-input/stalled/spawn-failed
+                                     event, surviving the inbox's destructive drain)
 
 Env overrides: SESSION_NAME (default: orch), PROJECT_ROOT (default: cwd)
 
