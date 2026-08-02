@@ -211,6 +211,43 @@ liveness_check() { # <w> <pane_text> <now>
   fi
 }
 
+# Runs the rate-limit + liveness sweep for exactly one window/worker per tick.
+# Skips the master/orchestrator window entirely: it is a heavy Claude session
+# that can trip the same rate-limit/liveness regexes as a worker, and
+# send_prompt-ing a retry nudge into the operator's own pane is both a bug and
+# a prompt-injection vector (issue #55).
+sweep_window() { # <window> <cooldown_seconds>
+  local w="$1" cd="$2"
+  [ "$w" = "$ORCH_WINDOW" ] && return 0
+  local pane now rl_result rl_hit
+  pane="$(pane_tail "$S:$w" 25)"
+
+  now="$(date +%s)"
+  rl_result="$(rl_action "$w" "$pane" "$now" "$cd")" && rl_hit=1 || rl_hit=0
+  if [ "$rl_hit" = "1" ]; then
+    case "$rl_result" in
+      detected)
+        log "rate limit detected on '$w'; cooling ${cd}s (non-blocking)"
+        ;;
+      skip)
+        : # still cooling; nothing to do this tick
+        ;;
+      extended)
+        log "rate limit still active on '$w' after cooldown; extending ${cd}s"
+        ;;
+      nudge)
+        wait_ready "$S:$w" 10 || true
+        send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
+        log "rate limit cleared on '$w'; sent retry nudge"
+        ;;
+    esac
+    return 0  # cooling, extending, or pane just changed -> skip the stall check
+  fi
+
+  now="$(date +%s)"
+  liveness_check "$w" "$pane" "$now"
+}
+
 # (3) Dead-worker reconciliation sweep. Given the live window-name list, scan every
 # worker status file; a worker that is "active" but has no window is confirmed over
 # DEAD_CONFIRM_TICKS ticks (via a per-worker debounce marker), then marked "dead"
@@ -252,36 +289,7 @@ while [ ! -f "$STATE_DIR/.stop" ]; do
   windows="$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)"
   while IFS= read -r w; do
     [ -n "$w" ] || continue
-    # Capture the pane once per window per tick and reuse it (keeps the sweep cheap).
-    pane="$(pane_tail "$S:$w" 25)"
-
-    # (1) non-blocking rate-limit cooldown + retry nudge (per-worker, never sleeps
-    # the sweep — see rl_action() above).
-    now="$(date +%s)"
-    rl_result="$(rl_action "$w" "$pane" "$now" "$cooldown")" && rl_hit=1 || rl_hit=0
-    if [ "$rl_hit" = "1" ]; then
-      case "$rl_result" in
-        detected)
-          log "rate limit detected on '$w'; cooling ${cooldown}s (non-blocking)"
-          ;;
-        skip)
-          : # still cooling; nothing to do this tick
-          ;;
-        extended)
-          log "rate limit still active on '$w' after cooldown; extending ${cooldown}s"
-          ;;
-        nudge)
-          wait_ready "$S:$w" 10 || true
-          send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
-          log "rate limit cleared on '$w'; sent retry nudge"
-          ;;
-      esac
-      continue  # cooling, extending, or pane just changed -> skip the stall check
-    fi
-
-    # (2) liveness sweep (stalled / abandoned needs-input / ready-for-review).
-    now="$(date +%s)"
-    liveness_check "$w" "$pane" "$now"
+    sweep_window "$w" "$cooldown"
   done < <(printf '%s\n' "$windows")
 
   # (3) reconcile killed/dead workers against the same live window list.
