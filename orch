@@ -103,6 +103,7 @@ case "$cmd" in
       printf '%-12s %-8s %-12s %-8s %s\n' "$id" "$model" "$st" "$age" "$task"
     done
     ;;
+  collect)      exec "$here/_orch/collect.sh" "$@" ;;
   attach)       exec tmux attach -t "$SESSION_NAME" ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
@@ -133,6 +134,11 @@ orch — tmux + Claude Code orchestrator
                                      watchdog scratch (idempotent)
   ./orch kill  <id>                  alias for clean
   ./orch status                      list worker states
+  ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
+                                     (git diff <base>...orch/<id>, default
+                                     base: main) + the worker's status JSON —
+                                     the uniform deliverable surface for
+                                     review/merge flows
   ./orch attach                      attach to the tmux session
   ./orch down                        stop background loops (session stays up)
 
