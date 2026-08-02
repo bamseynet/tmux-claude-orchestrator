@@ -19,6 +19,12 @@
     "max_usd": 5.0,
     "est_usd_per_worker": 0.5
   },
+  "merge": {
+    "auto": false,
+    "required_checks": [],
+    "poll_interval_seconds": 15,
+    "timeout_seconds": 1800
+  },
   "watchdog": {
     "enabled": true,
     "check_interval": 15,

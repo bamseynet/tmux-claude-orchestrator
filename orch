@@ -122,6 +122,7 @@ case "$cmd" in
     done
     ;;
   collect)      exec "$here/_orch/collect.sh" "$@" ;;
+  merge)        exec "$here/_orch/merge.sh" "$@" ;;
   ask)          exec "$here/_orch/ask.sh" "$@" ;;
   tail)
     id="${1:?usage: orch tail <id> [lines]}"; shift || true
@@ -224,6 +225,22 @@ orch — tmux + Claude Code orchestrator
                                      base: main) + the worker's status JSON —
                                      the uniform deliverable surface for
                                      review/merge flows
+  ./orch merge <id> [--auto] [--base <br>]
+                                     push orch/<id>, open (or reuse) a PR against
+                                     <br> (default: main). Without --auto (and
+                                     merge.auto=false in config), only pushes +
+                                     reports PR/check status — never merges. With
+                                     --auto (or merge.auto=true): waits for
+                                     required CI checks (merge.required_checks,
+                                     merge.poll_interval_seconds,
+                                     merge.timeout_seconds) and squash-merges +
+                                     deletes the branch only if every required
+                                     check is SUCCESS. Refuses to merge a
+                                     conflicting/dirty PR. On block/timeout,
+                                     marks the worker "blocked" and emits a
+                                     merge-blocked event (see "orch events");
+                                     on success, marks it "merged" and emits
+                                     merged.
   ./orch attach [<id>]               attach to the tmux session, or jump straight
                                      to one worker's window
   ./orch down                        stop background loops (session stays up)
