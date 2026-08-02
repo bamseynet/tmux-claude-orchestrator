@@ -63,6 +63,10 @@ TUI_ACTIVE_GLYPH_REGEX="$(_tui_pattern active_glyph_regex '✻|✽|✳|✶')"
 TUI_READY_REGEX="$(_tui_pattern ready_regex '│ *>|❯|for shortcuts|Try "')"
 TUI_WELCOME_REGEX="$(_tui_pattern welcome_regex 'Welcome')"
 TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
+# Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
+# input row (issue #52) — broaden this list via config as the TUI's copy changes,
+# rather than hardcoding new patterns into pane_has_draft() itself.
+TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for shortcuts|\? for shortcuts|Context (left|low)|tokens? (saved|left|used))')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -120,21 +124,33 @@ confirm_inject() { # <target> [timeout_s]
   return 1
 }
 
-# --- Master draft guard (issue #38) -------------------------------------------------
+# --- Master draft guard (issue #38, hardened by #52) --------------------------------
 # An idle input box with an unsent operator draft looks identical to an empty idle
 # input box to is_ready() — both are "not busy, prompt glyph visible". Heartbeat
 # injection must not paste over (and Enter away) a draft the operator is mid-typing.
-# This inspects the last line carrying the input glyph and treats anything left of
-# the placeholder hint / after the glyph as operator-authored text.
-pane_has_draft() { # <target>  -> 0 if the input line holds unsent operator text
+#
+# Issue #52: the original implementation grepped ALL of the last 15 pane lines for
+# the input-glyph regex and took the LAST matching line as "the input line". Any
+# completed tool-output table/box-border row containing "│ >" (or the bare "❯"
+# glyph appearing in unrelated output) could therefore be mistaken for the live
+# input row, and any hint text on the true input row other than the two
+# hardcoded placeholders was treated as a draft — so this failed CLOSED and the
+# heartbeat requeued every worker event forever. It must fail OPEN instead: only
+# the true prompt row (the pane's last non-blank line, which is where a live
+# cursor always renders) is inspected, and only a high-confidence non-placeholder
+# match on THAT line counts as a draft. Any other shape — no glyph on the last
+# line, a placeholder/hint, or an empty pane — is treated as "no draft", the safe
+# default, and lets the placeholder allow-list broaden via config instead of code
+# changes (issue #52 config knob).
+pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
   local line rest
-  line="$(pane_tail "$1" 15 | grep -E "$TUI_INPUT_GLYPH_REGEX" | tail -n 1)"
+  line="$(pane_tail "$1" 15 | grep -v '^[[:space:]]*$' | tail -n 1)"
   [ -n "$line" ] || return 1
-  rest="$(printf '%s\n' "$line" | sed -E "s/^.*($TUI_INPUT_GLYPH_REGEX) ?//")"
-  case "$rest" in
-    ''|'Try "'*|'for shortcuts'*) return 1 ;;
-  esac
-  printf '%s' "$rest" | grep -qE '[^[:space:]]'
+  [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
+  rest="${BASH_REMATCH[2]}"
+  [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
+  [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
+  return 0
 }
 
 # Deliver text into a pane reliably:

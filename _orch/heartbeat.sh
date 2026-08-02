@@ -73,10 +73,19 @@ drain_queue_if_room() {
 
 heartbeat_main() {
   local S="$SESSION_NAME"
-  local cfg="$here/config.json"
+  # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
+  # path — needed so hermetic tests can point config at a temp dir.
   local normal idle events
-  normal="$(jq -r '.intervals.normal_seconds // 20' "$cfg")"
-  idle="$(jq -r '.intervals.idle_seconds // 60' "$cfg")"
+  normal="$(jq -r '.intervals.normal_seconds // 20' "$CONFIG")"
+  idle="$(jq -r '.intervals.idle_seconds // 60' "$CONFIG")"
+
+  # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
+  # single misdetection (or a genuinely long-lived operator draft) must never be
+  # able to starve delivery forever. Once EITHER bound trips — N consecutive
+  # draft-ticks or T seconds since the first one — force-deliver regardless.
+  local max_draft_ticks max_draft_secs draft_requeue_count=0 draft_requeue_since=0
+  max_draft_ticks="$(jq -r '.heartbeat.max_draft_requeue_ticks // 10' "$CONFIG")"
+  max_draft_secs="$(jq -r '.heartbeat.max_draft_requeue_seconds // 300' "$CONFIG")"
 
   : > "$INBOX"
   log "heartbeat start (session=$S)"
@@ -90,19 +99,37 @@ heartbeat_main() {
         # Master busy — requeue and try again next tick.
         printf '%s\n' "$events" >> "$INBOX"
         log "master busy; requeued events"
-      elif pane_has_draft "$S:$ORCH_WINDOW"; then
+      else
         # Issue #38: an idle-looking input box can still hold the operator's
         # unsent draft. Injecting here would paste into it and submit it via the
         # Enter in send_prompt, wiping the draft. Requeue instead of injecting —
-        # never clear the line — and retry next tick.
-        printf '%s\n' "$events" >> "$INBOX"
-        log "master has an unsent draft; requeued events"
-      else
-        send_prompt "$S:$ORCH_WINDOW" "[orchestrator heartbeat] Worker events since last check:
+        # never clear the line — and retry next tick. But (issue #52) never do
+        # that forever: force-deliver once the safety valve trips.
+        local force_deliver=0 elapsed=0
+        if pane_has_draft "$S:$ORCH_WINDOW"; then
+          draft_requeue_count=$((draft_requeue_count + 1))
+          [ "$draft_requeue_since" -gt 0 ] || draft_requeue_since="$(date +%s)"
+          elapsed=$(( $(date +%s) - draft_requeue_since ))
+          if [ "$draft_requeue_count" -ge "$max_draft_ticks" ] || [ "$elapsed" -ge "$max_draft_secs" ]; then
+            force_deliver=1
+            log "draft safety valve tripped (ticks=$draft_requeue_count elapsed=${elapsed}s >= ticks_cap=$max_draft_ticks/secs_cap=$max_draft_secs); forcing delivery"
+          fi
+        else
+          force_deliver=1
+        fi
+
+        if [ "$force_deliver" -eq 1 ]; then
+          draft_requeue_count=0
+          draft_requeue_since=0
+          send_prompt "$S:$ORCH_WINDOW" "[orchestrator heartbeat] Worker events since last check:
 $events
 
 Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, review, or shut down)."
-        log "woke master with: $(echo "$events" | tr '\n' ' ')"
+          log "woke master with: $(echo "$events" | tr '\n' ' ')"
+        else
+          printf '%s\n' "$events" >> "$INBOX"
+          log "master has an unsent draft; requeued events (${draft_requeue_count}/${max_draft_ticks})"
+        fi
       fi
       sleep "$normal"
     else

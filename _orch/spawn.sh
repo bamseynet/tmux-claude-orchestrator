@@ -183,17 +183,38 @@ fi
 preamble='[Orchestrated task — complete it directly. Do not invoke any skill unless this task explicitly requires one.] '
 send_prompt "$S:$id" "${preamble}${task}"
 
-# Guard 1 (inject verification + retry): a send can land before the REPL is ready
-# and be lost, leaving the worker idle at the startup screen so it never fires a
-# report hook. Confirm the injection landed (banner scrolled away / pane active);
-# re-inject once; if still unconfirmed, mark spawn-failed and notify the master.
-# Bounded polling — never hangs.
+# Guard 1 (inject verification + retry, hardened by issue #51): a send can land
+# before the REPL is ready and be lost entirely — or the paste can land (visible
+# as an unsubmitted "[Pasted text]" chip) while the follow-up Enter fails to
+# actually submit it, leaving the worker idling at the startup banner with the
+# task never dispatched. Confirm the injection landed (banner scrolled away /
+# pane active); if not, try a BARE Enter first, across a couple of bounded
+# retries — never blindly re-paste, since the text is very likely already
+# sitting in the input box and pasting it again would duplicate/corrupt it.
+# Only once bare-Enter retries are exhausted does a genuinely-lost paste get one
+# full re-inject as a last resort. Bounded throughout — never hangs. Still
+# unconfirmed after all of that => spawn-failed, never a silently-idle
+# "working" worker.
+spawn_ok=0
 if confirm_inject "$S:$id" 15; then
   spawn_ok=1
 else
-  log "worker $id: task injection unconfirmed; re-injecting once"
-  send_prompt "$S:$id" "${preamble}${task}"
-  if confirm_inject "$S:$id" 15; then spawn_ok=1; else spawn_ok=0; fi
+  max_retries="$(jq -r '.thresholds.spawn_inject_retries // 2' "$CONFIG")"
+  retry=0
+  while [ "$retry" -lt "$max_retries" ]; do
+    retry=$((retry + 1))
+    log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
+    tmux send-keys -t "$S:$id" Enter
+    if confirm_inject "$S:$id" 15; then
+      spawn_ok=1
+      break
+    fi
+  done
+  if [ "$spawn_ok" -ne 1 ]; then
+    log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
+    send_prompt "$S:$id" "${preamble}${task}"
+    if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+  fi
 fi
 
 if [ "$spawn_ok" -eq 1 ]; then
