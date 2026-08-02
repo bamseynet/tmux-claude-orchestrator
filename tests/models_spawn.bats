@@ -93,7 +93,7 @@ write_config() { # <default_worker-or-empty>
   run jq -r .task "$ORCH_ROOT/_orch/state/workers/w4.json"
   [[ "$output" == *"Review the current branch/diff"* ]]
 
-  run jq -c '.permissions.allow' "$PROJECT_ROOT/.claude/settings.local.json"
+  run jq -c '.permissions.allow' "$ORCH_ROOT/_orch/state/settings/w4.json"
   [[ "$output" == *"Bash(git diff:*)"* ]]
   [[ "$output" == *"Bash(git log:*)"* ]]
 }
@@ -109,7 +109,7 @@ write_config() { # <default_worker-or-empty>
   write_config ""
   run "$SPAWN" w6 --preset test --no-worktree --allow "Bash(ls:*)"
   [ "$status" -eq 0 ]
-  run jq -c '.permissions.allow' "$PROJECT_ROOT/.claude/settings.local.json"
+  run jq -c '.permissions.allow' "$ORCH_ROOT/_orch/state/settings/w6.json"
   [[ "$output" == *"Bash(ls:*)"* ]]
   [[ "$output" == *"Bash(npm test:*)"* ]]
 }
