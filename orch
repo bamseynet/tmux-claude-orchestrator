@@ -107,6 +107,7 @@ case "$cmd" in
   attach)       exec tmux attach -t "$SESSION_NAME" ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
+  prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
   help|--help|-h|*)
     cat <<EOF
@@ -133,6 +134,9 @@ orch — tmux + Claude Code orchestrator
                                      ../wt/<id>, branch orch/<id>, status file and
                                      watchdog scratch (idempotent)
   ./orch kill  <id>                  alias for clean
+  ./orch prune                       reap ALL terminal (done/spawn-failed)
+                                     workers right now, ignoring retention —
+                                     same teardown as clean, on demand
   ./orch status                      list worker states
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
                                      (git diff <base>...orch/<id>, default

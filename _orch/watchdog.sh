@@ -35,6 +35,11 @@ review_idle="$(jq -r '.watchdog.review_idle_seconds // 300' "$cfg")"
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
 realert_max="$(jq -r '.watchdog.realert_max_seconds // 1800' "$cfg")"
 rl_regex="$(jq -r '.watchdog.rate_limit_regex // "rate limit|429|overloaded|too many requests|usage limit"' "$cfg")"
+# reap_after: how long a terminal (done/spawn-failed) worker's state file survives
+# before the sweep reaps it (issue #46). Retention, not instant delete, so
+# `orch status` still shows recent history instead of vanishing the moment a
+# worker finishes.
+reap_after="$(jq -r '.watchdog.reap_terminal_after_seconds // 1800' "$cfg")"
 
 # Consecutive ticks a worker must show "active status but no window" before we
 # declare it dead. Debounces the sub-second gap in spawn.sh between writing the
@@ -279,9 +284,57 @@ dead_sweep() { # <live_windows>
   done
 }
 
+# (4) Terminal-worker reaper (issue #46). Nothing ever deleted a done/spawn-failed
+# worker's state file short of a manual `orch clean <id>`, so status.json steadily
+# fills with finished workers. Retention-based rather than instant so `orch status`
+# still shows recent history; `orch prune` (below) calls this with retention=0 to
+# reap everything eligible right now.
+
+# Pure predicate (no tmux, no fs): is a terminal worker's state file old enough to
+# reap? Non-terminal statuses are NEVER reapable, regardless of age — this is the
+# one invariant callers must never bypass.
+worker_is_reapable() { # <status> <updated_epoch> <now> <retention_seconds> -> 0 if reapable
+  local status="$1" updated="$2" now="$3" retention="$4"
+  case "$status" in done | spawn-failed) ;; *) return 1 ;; esac
+  [ "$now" -ge $((updated + retention)) ]
+}
+
+# Reap every terminal worker whose state file has aged past <retention_seconds>,
+# reusing clean.sh's teardown (worktree/branch/status/scratch) for consistency with
+# the manual `orch clean <id>` path. A worker that still holds a live tmux window
+# is skipped even if its status is terminal — belt-and-braces alongside
+# worker_is_reapable, since a window should never outlive a terminal status but a
+# stale/racing status file is exactly the kind of thing this sweep must not trust
+# blindly. <now> defaults to the real clock; tests pass it explicitly.
+reap_terminal_workers() { # <retention_seconds> <live_windows> [now]
+  local retention="$1" windows="$2" now="${3:-$(date -u +%s)}"
+  local f id status ts epoch
+  for f in "$WORKERS_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    id="$(basename "$f" .json)"
+    status="$(jq -r '.status // ""' "$f" 2>/dev/null || echo "")"
+    case "$status" in done | spawn-failed) ;; *) continue ;; esac
+    printf '%s\n' "$windows" | grep -Fxq "$id" && continue
+    ts="$(jq -r '.updated // .created // empty' "$f" 2>/dev/null)"
+    epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || epoch=0
+    worker_is_reapable "$status" "$epoch" "$now" "$retention" || continue
+    "$here/clean.sh" "$id" >/dev/null 2>&1 || true
+    log "watchdog: reaped terminal worker '$id' (status=$status, retention=${retention}s)"
+    echo "reaped $id"
+  done
+}
+
 # Only run the long-lived loop when executed as a script; when sourced (e.g. by the
 # hermetic bats tests) the helpers above are exposed without starting the loop.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  # One-shot `orch prune`: reap every terminal worker right now, ignoring
+  # retention, then exit — no loop, no sleep.
+  if [ "${1:-}" = "prune" ]; then
+    windows="$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)"
+    reap_terminal_workers 0 "$windows"
+    exit 0
+  fi
+
 log "watchdog start (interval=${interval}s cooldown=${cooldown}s stall=${stall}s)"
 
 while [ ! -f "$STATE_DIR/.stop" ]; do
@@ -294,6 +347,9 @@ while [ ! -f "$STATE_DIR/.stop" ]; do
 
   # (3) reconcile killed/dead workers against the same live window list.
   dead_sweep "$windows"
+
+  # (4) reap terminal workers older than retention.
+  reap_terminal_workers "$reap_after" "$windows" >/dev/null
 
   sleep "$interval"
 done
