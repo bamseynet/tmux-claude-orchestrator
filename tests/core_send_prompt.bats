@@ -1,0 +1,99 @@
+#!/usr/bin/env bats
+# Hermetic tests for the send_prompt() buffer/Enter race fix (issue #14):
+# unique tmux buffer names per send, and Enter gated on the paste buffer's
+# deletion instead of a fixed sleep. tmux itself is stubbed so no real tmux
+# server/session is needed and the tests run fully offline in CI.
+
+setup() {
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch/state/workers"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+  STUBBIN="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$STUBBIN"
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+
+  # tmux stub: records every invocation; load-buffer/paste-buffer/show-buffer
+  # are backed by a real flat file per buffer name so -d ("delete after paste")
+  # and show-buffer's "not found" behaviour are faithfully reproduced.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+bufdir="$BATS_TEST_TMPDIR/bufs"
+mkdir -p "\$bufdir"
+case "\$1" in
+  load-buffer)
+    # form: load-buffer -b <name> -   (reads stdin)
+    name="\$3"
+    cat > "\$bufdir/\$name"
+    ;;
+  paste-buffer)
+    # form: paste-buffer -p -d -b <name> -t <target>
+    name=""
+    prev=""
+    for a in "\$@"; do
+      if [ "\$prev" = "-b" ]; then name="\$a"; fi
+      prev="\$a"
+    done
+    rm -f "\$bufdir/\$name"   # -d: delete after pasting
+    ;;
+  show-buffer)
+    name="\$3"
+    [ -f "\$bufdir/\$name" ] || exit 1
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  PATH="$STUBBIN:$PATH"
+}
+
+@test "send_prompt uses a distinct buffer name on each call to the same target" {
+  send_prompt "orch:w1" "first message"
+  send_prompt "orch:w1" "second message"
+  buf1="$(grep -o 'load-buffer -b [^ ]*' "$CALLS" | sed -n '1p' | awk '{print $3}')"
+  buf2="$(grep -o 'load-buffer -b [^ ]*' "$CALLS" | sed -n '2p' | awk '{print $3}')"
+  [ -n "$buf1" ]
+  [ -n "$buf2" ]
+  [ "$buf1" != "$buf2" ]
+}
+
+@test "send_prompt loads, pastes and deletes the buffer, then sends Enter, in order" {
+  send_prompt "orch:w1" "hello"
+  grep -q '^load-buffer' "$CALLS"
+  grep -q '^paste-buffer.*-d.*-t orch:w1' "$CALLS"
+  grep -q '^send-keys -t orch:w1 Enter' "$CALLS"
+  # Enter must come after the paste, not before.
+  paste_line="$(grep -n '^paste-buffer' "$CALLS" | head -1 | cut -d: -f1)"
+  enter_line="$(grep -n '^send-keys -t orch:w1 Enter' "$CALLS" | head -1 | cut -d: -f1)"
+  [ "$paste_line" -lt "$enter_line" ]
+}
+
+@test "send_prompt gates Enter on the buffer actually being gone (show-buffer polled)" {
+  send_prompt "orch:w1" "hello"
+  grep -q '^show-buffer' "$CALLS"
+}
+
+@test "send_prompt never hangs even if the buffer delete is never observed" {
+  # Stub a tmux where show-buffer always reports the buffer present, to prove
+  # the poll loop is bounded rather than looping forever.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+case "\$1" in
+  show-buffer) exit 0 ;;   # always "still there"
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  run timeout 10 bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; send_prompt orch:w1 hi"
+  [ "$status" -eq 0 ]
+}
+
+@test "lib.sh derives the send_prompt buffer name from pid/RANDOM/call-count, not target alone" {
+  grep -Fq '_SEND_PROMPT_SEQ' "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  grep -Eq 'buf="b-\$\{target//\[\^a-zA-Z0-9\]/_\}-\$\$-\$\{RANDOM\}' "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+}

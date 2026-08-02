@@ -13,11 +13,7 @@ ts="$(date -u +%FT%TZ)"
 
 printf '{"id":"%s","event":"%s","ts":"%s"}\n' "$id" "$event" "$ts" >> "$INBOX"
 
-f="$WORKERS_DIR/$id.json"
-if [ -f "$f" ]; then
-  jq --arg s "$event" --arg t "$ts" '.status=$s | .updated=$t' "$f" > "$f.tmp" 2>/dev/null \
-    && mv "$f.tmp" "$f" || true
-else
-  printf '{"id":"%s","status":"%s","updated":"%s"}\n' "$id" "$event" "$ts" > "$f"
-fi
+# shellcheck disable=SC2016  # jq filter in single quotes; $id/$s/$t are jq --arg vars, not shell
+update_worker_status "$id" --arg id "$id" --arg s "$event" --arg t "$ts" \
+  '.id = (.id // $id) | .status=$s | .updated=$t' || true
 exit 0

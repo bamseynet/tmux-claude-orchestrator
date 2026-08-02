@@ -50,8 +50,9 @@ if ! check_spawn_gate; then
         --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" --arg reason "$GATE_REASON" \
     '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason}')"
   queue_push "$queue_item"
-  jq -n --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
-    '{id:$id, status:"queued", model:$m, task:$t, updated:$u}' > "$WORKERS_DIR/$id.json"
+  # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
+  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
+    '{id:$id, status:"queued", model:$m, task:$t, updated:$u}'
   log "spawn refused for $id: $GATE_REASON; queued"
   echo "spawn queued: $id ($model) refused — $GATE_REASON"
   exit 0
@@ -85,8 +86,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
 ' > "$wdir/.claude/settings.local.json"
 
 # 3) initial status file
-jq -Rn --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
-  '{id:$id, status:"spawning", model:$m, task:$t, updated:$u}' > "$WORKERS_DIR/$id.json"
+# shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
+write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
+  '{id:$id, status:"spawning", model:$m, task:$t, updated:$u}'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
@@ -123,15 +125,13 @@ else
 fi
 
 if [ "$spawn_ok" -eq 1 ]; then
-  jq '.status="working"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
-    && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+  update_worker_status "$id" '.status="working"'
   record_spend
   log "spawned $id ($model) in $wdir"
   echo "spawned $id ($model)  ->  window $S:$id   dir $wdir"
 else
   # Never-started worker: record it and tell the master so the spawn is not lost.
-  jq '.status="spawn-failed"' "$WORKERS_DIR/$id.json" > "$WORKERS_DIR/$id.json.tmp" \
-    && mv "$WORKERS_DIR/$id.json.tmp" "$WORKERS_DIR/$id.json"
+  update_worker_status "$id" '.status="spawn-failed"'
   printf '{"id":"%s","event":"spawn-failed","ts":"%s"}\n' "$id" "$(date -u +%FT%TZ)" >> "$INBOX"
   log "worker $id: spawn-failed (task injection unconfirmed after retry)"
   echo "spawn-failed $id ($model)  ->  window $S:$id   dir $wdir" >&2
