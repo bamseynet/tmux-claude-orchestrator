@@ -63,6 +63,16 @@ if ! tmux has-session -t "$S" 2>/dev/null; then
   log "session $S created"
 else
   echo "session '$S' already exists; reusing"
+  # Restart/reattach case (issue #41): the master's transcript may be gone (crash,
+  # a fresh bootstrap after a compact-and-exit) even though the tmux session and
+  # its state files survived. Best-effort nudge it with a rehydrate summary so it
+  # doesn't have to reconstruct "what's in flight" from nothing. Skip quietly if
+  # rehydrate.sh is missing (older checkout) or the pane isn't ready within a few
+  # seconds (e.g. mid-turn) — this must never block or fail bootstrap.
+  if [ -x "$here/rehydrate.sh" ] && wait_ready "$S:$ORCH_WINDOW" 5; then
+    send_prompt "$S:$ORCH_WINDOW" "$("$here/rehydrate.sh")"
+    log "sent rehydrate summary to reused session"
+  fi
 fi
 
 # Background heartbeat

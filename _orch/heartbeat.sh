@@ -170,7 +170,7 @@ heartbeat_main() {
           send_prompt "$S:$ORCH_WINDOW" "[orchestrator heartbeat] Worker events since last check:
 $events
 
-Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, review, or shut down)."
+Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, review, or shut down). If you're at all unsure of current orchestration state (e.g. right after a compaction), run $here/rehydrate.sh first."
           log "woke master with: $(echo "$events" | tr '\n' ' ')"
         else
           printf '%s\n' "$events" >> "$INBOX"
