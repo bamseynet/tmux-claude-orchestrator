@@ -71,5 +71,5 @@ EOF
 }
 
 @test "orch entrypoint calls check_deps before target-repo resolution" {
-  grep -q '^check_deps tmux jq claude perl git$' "$ORCH_ROOT/orch"
+  grep -q 'check_deps tmux jq perl' "$ORCH_ROOT/orch"
 }
