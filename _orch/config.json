@@ -4,6 +4,10 @@
     "normal_seconds": 20,
     "idle_seconds": 60
   },
+  "heartbeat": {
+    "max_draft_requeue_ticks": 10,
+    "max_draft_requeue_seconds": 300
+  },
   "thresholds": {
     "max_workers": 4,
     "min_free_mb": 512,
@@ -34,6 +38,7 @@
     "active_glyph_regex": "✻|✽|✳|✶",
     "ready_regex": "│ *>|❯|for shortcuts|Try \"",
     "welcome_regex": "Welcome",
-    "input_glyph_regex": "│ *>|❯"
+    "input_glyph_regex": "│ *>|❯",
+    "draft_placeholder_regex": "^(Try \"|for shortcuts|\\? for shortcuts|Context (left|low)|tokens? (saved|left|used))"
   }
 }
