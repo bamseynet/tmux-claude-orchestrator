@@ -16,6 +16,28 @@ done
 rm -f "$STATE_DIR/.stop"
 mkdir -p "$WORKERS_DIR"
 
+# --- PID-identity guard (issue #15) --------------------------------------------
+# A bare `kill -0 "$pid"` only proves SOME process currently holds that PID — not
+# that it's the loop we started. After a reboot (or just enough PID churn) the
+# same number can be reassigned to an unrelated process, which would otherwise
+# fool bootstrap into believing a stale pidfile's loop is still alive and skip
+# relaunching it. Confirm identity via the process's own argv before trusting a
+# pidfile: its command line must reference the expected script.
+# (Duplicated in stop.sh, which has the same need but for the kill side and
+# cannot source this file — lib.sh, the one thing both already share, is out of
+# scope for this fix.)
+pid_is_expected() { # <pid> <script_basename> -> 0 if alive AND running that script
+  local pid="$1" script="$2" cmdline=""
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [ -r "/proc/$pid/cmdline" ]; then
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+  else
+    cmdline="$(ps -o command= -p "$pid" 2>/dev/null)"
+  fi
+  [[ "$cmdline" == *"$script"* ]]
+}
+
 if ! tmux has-session -t "$S" 2>/dev/null; then
   tmux new-session -d -s "$S" -n "$ORCH_WINDOW" -c "$proj"
 
@@ -44,7 +66,7 @@ else
 fi
 
 # Background heartbeat
-if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! kill -0 "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" 2>/dev/null; then
+if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" "heartbeat.sh"; then
   nohup "$here/heartbeat.sh" >>"$STATE_DIR/heartbeat.log" 2>&1 &
   echo $! > "$STATE_DIR/heartbeat.pid"
   log "heartbeat pid $(cat "$STATE_DIR/heartbeat.pid")"
@@ -52,7 +74,7 @@ fi
 
 # Background watchdog (if enabled)
 if jq -e '.watchdog.enabled // true' "$here/config.json" >/dev/null 2>&1; then
-  if [ ! -f "$STATE_DIR/watchdog.pid" ] || ! kill -0 "$(cat "$STATE_DIR/watchdog.pid" 2>/dev/null)" 2>/dev/null; then
+  if [ ! -f "$STATE_DIR/watchdog.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/watchdog.pid" 2>/dev/null)" "watchdog.sh"; then
     nohup "$here/watchdog.sh" >>"$STATE_DIR/watchdog.log" 2>&1 &
     echo $! > "$STATE_DIR/watchdog.pid"
     log "watchdog pid $(cat "$STATE_DIR/watchdog.pid")"
