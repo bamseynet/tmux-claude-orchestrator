@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # _orch/clean.sh <id> — retire a SINGLE worker and every artifact it leaks.
 # Removes, in order: the tmux window, the git worktree at ../wt/<id>, the branch
-# orch/<id>, the status file workers/<id>.json, and the watchdog scratch .wd-<id>.
+# orch/<id>, the status file workers/<id>.json, the watchdog scratch .wd-<id>, and
+# (issue #43) the --no-worktree worker's private settings file settings/<id>.json.
 #
 # Idempotent by design: each step is guarded, so a missing session, window,
 # worktree, branch, or file is a no-op rather than an error. This is what lets a
@@ -37,9 +38,12 @@ if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
   log "clean $id: deleted branch orch/$id"
 fi
 
-# 4) status file + 5) watchdog scratch
+# 4) status file + 5) watchdog scratch + 6) --no-worktree settings file (issue #43:
+#    spawn.sh writes --no-worktree hooks to a private per-id file instead of the
+#    shared repo root; it must not outlive the worker either)
 rm -f "$WORKERS_DIR/$id.json"
 rm -f "$STATE_DIR/.wd-$id"
+rm -f "$STATE_DIR/settings/$id.json"
 
 log "clean $id: done"
 echo "cleaned $id"

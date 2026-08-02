@@ -74,7 +74,37 @@ if [ -n "$resume" ] && [ "$mode" != "--no-worktree" ]; then
 fi
 
 S="$SESSION_NAME"
-proj="${PROJECT_ROOT:-$(pwd)}"
+
+# --- target-repo resolution fallback (issue #47) ------------------------------------
+# `./orch` resolves the target repo (--repo > $PROJECT_ROOT > $ORCH_TARGET_REPO >
+# .target_repo in config.json > cwd) and exports PROJECT_ROOT before exec'ing this
+# script. If spawn.sh is ever invoked directly instead of via `./orch spawn`, mirror
+# the same precedence here (minus --repo, which is an ./orch-only flag) so the
+# config-file/env-var levels are never silently skipped in favor of cwd.
+_resolve_target_repo() {
+  if [ -n "${PROJECT_ROOT:-}" ]; then
+    printf '%s' "$PROJECT_ROOT"; return
+  fi
+  if [ -n "${ORCH_TARGET_REPO:-}" ]; then
+    printf '%s' "$ORCH_TARGET_REPO"; return
+  fi
+  local cfg_target
+  cfg_target="$(jq -r '.target_repo // empty' "$CONFIG" 2>/dev/null || true)"
+  if [ -n "$cfg_target" ]; then
+    case "$cfg_target" in
+      /*) printf '%s' "$cfg_target" ;;
+      *) printf '%s' "$ORCH_ROOT/$cfg_target" ;;
+    esac
+    return
+  fi
+  pwd
+}
+
+proj="$(_resolve_target_repo)"
+proj="$(cd "$proj" 2>/dev/null && pwd)" || {
+  echo "spawn: target repo path does not exist: $proj" >&2
+  exit 1
+}
 
 # Guard 0 (issue #35): the toolkit dir and target repo must be provably related
 # before we create anything against $proj — see ensure_related_repo() in lib.sh.
@@ -137,11 +167,27 @@ else
     exit 1
   fi
 fi
-mkdir -p "$wdir/.claude"
+# 2) per-worker settings: report hooks -> orchestrator (always), merged with an
+#    optional permissions.allow block when --allow is given.
+#
+#    Issue #43: for --no-worktree, $wdir IS the shared target-repo root, so
+#    writing this worker's hooks into <wdir>/.claude/settings.local.json would
+#    leak into every git-worktree worker of the same repo — they inherit
+#    repo-root settings via the shared git common-dir, so a dead --no-worktree
+#    worker's hooks would keep firing (phantom events) for workers spawned long
+#    after it's gone. Keep --no-worktree settings in a private, per-id file
+#    instead (never written under the shared repo root) and hand it to
+#    `claude --settings` explicitly at launch; clean.sh removes it on teardown.
+#    Worktree mode is unaffected: each worktree dir is unique to its worker and
+#    is removed wholesale on teardown, so no cross-worker leak is possible there.
+if [ "$mode" = "--no-worktree" ]; then
+  mkdir -p "$STATE_DIR/settings"
+  settings_file="$STATE_DIR/settings/$id.json"
+else
+  mkdir -p "$wdir/.claude"
+  settings_file="$wdir/.claude/settings.local.json"
+fi
 
-# 2) per-worker settings.local.json: report hooks -> orchestrator (always),
-#    merged with an optional permissions.allow block when --allow is given.
-#    (absolute paths; local file is gitignored)
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   {
     hooks: {
@@ -153,7 +199,7 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   + (if $allow == "" then {}
      else {permissions: {allow: ($allow | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}}
      end)
-' > "$wdir/.claude/settings.local.json"
+' > "$settings_file"
 
 # 3) initial status file
 # `created` is stamped once here so downstream tools (orch status, hud.sh) can
@@ -167,7 +213,9 @@ write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg 
 #  on base-index 0 sessions, so target an explicit end-of-session slot)
 tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${resume:+ $resume}" Enter
+settings_flag=""
+[ "$mode" = "--no-worktree" ] && settings_flag=" --settings '$settings_file'"
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${settings_flag}${resume:+ $resume}" Enter
 
 # 5) wait for the REPL to be ready before injecting the task.
 #    Model is now set at launch via --model (see #30), so no slash-command dance.

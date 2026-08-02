@@ -58,8 +58,12 @@ JSON
   run "$SPAWN" w1 sonnet "do the thing" --no-worktree --allow "Bash(ls:*), Bash(cat:*)"
   [ "$status" -eq 0 ]
 
-  settings="$PROJECT_ROOT/.claude/settings.local.json"
+  # issue #43: --no-worktree hooks must NOT land in the shared repo root (they'd
+  # leak into every worktree worker of this repo via the shared git common-dir)
+  # — they go in a private per-id file instead, handed to `claude --settings`.
+  settings="$ORCH_ROOT/_orch/state/settings/w1.json"
   [ -f "$settings" ]
+  [ ! -f "$PROJECT_ROOT/.claude/settings.local.json" ]
   run jq -r '.hooks.Stop[0].hooks[0].command' "$settings"
   [[ "$output" == *"report.sh w1 done"* ]]
   run jq -r '.hooks.Notification[0].hooks[0].command' "$settings"
@@ -73,15 +77,17 @@ JSON
 @test "spawn.sh omits permissions.allow entirely when --allow is not given" {
   run "$SPAWN" w2 sonnet "do the thing" --no-worktree
   [ "$status" -eq 0 ]
-  run jq 'has("permissions")' "$PROJECT_ROOT/.claude/settings.local.json"
+  run jq 'has("permissions")' "$ORCH_ROOT/_orch/state/settings/w2.json"
   [ "$output" = "false" ]
 }
 
 @test "spawn.sh --resume forces --no-worktree (Claude keys sessions by project dir)" {
   run "$SPAWN" w3 sonnet "do the thing" --resume abc123
   [ "$status" -eq 0 ]
-  # forced --no-worktree: settings land in the project root, not a ../wt/w3 worktree.
-  [ -f "$PROJECT_ROOT/.claude/settings.local.json" ]
+  # forced --no-worktree: settings land in the private per-id file, not a
+  # ../wt/w3 worktree, and not the shared project root either (issue #43).
+  [ -f "$ORCH_ROOT/_orch/state/settings/w3.json" ]
+  [ ! -f "$PROJECT_ROOT/.claude/settings.local.json" ]
   [ ! -d "$PROJECT_ROOT/../wt/w3" ]
   grep -Fq 'resume requested -> forcing --no-worktree' "$ORCH_ROOT/_orch/state/orch.log"
 }
@@ -101,7 +107,8 @@ JSON
 @test "spawn.sh --no-worktree without --continue/--resume stays in the project dir, no forcing log" {
   run "$SPAWN" w4b sonnet "do the thing" --no-worktree
   [ "$status" -eq 0 ]
-  [ -f "$PROJECT_ROOT/.claude/settings.local.json" ]
+  [ -f "$ORCH_ROOT/_orch/state/settings/w4b.json" ]
+  [ ! -f "$PROJECT_ROOT/.claude/settings.local.json" ]
   ! grep -Fq 'resume requested' "$ORCH_ROOT/_orch/state/orch.log" 2>/dev/null
 }
 
