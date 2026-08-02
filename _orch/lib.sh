@@ -3,6 +3,7 @@
 # Provides: paths, log(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject(),
+#           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
 #           spend_count(), est_spend_usd(), record_spend(), check_spawn_gate(),
@@ -117,6 +118,23 @@ confirm_inject() { # <target> [timeout_s]
     sleep 1; i=$((i+1))
   done
   return 1
+}
+
+# --- Master draft guard (issue #38) -------------------------------------------------
+# An idle input box with an unsent operator draft looks identical to an empty idle
+# input box to is_ready() — both are "not busy, prompt glyph visible". Heartbeat
+# injection must not paste over (and Enter away) a draft the operator is mid-typing.
+# This inspects the last line carrying the input glyph and treats anything left of
+# the placeholder hint / after the glyph as operator-authored text.
+pane_has_draft() { # <target>  -> 0 if the input line holds unsent operator text
+  local line rest
+  line="$(pane_tail "$1" 15 | grep -E "$TUI_INPUT_GLYPH_REGEX" | tail -n 1)"
+  [ -n "$line" ] || return 1
+  rest="$(printf '%s\n' "$line" | sed -E "s/^.*($TUI_INPUT_GLYPH_REGEX) ?//")"
+  case "$rest" in
+    ''|'Try "'*|'for shortcuts'*) return 1 ;;
+  esac
+  printf '%s' "$rest" | grep -qE '[^[:space:]]'
 }
 
 # Deliver text into a pane reliably:
