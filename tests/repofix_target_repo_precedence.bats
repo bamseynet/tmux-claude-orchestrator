@@ -55,6 +55,13 @@ EOF
 
   PATH="$WORK/bin:$PATH"
   export PATH WORK
+
+  # `orch` only falls back to its own script location for ORCH_ROOT when the var
+  # isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can inherit
+  # ORCH_ROOT from its own launch env, pointing at the PARENT orchestrator's real
+  # toolkit. Pin it explicitly to this throwaway copy so state (and the config.json
+  # this test edits) always resolves here, never the live toolkit (issue #68).
+  export ORCH_ROOT="$WORK/toolkit"
 }
 
 @test "orch spawn honors .target_repo from config.json over cwd when PROJECT_ROOT/ORCH_TARGET_REPO/--repo are all absent" {

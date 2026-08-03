@@ -10,7 +10,13 @@ ASK="$BATS_TEST_DIRNAME/../_orch/ask.sh"
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
-  export ORCH_ROOT="$BATS_TEST_DIRNAME/.."
+  # `orch`/`ask.sh` only fall back to their own script location for ORCH_ROOT when
+  # the var isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can
+  # inherit ORCH_ROOT from its own launch env, pointing at the PARENT
+  # orchestrator's real toolkit. Pin it to a throwaway tmp dir so no state write
+  # can ever land there (issue #68).
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch"
   export SESSION_NAME="orch"
 }
 
