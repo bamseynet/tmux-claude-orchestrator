@@ -75,12 +75,23 @@ case "$cmd" in
     shopt -s nullglob
     files=("$here/_orch/state/workers"/*.json)
 
+    # issue #70: ownership flag, keyed by the marker `orch attach`/`orch detach`
+    # write/clear directly (see lib.sh's is_human_managed for the same convention).
+    managed_by() { [ -f "$here/_orch/state/.manual-$1" ] && echo human || echo orch; } # <id>
+
     if [ "$json_mode" = 1 ]; then
       if [ "${#files[@]}" = 0 ]; then
         echo "[]"
-      else
-        jq -s -c '[.[] | {id, status, model, task, created, updated, after}]' "${files[@]}"
+        exit 0
       fi
+      out="[]"
+      for f in "${files[@]}"; do
+        id="$(jq -r '.id // "?"' "$f")"
+        managed="$(managed_by "$id")"
+        row="$(jq -c --arg managed "$managed" '{id, status, model, task, created, updated, after, managed: $managed}' "$f")"
+        out="$(jq -c --argjson row "$row" '. + [$row]' <<<"$out")"
+      done
+      printf '%s\n' "$out"
       exit 0
     fi
 
@@ -110,7 +121,7 @@ case "$cmd" in
       fi
     }
 
-    printf '%-12s %-8s %-12s %-8s %s\n' "ID" "MODEL" "STATUS" "AGE" "TASK"
+    printf '%-12s %-8s %-12s %-8s %-8s %s\n' "ID" "MODEL" "STATUS" "AGE" "MANAGED" "TASK"
     for f in "${files[@]}"; do
       id="$(jq -r '.id // "?"' "$f")"
       model="$(jq -r '.model // "?"' "$f")"
@@ -118,7 +129,8 @@ case "$cmd" in
       ts="$(jq -r '.created // .updated // empty' "$f")"
       task="$(jq -r '.task // "" | gsub("\\s+"; " ")' "$f")"
       age="$(age_str "$ts")"
-      printf '%-12s %-8s %-12s %-8s %s\n' "$id" "$model" "$st" "$age" "$task"
+      managed="$(managed_by "$id")"
+      printf '%-12s %-8s %-12s %-8s %-8s %s\n' "$id" "$model" "$st" "$age" "$managed" "$task"
     done
     ;;
   collect)      exec "$here/_orch/collect.sh" "$@" ;;
@@ -140,9 +152,25 @@ case "$cmd" in
         echo "no worker window '$id' in session '$SESSION_NAME'" >&2
         exit 1
       fi
+      # issue #70: taking manual control marks the worker human-managed BEFORE
+      # attaching, so the orchestrator/watchdog stop driving it the instant a human
+      # takes over, not only after they notice and type `orch detach`.
+      command -v mark_human_managed >/dev/null 2>&1 && mark_human_managed "$id"
       exec tmux attach -t "$SESSION_NAME:$id"
     fi
     exec tmux attach -t "$SESSION_NAME"
+    ;;
+  detach)
+    id="${1:?usage: orch detach <id>}"; shift || true
+    # issue #70: hand a human-managed worker back to the orchestrator. Independent
+    # of tmux attachment (Ctrl-b d) — this only clears the explicit ownership flag.
+    command -v clear_human_managed >/dev/null 2>&1 && clear_human_managed "$id"
+    state_dir="$ORCH_ROOT/_orch/state"
+    mkdir -p "$state_dir"
+    ev_line="$(jq -nc --arg id "$id" --arg ts "$(date -u +%FT%TZ)" '{id:$id, event:"detached", ts:$ts}')"
+    printf '%s\n' "$ev_line" >> "$state_dir/inbox.jsonl"
+    printf '%s\n' "$ev_line" >> "$state_dir/events.jsonl"
+    echo "detached $id (handed back to the orchestrator)"
     ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
@@ -227,7 +255,8 @@ orch — tmux + Claude Code orchestrator
   ./orch prune                       reap ALL terminal (done/spawn-failed)
                                      workers right now, ignoring retention —
                                      same teardown as clean, on demand
-  ./orch status [--json]             list worker states
+  ./orch status [--json]             list worker states, including "managed by"
+                                     (orch|human, see \`attach\`/\`detach\` above)
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
                                      (git diff <base>...orch/<id>, default
                                      base: main) + the worker's status JSON —
@@ -250,7 +279,16 @@ orch — tmux + Claude Code orchestrator
                                      on success, marks it "merged" and emits
                                      merged.
   ./orch attach [<id>]               attach to the tmux session, or jump straight
-                                     to one worker's window
+                                     to one worker's window. \`attach <id>\` also
+                                     marks that worker human-managed (issue #70):
+                                     the orchestrator/watchdog stop driving it
+                                     until \`orch detach <id>\`.
+  ./orch detach <id>                 hand a human-managed worker back to the
+                                     orchestrator (clears the flag \`attach <id>\`
+                                     set; emits a "detached" event). NOT the same
+                                     as tmux-detaching the terminal (Ctrl-b d) —
+                                     that flag is explicit state, independent of
+                                     terminal attachment.
   ./orch down                        stop background loops (session stays up)
                                      (alias: stop)
   ./orch hud                         print the one-line status HUD

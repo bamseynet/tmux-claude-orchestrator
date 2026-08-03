@@ -352,6 +352,29 @@ prune_dead_worktree() { # <project_root> <id>
   fi
 }
 
+# --- Human ownership flag (issue #70) -----------------------------------------------
+# `orch attach <id>` hands a worker over to a human for direct control; `orch detach
+# <id>` hands it back to the orchestrator. The flag is a plain marker file (not a
+# `workers/<id>.json` field) so it can be set/cleared without contending with
+# write_worker_status's per-id flock, and so a worker can be flagged before its
+# status file even exists. It is deliberately independent of tmux attachment state:
+# a human may attach/detach the *terminal* (Ctrl-b d) repeatedly while still "owning"
+# the worker — only `orch detach` clears ownership.
+_manual_marker() { echo "$STATE_DIR/.manual-$1"; } # <id> -> marker path
+
+is_human_managed() { [ -f "$(_manual_marker "$1")" ]; } # <id> -> 0 if human-managed
+
+mark_human_managed() { # <id>
+  mkdir -p "$STATE_DIR"
+  : > "$(_manual_marker "$1")"
+  log "worker '$1' marked human-managed (orch attach)"
+}
+
+clear_human_managed() { # <id>
+  rm -f "$(_manual_marker "$1")"
+  log "worker '$1' handed back to the orchestrator (orch detach)"
+}
+
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
 # Workers actually holding a tmux window + claude process right now: every status

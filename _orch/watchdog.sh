@@ -245,9 +245,17 @@ sweep_window() { # <window> <cooldown_seconds>
         log "rate limit still active on '$w' after cooldown; extending ${cd}s"
         ;;
       nudge)
-        wait_ready "$S:$w" 10 || true
-        send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
-        log "rate limit cleared on '$w'; sent retry nudge"
+        # issue #70: a human-managed worker is being hand-driven — sending an
+        # automated retry into its pane would race/interleave with human
+        # keystrokes exactly like the collisions this flag exists to prevent.
+        # Still log (history/reporting unaffected), just don't inject.
+        if is_human_managed "$w"; then
+          log "rate limit cleared on '$w'; skipping retry nudge (human-managed)"
+        else
+          wait_ready "$S:$w" 10 || true
+          send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
+          log "rate limit cleared on '$w'; sent retry nudge"
+        fi
         ;;
     esac
     return 0  # cooling, extending, or pane just changed -> skip the stall check
