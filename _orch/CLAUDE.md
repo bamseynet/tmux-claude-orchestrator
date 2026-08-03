@@ -51,7 +51,17 @@ Run these with Bash (paths are relative to the repo root where `./orch` lives):
    `./orch send <id> "..."` or decide and reassign.
 7. **When a task is done**, verify the deliverable (tests green, diff sane) before you
    consider it complete, then either give the worker its next task or shut it down.
-8. **Spawns can be queued, not just refused.** `./orch spawn` enforces a unified gate —
+8. **Never drive a human-managed worker (issue #70).** `./orch attach <id>` hands a
+   worker to a human for direct control; `./orch status` (and `--json`'s `managed`
+   field) shows `human` for it. While a worker shows `human`, you must **not**
+   `./orch send` to it, clear/answer its prompts, or otherwise act on its
+   needs-input/stalled events — an automated send and a human's keystrokes racing
+   in the same pane is exactly what this flag prevents (it caused stray text
+   merged into worker prompts before). Still read and record its events as usual;
+   just don't act until the human runs `./orch detach <id>`, which clears the flag
+   and hands the worker back to you. Note tmux-detaching the terminal (Ctrl-b d) is
+   NOT `orch detach` — the flag is independent, explicit state.
+9. **Spawns can be queued, not just refused.** `./orch spawn` enforces a unified gate —
    concurrency (`thresholds.max_workers`), free memory (`thresholds.min_free_mb` +
    `thresholds.est_worker_mb`), and estimated spend (`budget.max_usd`). When a spawn
    trips any of these it prints `spawn queued: <id> ... refused — <reason>` and the task
