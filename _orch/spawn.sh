@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>]
-#   or: _orch/spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"]
+# _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--skip-permissions|--yolo]
+#   or: _orch/spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--skip-permissions|--yolo]
 # Creates an isolated worker: new git worktree, new tmux window, a full Claude Code
 # session with report hooks wired back to the orchestrator, then injects the task.
 # model may be "" to fall back to models.default_worker in config.json (issue #25).
+# --skip-permissions/--yolo (issue #69, opt-in, requires ORCH_ALLOW_SKIP_PERMISSIONS=1):
+# launches the worker with --dangerously-skip-permissions, bypassing ALL permission
+# checks. Use only for trusted tasks in isolated worktrees.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]
-   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]}"
+id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--skip-permissions|--yolo]
+   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--skip-permissions|--yolo]}"
 mode=""
 resume=""        # optional claude resume flag: "--continue" or "--resume <session-id>"
 allow_csv=""     # --allow "cmd,cmd,..." -> permissions.allow in settings.local.json
 preset_allow=""  # --allow additions bundled by --preset, merged with any explicit --allow
 after_id=""      # --after <id> (issue #22): hold this spawn until worker <id> reaches "done"
+skip_perms=""    # --skip-permissions/--yolo (issue #69): launch worker with --dangerously-skip-permissions
 
 # --preset review|test|docs (issue #25): a canned model + task + --allow bundle, so a
 # common one-off ("review this branch", "get tests green", "sync the docs") is one
@@ -52,6 +56,7 @@ else
 fi
 # optional flags after model/task (or after --preset <name>), any order:
 #   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]
+#   [--skip-permissions | --yolo]
 i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
@@ -60,10 +65,22 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --resume)       i=$((i+1)); resume="--resume ${args[$i]:?--resume needs a <session-id>}" ;;
     --allow)        i=$((i+1)); allow_csv="${args[$i]:?--allow needs a \"cmd,cmd\" list}" ;;
     --after)        i=$((i+1)); after_id="${args[$i]:?--after needs a worker <id>}" ;;
+    --skip-permissions|--yolo) skip_perms=1 ;;
     *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
   esac
   i=$((i+1))
 done
+
+# Opt-in worker sandbox bypass (issue #69): mirrors how bootstrap.sh launches the
+# master with --dangerously-skip-permissions, but per-spawn and strictly opt-in —
+# the default stays gated. A second env acknowledgement is required so this can
+# never be enabled by accident (e.g. a stray flag in a copy-pasted command).
+if [ -n "$skip_perms" ] && [ "${ORCH_ALLOW_SKIP_PERMISSIONS:-}" != "1" ]; then
+  echo "spawn: --skip-permissions/--yolo requires ORCH_ALLOW_SKIP_PERMISSIONS=1 in the environment." >&2
+  echo "This bypasses ALL permission checks for worker '$id' — trusted tasks in isolated worktrees only." >&2
+  echo "Set ORCH_ALLOW_SKIP_PERMISSIONS=1 to acknowledge and re-run." >&2
+  exit 1
+fi
 
 if [ -n "$preset_allow" ]; then
   allow_csv="${allow_csv:+$allow_csv,}$preset_allow"
@@ -243,7 +260,9 @@ tmux new-window -a -t "$S:{end}" -n "$id" -c "$wdir"
 tmux set-window-option -t "$S:$id" monitor-activity on
 settings_flag=""
 [ "$mode" = "--no-worktree" ] && settings_flag=" --settings '$settings_file'"
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${settings_flag}${resume:+ $resume}" Enter
+skip_perms_flag=""
+[ -n "$skip_perms" ] && skip_perms_flag=" --dangerously-skip-permissions"
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${settings_flag}${resume:+ $resume}${skip_perms_flag}" Enter
 
 # 5) wait for the REPL to be ready before injecting the task.
 #    Model is now set at launch via --model (see #30), so no slash-command dance.
