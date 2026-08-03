@@ -205,6 +205,14 @@ orch — tmux + Claude Code orchestrator
                                      worker <id> reaches status "done", then auto-launch it
                                      perm (opt-in):
                                        --allow "cmd,cmd"  pre-approve commands
+                                       --skip-permissions | --yolo
+                                                           launch with claude
+                                                           --dangerously-skip-permissions
+                                                           (bypasses ALL permission checks;
+                                                           trusted tasks in isolated
+                                                           worktrees only). Requires
+                                                           ORCH_ALLOW_SKIP_PERMISSIONS=1
+                                                           in the environment.
   ./orch send  <id> "message"        message a running worker (one-way)
   ./orch tail  <id> [lines]          print a worker's recent pane output
                                      (default 15 lines)
