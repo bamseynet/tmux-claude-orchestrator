@@ -4,11 +4,18 @@
 # with an on-PATH stub, so no real tmux session/window is ever touched.
 
 ORCH="$BATS_TEST_DIRNAME/../orch"
+REPO_ROOT="$BATS_TEST_DIRNAME/.."
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
-  export ORCH_ROOT="$BATS_TEST_DIRNAME/.."
+  # `orch` only falls back to its own script location for ORCH_ROOT when the var
+  # isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can inherit
+  # ORCH_ROOT from its own launch env, pointing at the PARENT orchestrator's real
+  # toolkit. Pin it to a throwaway tmp dir so no state write can ever land there
+  # (issue #68); use $REPO_ROOT (not $ORCH_ROOT) for direct file references below.
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch"
   export SESSION_NAME="orch"
 }
 
@@ -57,19 +64,19 @@ EOF
 
 @test "check_deps reports success when all deps are on PATH" {
   # shellcheck disable=SC1091
-  source "$ORCH_ROOT/_orch/lib.sh"
+  source "$REPO_ROOT/_orch/lib.sh"
   run check_deps sh
   [ "$status" -eq 0 ]
 }
 
 @test "check_deps reports a clear failure for a missing dependency" {
   # shellcheck disable=SC1091
-  source "$ORCH_ROOT/_orch/lib.sh"
+  source "$REPO_ROOT/_orch/lib.sh"
   run check_deps definitely-not-a-real-binary
   [ "$status" -eq 1 ]
   [[ "$output" == *"missing dependency: definitely-not-a-real-binary"* ]]
 }
 
 @test "orch entrypoint calls check_deps before target-repo resolution" {
-  grep -q 'check_deps tmux jq perl' "$ORCH_ROOT/orch"
+  grep -q 'check_deps tmux jq perl' "$REPO_ROOT/orch"
 }

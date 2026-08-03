@@ -4,9 +4,12 @@
 # status files get a `created` timestamp so age is computable. No tmux window
 # and no `claude` process is ever launched.
 #
-# `orch` resolves ORCH_ROOT to its own script location (not an env override),
-# so each test runs against a throwaway copy of the toolkit, matching the
-# pattern used by tests/repofix_target_repo_precedence.bats.
+# `orch` only falls back to its own script location for ORCH_ROOT when the var
+# isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can inherit
+# ORCH_ROOT from its own launch env, pointing at the PARENT orchestrator's real
+# toolkit. So each test runs against a throwaway copy of the toolkit AND pins
+# ORCH_ROOT to it explicitly, matching the pattern used by
+# tests/repofix_target_repo_precedence.bats (issue #68).
 
 setup() {
   WORK="$BATS_TEST_TMPDIR/work"
@@ -17,6 +20,7 @@ setup() {
   mkdir -p "$WORK/toolkit/_orch/state/workers"
   ORCH="$WORK/toolkit/orch"
   WORKERS_DIR="$WORK/toolkit/_orch/state/workers"
+  export ORCH_ROOT="$WORK/toolkit"
 }
 
 mkworker() { # <id> <status> <model> <task> <created-iso> <updated-iso>

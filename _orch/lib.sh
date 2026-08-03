@@ -20,6 +20,38 @@ CONFIG="$ORCH_DIR/config.json"
 QUEUE="$STATE_DIR/queue.jsonl"
 SPEND_FILE="$STATE_DIR/spend.json"
 
+# --- Test-isolation leak guard (issue #68) ------------------------------------------
+# A worker's own hermetic bats tests are meant to redirect ORCH_ROOT to a throwaway
+# tmp dir before touching any of this. If a test forgets to (or inherits ORCH_ROOT
+# from the worker's own launch env, which points at the PARENT orchestrator's real
+# toolkit), state writes land in the live orchestrator's _orch/state — observed as a
+# stray workers/w1.json leaking into the parent (issue #68). When running under bats
+# ($BATS_TEST_FILENAME set) and STATE_DIR does not fall under one of bats' own tmp
+# roots, treat ORCH_ROOT as unisolated and redirect state to a private scratch dir
+# instead of writing into whatever ORCH_ROOT resolved to. Production runs (no BATS_*
+# env) are completely unaffected.
+if [ -n "${BATS_TEST_FILENAME:-}" ]; then
+  _orch_isolated=0
+  for _orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}" "${BATS_TMPDIR:-}"; do
+    [ -n "$_orch_bats_root" ] || continue
+    case "$STATE_DIR" in
+      "$_orch_bats_root"*) _orch_isolated=1; break ;;
+    esac
+  done
+  if [ "$_orch_isolated" -ne 1 ]; then
+    _orch_leak_guard_dir="$(mktemp -d "${TMPDIR:-/tmp}/orch-bats-leak-guard.XXXXXX")"
+    printf '%s orch-test-isolation-guard: %s did not isolate ORCH_ROOT (resolved state to %s, not a bats tmp dir) -- redirecting state to %s\n' \
+      "$(date -u +%FT%TZ)" "${BATS_TEST_FILENAME:-unknown}" "$STATE_DIR" "$_orch_leak_guard_dir/state" >&2
+    STATE_DIR="$_orch_leak_guard_dir/state"
+    WORKERS_DIR="$STATE_DIR/workers"
+    INBOX="$STATE_DIR/inbox.jsonl"
+    LOG="$STATE_DIR/orch.log"
+    QUEUE="$STATE_DIR/queue.jsonl"
+    SPEND_FILE="$STATE_DIR/spend.json"
+  fi
+  unset _orch_isolated _orch_bats_root _orch_leak_guard_dir
+fi
+
 mkdir -p "$WORKERS_DIR"
 
 : "${SESSION_NAME:=orch}"      # tmux session name
