@@ -39,7 +39,14 @@
   },
   "models": {
     "orchestrator": "opus",
-    "default_worker": "sonnet"
+    "default_worker": "sonnet",
+    "roles": {
+      "mechanical": "haiku",
+      "research": "sonnet",
+      "implement": "sonnet",
+      "review": "opus",
+      "synthesis": "opus"
+    }
   },
   "tui_patterns": {
     "busy_regex": "esc to interrupt|Running…|Compacting",

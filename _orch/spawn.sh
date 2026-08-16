@@ -1,25 +1,51 @@
 #!/usr/bin/env bash
-# _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--skip-permissions|--yolo]
-#   or: _orch/spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--skip-permissions|--yolo]
+# _orch/spawn.sh <id> <model> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--role <name>] [--skip-permissions|--yolo]
+#   or: _orch/spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--role <name>] [--skip-permissions|--yolo]
 # Creates an isolated worker: new git worktree, new tmux window, a full Claude Code
 # session with report hooks wired back to the orchestrator, then injects the task.
 # model may be "" to fall back to models.default_worker in config.json (issue #25).
 # --skip-permissions/--yolo (issue #69, opt-in, requires ORCH_ALLOW_SKIP_PERMISSIONS=1):
 # launches the worker with --dangerously-skip-permissions, bypassing ALL permission
 # checks. Use only for trusted tasks in isolated worktrees.
+# --role <name> (issue #74): resolves the worker's model through models.roles.<name>
+# in config.json, so the model matches the KIND of work (mechanical/research/implement/
+# review/synthesis) instead of being retyped per spawn. Resolution precedence, highest
+# first: explicit model arg > --role > --preset's model > models.default_worker. A
+# --role naming a role absent from models.roles fails loudly, listing the roles that
+# ARE defined — never a silent fallback.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--skip-permissions|--yolo]
-   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--skip-permissions|--yolo]}"
+id="${1:?usage: spawn.sh <id> <model:opus|sonnet|haiku|""> "<task>" [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--role <name>] [--skip-permissions|--yolo]
+   or: spawn.sh <id> --preset <review|test|docs> [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>] [--role <name>] [--skip-permissions|--yolo]}"
 mode=""
 resume=""        # optional claude resume flag: "--continue" or "--resume <session-id>"
 allow_csv=""     # --allow "cmd,cmd,..." -> permissions.allow in settings.local.json
 preset_allow=""  # --allow additions bundled by --preset, merged with any explicit --allow
 after_id=""      # --after <id> (issue #22): hold this spawn until worker <id> reaches "done"
 skip_perms=""    # --skip-permissions/--yolo (issue #69): launch worker with --dangerously-skip-permissions
+role=""          # --role <name> (issue #74): resolved against models.roles.<name>
+preset_role=""   # role a --preset maps to, for the models.roles refinement below
+
+# resolve_role <name>: prints the model for models.roles.<name>, or fails loudly
+# listing the roles that ARE defined (issue #74) — a silent fallback to an
+# expensive default is exactly the bug --role exists to prevent.
+resolve_role() {
+  local name="$1" m defined
+  m="$(jq -r --arg r "$name" '.models.roles[$r] // empty' "$CONFIG" 2>/dev/null)"
+  if [ -z "$m" ]; then
+    defined="$(jq -r '(.models.roles // {}) | keys | join(", ")' "$CONFIG" 2>/dev/null)"
+    if [ -n "$defined" ]; then
+      echo "spawn: unknown role '$name' (expected one of: $defined)" >&2
+    else
+      echo "spawn: unknown role '$name' (models.roles is not defined in $CONFIG)" >&2
+    fi
+    exit 1
+  fi
+  printf '%s' "$m"
+}
 
 # --preset review|test|docs (issue #25): a canned model + task + --allow bundle, so a
 # common one-off ("review this branch", "get tests green", "sync the docs") is one
@@ -29,34 +55,41 @@ if [ "${2:-}" = "--preset" ]; then
   case "$preset" in
     review)
       model="sonnet"
+      preset_role="review"
       task="Review the current branch/diff for correctness, security, and style issues. Report findings; do not fix unless asked."
       preset_allow="Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
       ;;
     test)
       model="sonnet"
+      preset_role="implement"
       task="Write and run tests for the recent changes until they are green. Do not modify unrelated code."
       preset_allow="Bash(npm test:*),Bash(pytest:*),Bash(bats tests/*:*)"
       ;;
     docs)
       model="haiku"
+      preset_role="mechanical"
       task="Update documentation (README, comments, docstrings) to match the current code. Do not change behavior."
       preset_allow="Bash(git diff:*)"
       ;;
     *) echo "spawn: unknown preset '$preset' (expected review|test|docs)" >&2; exit 1 ;;
   esac
+  # models.roles refinement (issue #74): when the preset's mapped role IS defined
+  # in config, let the matrix be authoritative instead of the hardcoded model
+  # above; when it isn't, behavior is unchanged (falls through to the hardcoded
+  # model set in the case block).
+  refined_model="$(jq -r --arg r "$preset_role" '.models.roles[$r] // empty' "$CONFIG" 2>/dev/null)"
+  [ -n "$refined_model" ] && model="$refined_model"
   args=("${@:4}")
+  explicit_model=""
 else
-  model="${2:-}"
+  explicit_model="${2:-}"  # non-empty means the caller pinned a model explicitly (wins over --role)
+  model="$explicit_model"
   task="${3:?task prompt required}"
-  if [ -z "$model" ]; then
-    model="$(jq -r '.models.default_worker // empty' "$CONFIG" 2>/dev/null)"
-    [ -n "$model" ] || { echo "spawn: model required (or set models.default_worker in $CONFIG)" >&2; exit 1; }
-  fi
   args=("${@:4}")
 fi
 # optional flags after model/task (or after --preset <name>), any order:
 #   [--no-worktree] [--continue | --resume <session-id>] [--allow "cmd,cmd"] [--after <id>]
-#   [--skip-permissions | --yolo]
+#   [--role <name>] [--skip-permissions | --yolo]
 i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   case "${args[$i]}" in
@@ -65,11 +98,24 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --resume)       i=$((i+1)); resume="--resume ${args[$i]:?--resume needs a <session-id>}" ;;
     --allow)        i=$((i+1)); allow_csv="${args[$i]:?--allow needs a \"cmd,cmd\" list}" ;;
     --after)        i=$((i+1)); after_id="${args[$i]:?--after needs a worker <id>}" ;;
+    --role)         i=$((i+1)); role="${args[$i]:?--role needs a role name}" ;;
     --skip-permissions|--yolo) skip_perms=1 ;;
     *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
   esac
   i=$((i+1))
 done
+
+# Model resolution precedence (issue #74), highest first: an explicit model arg
+# (already sitting in $model when $explicit_model is non-empty) always wins;
+# else --role via resolve_role(); else --preset's model / models.roles refinement
+# above (already sitting in $model); else models.default_worker as a last resort.
+if [ -z "$explicit_model" ] && [ -n "$role" ]; then
+  model="$(resolve_role "$role")"
+fi
+if [ -z "$model" ]; then
+  model="$(jq -r '.models.default_worker // empty' "$CONFIG" 2>/dev/null)"
+  [ -n "$model" ] || { echo "spawn: model required (or set models.default_worker in $CONFIG)" >&2; exit 1; }
+fi
 
 # Opt-in worker sandbox bypass (issue #69): mirrors how bootstrap.sh launches the
 # master with --dangerously-skip-permissions, but per-spawn and strictly opt-in —
