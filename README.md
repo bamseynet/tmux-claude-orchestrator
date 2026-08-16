@@ -76,6 +76,53 @@ Inside the master session you can skip the CLI and just talk to it: *"Spawn a So
 do X and a Haiku worker to research Y."* It calls `./orch` for you. See
 [`examples/quickstart.md`](examples/quickstart.md).
 
+### Task presets
+
+```bash
+./orch spawn w1 --preset review   # review the current branch/diff
+./orch spawn w1 --preset test     # write/run tests until green
+./orch spawn w1 --preset docs     # sync docs to match code
+```
+
+`--preset <review|test|docs>` bundles a canned model + task + `--allow` list for a common
+one-off, so you don't retype the same model/prompt/permissions every time.
+
+### Model roles
+
+The right model for a worker depends on the *kind* of work, not just its name — mechanical
+work (apply a listed correction, fetch and record a number) doesn't need the same model as
+judgement work (adversarial review, synthesis). Declare the mapping once in `models.roles` in
+`_orch/config.json`:
+
+```json
+"models": {
+  "orchestrator": "opus",
+  "default_worker": "sonnet",
+  "roles": {
+    "mechanical": "haiku",
+    "research": "sonnet",
+    "implement": "sonnet",
+    "review": "opus",
+    "synthesis": "opus"
+  }
+}
+```
+
+then spawn by role instead of retyping a model:
+
+```bash
+./orch spawn w1 --role review "Review the auth changes"
+```
+
+Resolution precedence (highest first): an **explicit model argument** (`orch spawn w1 opus
+"..."`) always wins; then **`--role`**; then a **`--preset`**'s model (which itself resolves
+through `models.roles` when a matching role is defined — `review`→`review`, `test`→`implement`,
+`docs`→`mechanical` — falling back to its built-in model otherwise); then
+`models.default_worker` as the last resort. A `--role` naming a role absent from
+`models.roles` fails loudly and lists the roles that *are* defined — it never silently falls
+back to a different model. `models.roles` is entirely optional; without it, behavior is
+unchanged from before this feature existed.
+
 ## Worker permissions
 
 By default a spawned worker launches bare `claude`, so every Bash/edit/network action blocks on
@@ -123,6 +170,9 @@ multi-session work.
 | `thresholds.max_workers` | 4 | soft cap you should respect |
 | `watchdog.enabled` | true | auto-retry on rate limits |
 | `watchdog.cooldown_seconds` | 65 | wait before retry (API limits ~60s) |
+| `models.orchestrator` | `opus` | model for the master session |
+| `models.default_worker` | `sonnet` | model when `spawn` gets no explicit model/`--role` |
+| `models.roles` | *(unset)* | optional `{role: model}` matrix for `spawn --role <name>` (see [Model roles](#model-roles)) |
 
 If a Claude Code TUI update changes the spinner or input box, adjust `is_busy`/`is_ready` in
 `_orch/lib.sh` — everything keys off those two functions.
