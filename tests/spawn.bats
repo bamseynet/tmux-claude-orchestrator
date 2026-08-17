@@ -74,6 +74,35 @@ JSON
   [ "$output" = '["Bash(ls:*)","Bash(cat:*)"]' ]
 }
 
+@test "spawn.sh wraps bare commands as Bash(<cmd>:*) rules (issue #78)" {
+  run "$SPAWN" w1b sonnet "do the thing" --no-worktree --allow "git, gh , jq"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1b.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Bash(git:*)","Bash(gh:*)","Bash(jq:*)"]' ]
+}
+
+@test "spawn.sh passes already-valid tool rules through untouched (issue #78)" {
+  run "$SPAWN" w1c sonnet "do the thing" --no-worktree \
+    --allow "Bash(git diff:*), WebSearch, WebFetch(domain:example.com), Read"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1c.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Bash(git diff:*)","WebSearch","WebFetch(domain:example.com)","Read"]' ]
+}
+
+@test "spawn.sh --preset combined with a bare-command --allow yields only valid rules (issue #78)" {
+  run "$SPAWN" w1d --preset review --no-worktree --allow "gh,bats"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1d.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Bash(gh:*)","Bash(bats:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)"]' ]
+  # no entry should fail the "starts with an uppercase letter" tool-rule requirement
+  run jq -e '[.permissions.allow[] | select(test("^[A-Z]") | not)] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+  [ "$output" = "true" ]
+}
+
 @test "spawn.sh omits permissions.allow entirely when --allow is not given" {
   run "$SPAWN" w2 sonnet "do the thing" --no-worktree
   [ "$status" -eq 0 ]
@@ -139,6 +168,16 @@ EOF
   [ "$output" = "working" ]
   [ -d "$PROJECT_ROOT/../wt/w7" ]
   [ -f "$PROJECT_ROOT/../wt/w7/.claude/settings.local.json" ]
+}
+
+@test "smoke: spawn.sh end-to-end with --allow \"git,jq\" wraps rules in the worktree settings file (issue #78)" {
+  run "$SPAWN" w7b sonnet "do the thing" --allow "git,jq"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w7b (sonnet)"* ]]
+  settings="$PROJECT_ROOT/../wt/w7b/.claude/settings.local.json"
+  [ -f "$settings" ]
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Bash(git:*)","Bash(jq:*)"]' ]
 }
 
 @test "smoke: spawn.sh queues instead of launching when the concurrency gate is at cap" {
