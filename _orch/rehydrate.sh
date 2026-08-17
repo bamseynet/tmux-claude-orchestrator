@@ -74,21 +74,22 @@ action — these files are the source of truth, not prior transcript turns.
 EOF
 }
 
-# Append one review decision. Locked the same way lib.sh locks worker-status
-# writes, so a review decision recorded mid-heartbeat can never interleave with
-# another writer's line.
+# Append one review decision. Locked with lib.sh's with_lock() the same way
+# worker-status writes are, so a review decision recorded mid-heartbeat can never
+# interleave with another writer's line (and it works on macOS, where flock(1)
+# doesn't exist -- issue #76).
 # review_log_append <worker_id> <branch> <verdict> <reason> [commit_sha]
 review_log_append() {
   local worker_id="$1" branch="$2" verdict="$3" reason="$4" sha="${5:-}"
   local lock="$STATE_DIR/.review-log.lock"
   mkdir -p "$STATE_DIR"
   (
-    flock -x 200
+    with_lock "$lock" || exit 1
     jq -nc --arg ts "$(date -u +%FT%TZ)" --arg id "$worker_id" --arg b "$branch" \
       --arg v "$verdict" --arg r "$reason" --arg sha "$sha" \
       '{ts:$ts, worker_id:$id, branch:$b, verdict:$v, reason:$r, commit_sha:$sha}' \
       >> "$REVIEW_LOG"
-  ) 200>"$lock"
+  )
 }
 
 # Run the summary only when executed directly. When sourced (e.g. by hermetic
