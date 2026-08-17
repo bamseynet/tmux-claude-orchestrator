@@ -54,7 +54,29 @@ fi
 
 mkdir -p "$WORKERS_DIR"
 
-: "${SESSION_NAME:=orch}"      # tmux session name
+# --- Per-toolkit session namespacing (issue #81) ------------------------------------
+# The tmux session name used to be the bare literal "orch", so two installs of this
+# toolkit in different directories collided on the same session: bootstrap.sh from
+# either one reported "session 'orch' already exists; reusing" and silently adopted
+# the OTHER install's session, and `orch down` from one install signalled the other
+# install's heartbeat/watchdog loops. Default the session name to a short hash of
+# the resolved toolkit root instead, so two installs never share a name by accident.
+# `SESSION_NAME` (already the established override var — see `orch help`) still wins
+# when set explicitly, e.g. to pin a memorable name or to intentionally point two
+# installs at the same session.
+_orch_session_hash() { # <string> -> 8 hex chars, stable across shells/platforms
+  local s="$1"
+  if command -v sha1sum >/dev/null 2>&1; then
+    printf '%s' "$s" | sha1sum | cut -c1-8
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$s" | shasum | cut -c1-8
+  elif command -v md5sum >/dev/null 2>&1; then
+    printf '%s' "$s" | md5sum | cut -c1-8
+  else
+    printf '%s' "$s" | cksum | cut -d' ' -f1
+  fi
+}
+: "${SESSION_NAME:=orch-$(_orch_session_hash "$ORCH_ROOT")}"      # tmux session name
 : "${ORCH_WINDOW:=orchestrator}"  # master window name
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }

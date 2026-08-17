@@ -26,7 +26,11 @@ mkdir -p "$WORKERS_DIR"
 # (Duplicated in stop.sh, which has the same need but for the kill side and
 # cannot source this file — lib.sh, the one thing both already share, is out of
 # scope for this fix.)
-pid_is_expected() { # <pid> <script_basename> -> 0 if alive AND running that script
+# <pid> <script_path> -> 0 if alive AND running that exact script. `script_path`
+# should be the FULL resolved path (issue #80/#81), not just a basename like
+# "heartbeat.sh" -- a bare basename would also match another toolkit install's
+# same-named script running from a different directory.
+pid_is_expected() {
   local pid="$1" script="$2" cmdline=""
   [ -n "$pid" ] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
@@ -37,6 +41,16 @@ pid_is_expected() { # <pid> <script_basename> -> 0 if alive AND running that scr
   fi
   [[ "$cmdline" == *"$script"* ]]
 }
+
+# --- Session ownership record (issue #81) --------------------------------------
+# Session names are namespaced per toolkit root by default now (see lib.sh), which
+# handles the common case. But SESSION_NAME can still be pinned explicitly (e.g.
+# two installs both set SESSION_NAME=orch on purpose, or by accident), so record
+# which resolved ORCH_ROOT created the session and compare on reuse. Reusing a
+# session this root itself created stays a quiet, harmless reassurance; reusing one
+# a DIFFERENT root created must be a loud warning naming both roots -- that silent
+# "reusing" line is what hid a second instance for three days.
+owner_file="$STATE_DIR/session-owner"
 
 if ! tmux has-session -t "$S" 2>/dev/null; then
   tmux new-session -d -s "$S" -n "$ORCH_WINDOW" -c "$proj"
@@ -61,8 +75,19 @@ if ! tmux has-session -t "$S" 2>/dev/null; then
     log "master not ready in 90s; open the window and read $here/CLAUDE.md manually"
   fi
   log "session $S created"
+  printf '%s\n' "$ORCH_ROOT" > "$owner_file"
 else
-  echo "session '$S' already exists; reusing"
+  owner="$(cat "$owner_file" 2>/dev/null || true)"
+  if [ -n "$owner" ] && [ "$owner" != "$ORCH_ROOT" ]; then
+    echo "WARNING: session '$S' already exists but was created by a DIFFERENT toolkit root:" >&2
+    echo "  this install:  $ORCH_ROOT" >&2
+    echo "  session owner: $owner" >&2
+    echo "Two installs are sharing one session name -- set SESSION_NAME to give each its own." >&2
+    log "session $S owner mismatch: this=$ORCH_ROOT owner=$owner"
+  else
+    echo "session '$S' already exists; reusing"
+    [ -n "$owner" ] || printf '%s\n' "$ORCH_ROOT" > "$owner_file"
+  fi
   # Restart/reattach case (issue #41): the master's transcript may be gone (crash,
   # a fresh bootstrap after a compact-and-exit) even though the tmux session and
   # its state files survived. Best-effort nudge it with a rehydrate summary so it
@@ -76,7 +101,7 @@ else
 fi
 
 # Background heartbeat
-if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" "heartbeat.sh"; then
+if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" "$here/heartbeat.sh"; then
   nohup "$here/heartbeat.sh" >>"$STATE_DIR/heartbeat.log" 2>&1 &
   echo $! > "$STATE_DIR/heartbeat.pid"
   log "heartbeat pid $(cat "$STATE_DIR/heartbeat.pid")"
@@ -84,7 +109,7 @@ fi
 
 # Background watchdog (if enabled)
 if jq -e '.watchdog.enabled // true' "$here/config.json" >/dev/null 2>&1; then
-  if [ ! -f "$STATE_DIR/watchdog.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/watchdog.pid" 2>/dev/null)" "watchdog.sh"; then
+  if [ ! -f "$STATE_DIR/watchdog.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/watchdog.pid" 2>/dev/null)" "$here/watchdog.sh"; then
     nohup "$here/watchdog.sh" >>"$STATE_DIR/watchdog.log" 2>&1 &
     echo $! > "$STATE_DIR/watchdog.pid"
     log "watchdog pid $(cat "$STATE_DIR/watchdog.pid")"

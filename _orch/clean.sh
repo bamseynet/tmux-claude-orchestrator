@@ -45,5 +45,43 @@ rm -f "$WORKERS_DIR/$id.json"
 rm -f "$STATE_DIR/.wd-$id"
 rm -f "$STATE_DIR/settings/$id.json"
 
+# 7) this worker's status-file lock (issue #79): _worker_lock_file() from lib.sh,
+#    plus any mkdir-fallback ".lock.d" directory the portable lock shim (#76)
+#    leaves behind on platforms without flock(1). Orphaned locks are harmless in
+#    isolation, but they're cruft in a state dir whose whole point is to reflect
+#    what actually exists.
+lock_file="$(_worker_lock_file "$id")"
+if [ -e "$lock_file" ] || [ -e "$lock_file.d" ]; then
+  rm -f "$lock_file"
+  rm -rf "$lock_file.d"
+  log "clean $id: removed lock file/dir"
+fi
+
+# 8) queue entries that can never fire (issue #79): a queued spawn held with
+#    `--after <id>` becomes permanently unsatisfiable once <id> is cleaned — its
+#    "done" status will never happen — so it would otherwise linger in the queue
+#    forever, one freed slot away from launching and redoing already-finished
+#    work. Drop only entries depending on THIS id; an entry depending on some
+#    other worker must survive untouched. Log what was dropped (and why) rather
+#    than silently discarding queued work.
+if [ -s "$QUEUE" ]; then
+  tmp="$QUEUE.tmp.$$"
+  dropped=0
+  : > "$tmp"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    after="$(jq -r '.after // empty' <<<"$line")"
+    if [ "$after" = "$id" ]; then
+      dropped=$((dropped + 1))
+      qid="$(jq -r '.id // "?"' <<<"$line")"
+      log "clean $id: dropped queued spawn '$qid' — its --after '$id' dependency can never be satisfied now"
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$QUEUE"
+  mv "$tmp" "$QUEUE"
+  [ "$dropped" -gt 0 ] && echo "dropped $dropped queued spawn(s) depending on '$id'"
+fi
+
 log "clean $id: done"
 echo "cleaned $id"
