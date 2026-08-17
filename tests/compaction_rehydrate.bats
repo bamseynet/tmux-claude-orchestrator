@@ -87,6 +87,32 @@ setup() {
   done < "$REVIEW_LOG"
 }
 
+@test "fallback: review_log_append works and stays locked without flock on PATH (issue #76)" {
+  local fakebin="$BATS_TEST_TMPDIR/no-flock-bin"
+  mkdir -p "$fakebin"
+  local tool real
+  for tool in jq mv date stat kill sleep rm cat printf mkdir env bash sh seq wc dirname; do
+    real="$(command -v "$tool" 2>/dev/null)" || continue
+    ln -sf "$real" "$fakebin/$tool"
+  done
+
+  PATH="$fakebin" run bash -c '
+    source "'"$BATS_TEST_DIRNAME"'/../_orch/rehydrate.sh"
+    ! command -v flock >/dev/null 2>&1 || { echo "flock still on PATH"; exit 1; }
+    for i in $(seq 1 20); do
+      ( review_log_append "w$i" "orch/w$i" approved "concurrent $i" ) &
+    done
+    wait
+    [ "$(wc -l < "$REVIEW_LOG")" -eq 20 ] || { echo "wrong line count"; exit 1; }
+    while IFS= read -r line; do
+      echo "$line" | jq -e . >/dev/null || exit 1
+    done < "$REVIEW_LOG"
+    echo OK
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *OK* ]]
+}
+
 @test "rehydrate_summary surfaces master-notes.md content verbatim" {
   printf 'Active priority: ship #41. w1 is mid-review.\n' > "$MASTER_NOTES"
   run rehydrate_summary

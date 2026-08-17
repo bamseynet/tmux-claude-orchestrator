@@ -224,12 +224,95 @@ check_deps() { # <dep>...  -> 0 if all present; prints one line per missing dep 
   return "$missing"
 }
 
+# --- Portable exclusive-lock shim (issue #76) ----------------------------------------
+# flock(1) is util-linux; it does not exist on macOS/BSD. Everything below routes
+# through with_lock() instead of calling `flock` directly, so the three callers
+# (write_worker_status, update_worker_status, review_log_append) get real mutual
+# exclusion on Linux (flock, unchanged behaviour) and on macOS (an atomic
+# mkdir-based mutex — mkdir is atomic on every POSIX filesystem and needs no extra
+# binary). A holder that dies while holding the mkdir lock cannot wedge it forever:
+# stale locks are reclaimed by checking whether the recorded PID is still alive,
+# and independently by age, and a bounded wait means a caller that truly cannot
+# acquire the lock gets a loud, non-zero-exit failure back — never a silent
+# unlocked fallthrough.
+: "${ORCH_LOCK_TIMEOUT:=30}"     # seconds to wait for the lock before giving up
+: "${ORCH_LOCK_STALE_AGE:=60}"   # seconds before an abandoned mkdir lock is reclaimed
+
+# mtime of a path in epoch seconds, GNU or BSD stat. Prints nothing and returns
+# non-zero if the path is gone or neither stat dialect works -- callers must not
+# treat a bare fallthrough as a valid (zero) mtime. Note GNU stat's `-f` means
+# "filesystem status", not "format string" (that's BSD), so a naive
+# `stat -c ... || stat -f %m ...` would, on GNU stat, print unrelated filesystem
+# info to stdout on the fallback branch even though it exits non-zero -- capture
+# each attempt and gate on its own exit status instead of letting `||` alone
+# decide what reaches the caller.
+_lock_mtime() { # <path>
+  local out
+  out="$(stat -c %Y "$1" 2>/dev/null)" && { printf '%s\n' "$out"; return 0; }
+  out="$(stat -f %m "$1" 2>/dev/null)" && { printf '%s\n' "$out"; return 0; }
+  return 1
+}
+
+# Acquire an exclusive lock at <lock_path>, for the lifetime of the CALLING
+# subshell/process — release is automatic (flock: fd closes; mkdir fallback: an
+# EXIT/INT/TERM trap removes the lock dir), so this must be invoked inside a
+# `( ... )` subshell scoped to just the critical section, e.g.:
+#   ( with_lock "$lock" || exit 1; <critical section> )
+# Returns 1 (with a message on stderr) if the lock cannot be acquired within
+# ORCH_LOCK_TIMEOUT seconds — callers must check this, not assume success.
+with_lock() { # <lock_path>
+  local lock="$1"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec 200>"$lock" || { echo "with_lock: cannot open lock file $lock" >&2; return 1; }
+    if ! flock -x -w "$ORCH_LOCK_TIMEOUT" 200; then
+      echo "with_lock: timed out waiting for lock $lock (flock)" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  # mkdir-based fallback (macOS/BSD: no flock(1) binary).
+  local lockdir="$lock.d" start_ts holder_pid mtime
+  start_ts=$(date +%s)
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    if [ -f "$lockdir/pid" ]; then
+      holder_pid="$(cat "$lockdir/pid" 2>/dev/null)"
+      if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
+        rm -rf "$lockdir" 2>/dev/null
+        continue
+      fi
+    fi
+    # A concurrent holder may release (rm -rf) the lock dir between the failed
+    # mkdir above and this stat, so mtime can legitimately come back empty --
+    # that just means it's gone, not stale; skip the age check for this pass
+    # rather than doing arithmetic on an empty value.
+    mtime="$(_lock_mtime "$lockdir")"
+    if [ -n "$mtime" ] && [ $(( $(date +%s) - mtime )) -ge "$ORCH_LOCK_STALE_AGE" ]; then
+      rm -rf "$lockdir" 2>/dev/null
+      continue
+    fi
+    if [ $(( $(date +%s) - start_ts )) -ge "$ORCH_LOCK_TIMEOUT" ]; then
+      echo "with_lock: timed out waiting for lock $lock (mkdir)" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo $$ > "$lockdir/pid" 2>/dev/null
+  # $lockdir is local to this function and gone by the time the trap actually
+  # fires, so bake its value into the trap command now rather than referencing
+  # the variable (which would expand to empty and rm nothing).
+  # shellcheck disable=SC2064
+  trap "rm -rf $(printf '%q' "$lockdir")" EXIT INT TERM
+  return 0
+}
+
 # --- Locked worker-status writers (issue #11) ---------------------------------------
 # report.sh (Stop/Notification/SubagentStop hooks) and spawn.sh both mutate
 # workers/<id>.json. Unlocked, a Stop hook firing during spawn's post-inject window
 # can race spawn.sh's own "working" write and land in either order (e.g. flipping a
 # real `done` back to `working`). Both writers now go through the same per-id
-# flock, so one write always fully lands before the next begins.
+# with_lock, so one write always fully lands before the next begins.
 
 # Path to the per-worker lock file backing write_worker_status/update_worker_status.
 _worker_lock_file() { echo "$WORKERS_DIR/.$1.lock"; } # <id>
@@ -240,9 +323,9 @@ write_worker_status() {
   local id="$1"; shift
   local f="$WORKERS_DIR/$id.json" lock; lock="$(_worker_lock_file "$id")"
   (
-    flock -x 200
+    with_lock "$lock" || exit 1
     jq -n "$@" > "$f.tmp" && mv "$f.tmp" "$f"
-  ) 200>"$lock"
+  )
 }
 
 # In-place jq update of a worker's status file under the same lock. Seeds the file
@@ -253,10 +336,10 @@ update_worker_status() {
   local id="$1"; shift
   local f="$WORKERS_DIR/$id.json" lock; lock="$(_worker_lock_file "$id")"
   (
-    flock -x 200
+    with_lock "$lock" || exit 1
     [ -f "$f" ] || printf '{}' > "$f"
     jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-  ) 200>"$lock"
+  )
 }
 
 # --- Target-repo relatedness guard (issue #35) -------------------------------------
