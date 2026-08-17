@@ -41,7 +41,7 @@ wait_for() { # <predicate...> -- poll up to 3s
   return 1
 }
 
-real_loop() { # <name e.g. heartbeat> -> launches $TOOLKIT/_orch/<name>.sh (sleeps), prints its pid
+real_loop() { # <name e.g. heartbeat> -> launches $TOOLKIT/_orch/<name>.sh (sleeps); pid in $LOOP_PID
   local name="$1"
   local script="$TOOLKIT/_orch/$name.sh"
   cat > "$script" <<EOF
@@ -50,8 +50,12 @@ echo launched >> "$LAUNCH_MARKER"
 sleep 100
 EOF
   chmod +x "$script"
+  # NOTE: launch here, in the CALLER's shell, and publish the pid via $LOOP_PID.
+  # Do NOT call this via $( ... ) -- command substitution runs it in a subshell that
+  # exits immediately, orphaning the background child, which then dies after writing
+  # its marker. That produced a test that passed locally and failed in CI.
   "$script" &
-  echo $!
+  LOOP_PID=$!
 }
 
 # A loop that ignores SIGTERM, to exercise the SIGKILL escalation path.
@@ -65,17 +69,21 @@ trap '' TERM
 sleep 100
 EOF
   chmod +x "$script"
+  # NOTE: launch here, in the CALLER's shell, and publish the pid via $LOOP_PID.
+  # Do NOT call this via $( ... ) -- command substitution runs it in a subshell that
+  # exits immediately, orphaning the background child, which then dies after writing
+  # its marker. That produced a test that passed locally and failed in CI.
   "$script" &
-  echo $!
+  LOOP_PID=$!
 }
 
 # --- happy path --------------------------------------------------------------
 
 @test "stop.sh: valid pidfile -> stops cleanly, exits 0, confirms both loops gone" {
-  BG_PID="$(real_loop heartbeat)"
+  real_loop heartbeat; BG_PID=$LOOP_PID
   wait_for [ -s "$LAUNCH_MARKER" ]
   echo "$BG_PID" > "$STATE_DIR/heartbeat.pid"
-  BG_PID2="$(real_loop watchdog)"
+  real_loop watchdog; BG_PID2=$LOOP_PID
   wait_for kill -0 "$BG_PID2"
   echo "$BG_PID2" > "$STATE_DIR/watchdog.pid"
 
@@ -106,7 +114,7 @@ EOF
 # --- stale/missing pidfile: path-based fallback --------------------------------
 
 @test "stop.sh: stale pidfile (dead pid) -> real loop is still found and stopped via path fallback" {
-  BG_PID="$(real_loop heartbeat)"
+  real_loop heartbeat; BG_PID=$LOOP_PID
   wait_for [ -s "$LAUNCH_MARKER" ]
   # Pidfile points at a PID that is not (and never was) the real loop.
   dead_pid=$((BG_PID + 50000))
@@ -120,7 +128,7 @@ EOF
 }
 
 @test "stop.sh: missing pidfile entirely -> path fallback still finds and stops the real loop" {
-  BG_PID="$(real_loop heartbeat)"
+  real_loop heartbeat; BG_PID=$LOOP_PID
   wait_for [ -s "$LAUNCH_MARKER" ]
   rm -f "$STATE_DIR/heartbeat.pid"
 
@@ -134,7 +142,7 @@ EOF
 # --- escalation + honest failure reporting -------------------------------------
 
 @test "stop.sh: a loop that ignores SIGTERM is escalated to SIGKILL and confirmed stopped" {
-  BG_PID="$(stubborn_loop heartbeat)"
+  stubborn_loop heartbeat; BG_PID=$LOOP_PID
   wait_for [ -s "$LAUNCH_MARKER" ]
   echo "$BG_PID" > "$STATE_DIR/heartbeat.pid"
 
@@ -144,7 +152,7 @@ EOF
 }
 
 @test "stop.sh never prints a false 'stopped' claim: exit 0 implies the loops are actually gone" {
-  BG_PID="$(real_loop heartbeat)"
+  real_loop heartbeat; BG_PID=$LOOP_PID
   wait_for [ -s "$LAUNCH_MARKER" ]
   echo "$BG_PID" > "$STATE_DIR/heartbeat.pid"
 
