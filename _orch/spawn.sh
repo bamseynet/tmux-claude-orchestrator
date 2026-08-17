@@ -279,6 +279,12 @@ else
   settings_file="$wdir/.claude/settings.local.json"
 fi
 
+# --allow entries are translated into valid permissions.allow tool rules (issue #78):
+# Claude Code wants `ToolName` or `ToolName(specifier)` (capitalised), not bare command
+# names — an entry already shaped like a tool rule (starts uppercase, optionally with
+# "(...)") passes through untouched so --preset bundles and hand-written rules like
+# `Bash(git diff:*)` keep working; a bare command (`git`, `gh`, `jq`) is wrapped as
+# `Bash(<cmd>:*)`, which per the Claude Code docs is equivalent to `Bash(<cmd> *)`.
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   {
     hooks: {
@@ -288,7 +294,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
     }
   }
   + (if $allow == "" then {}
-     else {permissions: {allow: ($allow | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}}
+     else {permissions: {allow: ($allow | split(",") | map(gsub("^\\s+|\\s+$"; ""))
+       | map(select(length > 0))
+       | map(if test("^[A-Z]") then . else "Bash(\(.):*)" end))}}
      end)
 ' > "$settings_file"
 
