@@ -314,6 +314,14 @@ orch — tmux + Claude Code orchestrator
                                      (every done/needs-input/stalled/spawn-failed
                                      event, surviving the inbox's destructive drain)
 
+  ./send-remote-control.sh [--force] [<session:window>]
+                                     type /remote-control into the ORCHESTRATOR's
+                                     own pane and submit it (keepalive/reconnect
+                                     nudge). Defaults to \$SESSION_NAME:\$ORCH_WINDOW;
+                                     skips a pane with an unsent draft unless
+                                     --force. Standalone script, not an \`orch\`
+                                     subcommand — run it directly, e.g. from cron.
+
 Env overrides: SESSION_NAME (default: orch-<hash of this toolkit's resolved root>,
 so two installs in different directories never collide on one tmux session —
 issue #81; set explicitly to pin a memorable name or to intentionally share a

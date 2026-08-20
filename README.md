@@ -157,6 +157,11 @@ The **heartbeat** drains the inbox and — only when the master's pane is idle �
 tmux status bar HUD (`hud.sh`) shows `w1:working w2:blocked` live, and window tabs flag on
 activity.
 
+`./send-remote-control.sh` types `/remote-control` into the orchestrator's own pane and submits
+it — a standalone keepalive/reconnect nudge you can run from cron or by hand. It defaults to
+`$SESSION_NAME:$ORCH_WINDOW`, respects the same unsent-draft guard as the heartbeat (skip unless
+`--force`), and delivers via `send_prompt()`.
+
 ## iTerm2 note (`-CC` vs plain)
 
 `tmux -CC` maps each window to a native iTerm2 tab (pretty) **but hides the tmux status line**,
