@@ -109,6 +109,18 @@ JSON
   [ "$output" = '["mcp__playwright__browser_click(selector:*)"]' ]
 }
 
+@test "spawn.sh passes a capitalised tool name containing underscore/hyphen through unwrapped (issue #84)" {
+  # The old `^[A-Z]` heuristic tolerated any character after the first capital,
+  # including "_"/"-". Tightening the canonical-name check to [A-Za-z0-9] only
+  # would silently start wrapping (and thus disabling) a real tool rule shaped
+  # like this — the same failure mode #84 is about, just for a different entry.
+  run "$SPAWN" w1h sonnet "do the thing" --no-worktree --allow "Some_Tool, Some-Tool"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1h.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Some_Tool","Some-Tool"]' ]
+}
+
 @test "spawn.sh wraps a lowercase non-mcp entry as a shell command (issue #84)" {
   # A lowercase entry that isn't an mcp__ tool and isn't already canonical is
   # still assumed to be a shell command, e.g. a hypothetical bare "foo" — this
