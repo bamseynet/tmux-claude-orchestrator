@@ -72,9 +72,10 @@ EOF
   [[ "$output" == *"spawned w1"* ]]
 
   # The worktree must be registered against the CONFIGURED target repo, not cwd.
+  branch="$(ORCH_ROOT="$WORK/toolkit" bash -c 'source "'"$WORK"'/toolkit/_orch/lib.sh"; worker_branch w1')"
   run git -C "$WORK/target" worktree list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"orch/w1"* ]]
+  [[ "$output" == *"$branch"* ]]
 
   # cwd (othercwd) was never a git repo and must stay that way — nothing should
   # have been created there.

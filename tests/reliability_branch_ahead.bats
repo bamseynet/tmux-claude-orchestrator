@@ -29,19 +29,19 @@ setup() {
 }
 
 @test "worker_branch_ahead: worktree with no new commits is 0 (falls back to local main)" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
   run worker_branch_ahead "$PROJECT_ROOT" w1
   [ "$output" = "0" ]
 }
 
 @test "worker_branch_ahead: counts commits made in the worktree (local main fallback)" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w2" "$PROJECT_ROOT/../wt/w2" >/dev/null
-  echo more > "$PROJECT_ROOT/../wt/w2/g.txt"
-  git -C "$PROJECT_ROOT/../wt/w2" add g.txt
-  git -C "$PROJECT_ROOT/../wt/w2" commit -q -m "one"
-  echo more2 > "$PROJECT_ROOT/../wt/w2/h.txt"
-  git -C "$PROJECT_ROOT/../wt/w2" add h.txt
-  git -C "$PROJECT_ROOT/../wt/w2" commit -q -m "two"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w2)" "$(worker_wdir "$PROJECT_ROOT" w2)" >/dev/null
+  echo more > "$(worker_wdir "$PROJECT_ROOT" w2)/g.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w2)" add g.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w2)" commit -q -m "one"
+  echo more2 > "$(worker_wdir "$PROJECT_ROOT" w2)/h.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w2)" add h.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w2)" commit -q -m "two"
 
   run worker_branch_ahead "$PROJECT_ROOT" w2
   [ "$output" = "2" ]
@@ -52,10 +52,10 @@ setup() {
   git init -q --bare "$BATS_TEST_TMPDIR/origin.git"
   git -C "$PROJECT_ROOT" remote add origin "$BATS_TEST_TMPDIR/origin.git"
   git -C "$PROJECT_ROOT" push -q origin main
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w3" "$PROJECT_ROOT/../wt/w3" >/dev/null
-  echo more > "$PROJECT_ROOT/../wt/w3/g.txt"
-  git -C "$PROJECT_ROOT/../wt/w3" add g.txt
-  git -C "$PROJECT_ROOT/../wt/w3" commit -q -m "one"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w3)" "$(worker_wdir "$PROJECT_ROOT" w3)" >/dev/null
+  echo more > "$(worker_wdir "$PROJECT_ROOT" w3)/g.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w3)" add g.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w3)" commit -q -m "one"
 
   run worker_branch_ahead "$PROJECT_ROOT" w3
   [ "$output" = "1" ]

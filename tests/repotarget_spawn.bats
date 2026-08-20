@@ -10,6 +10,15 @@
 # claude are still stubbed, so no real window/session is ever launched.
 
 SPAWN="$BATS_TEST_DIRNAME/../_orch/spawn.sh"
+LIB="$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+# Issue #86: the worktree path/branch spawn.sh checks is namespaced per ORCH_ROOT.
+worker_wdir_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_wdir "'"$PROJECT_ROOT"'" "'"$1"'"'
+}
+worker_branch_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_branch "'"$1"'"'
+}
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -52,8 +61,8 @@ JSON
 }
 
 @test "spawn.sh refuses and reports spawn-failed when ../wt/<id> exists but is not a git worktree at all" {
-  mkdir -p "$PROJECT_ROOT/../wt/junk"
-  echo leftover > "$PROJECT_ROOT/../wt/junk/stale.txt"
+  mkdir -p "$(worker_wdir_for junk)"
+  echo leftover > "$(worker_wdir_for junk)/stale.txt"
 
   run "$SPAWN" junk sonnet "do the thing"
   [ "$status" -ne 0 ]
@@ -62,7 +71,7 @@ JSON
   [ "$output" = "spawn-failed" ]
   grep -Fq '"event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
   # the stale dir must be left alone, not silently adopted
-  [ -f "$PROJECT_ROOT/../wt/junk/stale.txt" ]
+  [ -f "$(worker_wdir_for junk)/stale.txt" ]
 }
 
 @test "spawn.sh refuses when ../wt/<id> is a worktree of a DIFFERENT repo" {
@@ -73,7 +82,7 @@ JSON
   echo x > "$other/x.txt"
   git -C "$other" add x.txt
   git -C "$other" commit -q -m init
-  git -C "$other" worktree add -q -B "orch/other1" "$PROJECT_ROOT/../wt/other1" >/dev/null
+  git -C "$other" worktree add -q -B "$(worker_branch_for other1)" "$(worker_wdir_for other1)" >/dev/null
 
   run "$SPAWN" other1 sonnet "do the thing"
   [ "$status" -ne 0 ]
@@ -81,7 +90,7 @@ JSON
 }
 
 @test "spawn.sh reuses a pre-existing ../wt/<id> that IS a clean worktree of the expected repo on orch/<id>" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch_for w1)" "$(worker_wdir_for w1)" >/dev/null
 
   run "$SPAWN" w1 sonnet "do the thing"
   [ "$status" -eq 0 ]
@@ -92,7 +101,7 @@ JSON
 }
 
 @test "spawn.sh refuses a pre-existing ../wt/<id> worktree that is on the WRONG branch" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "some-other-branch" "$PROJECT_ROOT/../wt/w2" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "some-other-branch" "$(worker_wdir_for w2)" >/dev/null
 
   run "$SPAWN" w2 sonnet "do the thing"
   [ "$status" -ne 0 ]
@@ -100,8 +109,8 @@ JSON
 }
 
 @test "spawn.sh refuses a pre-existing ../wt/<id> worktree with uncommitted changes" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w3" "$PROJECT_ROOT/../wt/w3" >/dev/null
-  echo dirty >> "$PROJECT_ROOT/../wt/w3/f.txt"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch_for w3)" "$(worker_wdir_for w3)" >/dev/null
+  echo dirty >> "$(worker_wdir_for w3)/f.txt"
 
   run "$SPAWN" w3 sonnet "do the thing"
   [ "$status" -ne 0 ]
@@ -111,12 +120,12 @@ JSON
 @test "spawn.sh fails loudly (not silently) when git worktree add fails and no stale path exists" {
   # Check the branch out elsewhere first so `worktree add -B orch/w4 $wdir` fails
   # without ever creating $wdir.
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w4" "$BATS_TEST_TMPDIR/elsewhere" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch_for w4)" "$BATS_TEST_TMPDIR/elsewhere" >/dev/null
 
   run "$SPAWN" w4 sonnet "do the thing"
   [ "$status" -ne 0 ]
   [[ "$output" == *"spawn-failed"* ]]
-  [ ! -d "$PROJECT_ROOT/../wt/w4" ]
+  [ ! -d "$(worker_wdir_for w4)" ]
   run jq -r .status "$ORCH_ROOT/_orch/state/workers/w4.json"
   [ "$output" = "spawn-failed" ]
 }
@@ -125,7 +134,7 @@ JSON
   run "$SPAWN" w5 sonnet "do the thing"
   [ "$status" -eq 0 ]
   [[ "$output" == *"spawned w5"* ]]
-  [ -d "$PROJECT_ROOT/../wt/w5" ]
-  run git -C "$PROJECT_ROOT/../wt/w5" rev-parse --abbrev-ref HEAD
-  [ "$output" = "orch/w5" ]
+  [ -d "$(worker_wdir_for w5)" ]
+  run git -C "$(worker_wdir_for w5)" rev-parse --abbrev-ref HEAD
+  [ "$output" = "$(worker_branch_for w5)" ]
 }

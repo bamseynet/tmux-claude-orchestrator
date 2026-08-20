@@ -35,8 +35,9 @@ ORCH_DIR="$BATS_TEST_DIRNAME/../_orch"
   grep -Eq 'worktree remove --force' "$ORCH_DIR/clean.sh"
 }
 
-@test "clean.sh deletes the orch/<id> branch" {
-  grep -Eq 'branch -D "orch/\$id"' "$ORCH_DIR/clean.sh"
+@test "clean.sh deletes the namespaced orch/<hash>/<id> branch (issue #86)" {
+  grep -Fq 'branch="$(worker_branch "$id")"' "$ORCH_DIR/clean.sh"
+  grep -Eq 'branch -D "\$branch"' "$ORCH_DIR/clean.sh"
 }
 
 @test "clean.sh removes the status file and watchdog scratch" {

@@ -34,7 +34,7 @@ done
 [ -n "$id" ] || { echo "usage: merge.sh <id> [--auto] [--base <branch>]" >&2; exit 1; }
 
 proj="${PROJECT_ROOT:-$(pwd)}"
-branch="orch/$id"
+branch="$(worker_branch "$id")"
 
 # merge.auto in config.json lets an operator opt the whole toolkit into
 # auto-merge without repeating --auto on every invocation; the CLI flag always

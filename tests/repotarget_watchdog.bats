@@ -29,15 +29,15 @@ mkworker() { # <id> <status>
 }
 
 @test "prune_dead_worktree removes the worktree dir and the orch/<id> branch" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
-  [ -d "$PROJECT_ROOT/../wt/w1" ]
-  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/orch/w1"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
+  [ -d "$(worker_wdir "$PROJECT_ROOT" w1)" ]
+  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$(worker_branch w1)"
   [ "$status" -eq 0 ]
 
   prune_dead_worktree "$PROJECT_ROOT" w1
 
-  [ ! -d "$PROJECT_ROOT/../wt/w1" ]
-  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/orch/w1"
+  [ ! -d "$(worker_wdir "$PROJECT_ROOT" w1)" ]
+  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$(worker_branch w1)"
   [ "$status" -ne 0 ]
 }
 
@@ -47,28 +47,28 @@ mkworker() { # <id> <status>
 }
 
 @test "dead_sweep prunes the confirmed-dead worker's worktree and branch" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w2" "$PROJECT_ROOT/../wt/w2" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w2)" "$(worker_wdir "$PROJECT_ROOT" w2)" >/dev/null
   mkworker w2 working
 
   dead_sweep ""   # tick 1: debounce only
-  [ -d "$PROJECT_ROOT/../wt/w2" ]
+  [ -d "$(worker_wdir "$PROJECT_ROOT" w2)" ]
 
   dead_sweep ""   # tick 2: confirmed dead -> pruned
   run jq -r .status "$WORKERS_DIR/w2.json"
   [ "$output" = "dead" ]
-  [ ! -d "$PROJECT_ROOT/../wt/w2" ]
-  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/orch/w2"
+  [ ! -d "$(worker_wdir "$PROJECT_ROOT" w2)" ]
+  run git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$(worker_branch w2)"
   [ "$status" -ne 0 ]
 }
 
 @test "dead_sweep leaves the worktree alone for a worker whose window is still alive" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w3" "$PROJECT_ROOT/../wt/w3" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w3)" "$(worker_wdir "$PROJECT_ROOT" w3)" >/dev/null
   mkworker w3 working
 
   dead_sweep $'w3\norchestrator'
   dead_sweep $'w3\norchestrator'
 
-  [ -d "$PROJECT_ROOT/../wt/w3" ]
+  [ -d "$(worker_wdir "$PROJECT_ROOT" w3)" ]
   run jq -r .status "$WORKERS_DIR/w3.json"
   [ "$output" = "working" ]
 }

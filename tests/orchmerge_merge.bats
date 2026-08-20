@@ -99,7 +99,9 @@ JSON
 }
 
 mkbranch() { # <id>
-  git -C "$PROJECT_ROOT" branch "orch/$1" main >/dev/null
+  local branch
+  branch="$(ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_branch "'"$1"'"')"
+  git -C "$PROJECT_ROOT" branch "$branch" main >/dev/null
 }
 
 @test "merge.sh fails for a nonexistent branch" {

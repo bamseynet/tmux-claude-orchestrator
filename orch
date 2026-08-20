@@ -260,7 +260,9 @@ orch — tmux + Claude Code orchestrator
                                      (request/response; see ORCH_ASK_TIMEOUT
                                      and ORCH_ASK_LINES to tune the wait/output)
   ./orch clean <id>                  retire ONE worker: its tmux window, worktree
-                                     ../wt/<id>, branch orch/<id>, status file and
+                                     ../wt/<hash>/<id>, branch orch/<hash>/<id>
+                                     (<hash> namespaces the git layer per orch
+                                     install, issue #86), status file and
                                      watchdog scratch (idempotent)
   ./orch kill  <id>                  alias for clean
   ./orch prune                       reap ALL terminal (done/spawn-failed)
@@ -269,12 +271,12 @@ orch — tmux + Claude Code orchestrator
   ./orch status [--json]             list worker states, including "managed by"
                                      (orch|human, see \`attach\`/\`detach\` above)
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
-                                     (git diff <base>...orch/<id>, default
+                                     (git diff <base>...orch/<hash>/<id>, default
                                      base: main) + the worker's status JSON —
                                      the uniform deliverable surface for
                                      review/merge flows
   ./orch merge <id> [--auto] [--base <br>]
-                                     push orch/<id>, open (or reuse) a PR against
+                                     push orch/<hash>/<id>, open (or reuse) a PR against
                                      <br> (default: main). Without --auto (and
                                      merge.auto=false in config), only pushes +
                                      reports PR/check status — never merges. With

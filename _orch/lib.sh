@@ -79,6 +79,64 @@ _orch_session_hash() { # <string> -> 8 hex chars, stable across shells/platforms
 : "${SESSION_NAME:=orch-$(_orch_session_hash "$ORCH_ROOT")}"      # tmux session name
 : "${ORCH_WINDOW:=orchestrator}"  # master window name
 
+# --- Per-toolkit git-layer namespacing (issue #86) -----------------------------------
+# Two orch installs targeting the SAME target repo used to both want the worktree
+# $proj/../wt/<id> and the branch orch/<id> — the reuse guard below would then treat
+# the second install's spawn as "already a clean worktree ... reusing" and silently
+# hand it the first install's worktree and branch. Key the worktree path and branch
+# name on the same per-ORCH_ROOT hash used for SESSION_NAME above, so two installs
+# never collide on the git layer by accident, same as #81 did for the tmux session.
+ORCH_HASH="$(_orch_session_hash "$ORCH_ROOT")"
+
+worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
+  printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"
+}
+
+worker_branch() { # <id> -> this install's branch name for <id>
+  printf 'orch/%s/%s' "$ORCH_HASH" "$1"
+}
+
+# Pre-#86 layout, kept only so clean.sh/prune can sweep up leftovers from before
+# this install upgraded (see the "Back-compat" note in lib.sh's header comment).
+legacy_worker_wdir() { printf '%s/../wt/%s' "$1" "$2"; } # <project_root> <id>
+legacy_worker_branch() { printf 'orch/%s' "$1"; }        # <id>
+
+# --- Worktree ownership marker (issue #86) --------------------------------------------
+# Namespacing above makes an accidental collision very unlikely (it takes two
+# different ORCH_ROOTs to hash to the same 8 hex chars), but "very unlikely" is not
+# "impossible" — and an operator could still force one, e.g. by hand-editing state.
+# Belt-and-suspenders: stamp the owning ORCH_ROOT into the worktree's private admin
+# dir (`.git/worktrees/<name>/orch-owner` in the TARGET repo) at creation time —
+# deliberately NOT inside the worktree's own working tree, so it never shows up in
+# `git status` and can't break the "is this worktree clean" reuse check below. A
+# foreign install can then tell it does not own a path it's about to touch and
+# refuse loudly instead of silently adopting it.
+_worktree_owner_file() { # <wdir> -> admin-dir path, empty/nonzero if not a worktree
+  local gd
+  gd="$(git -C "$1" rev-parse --git-dir 2>/dev/null)" || return 1
+  case "$gd" in /*) ;; *) gd="$1/$gd" ;; esac
+  printf '%s/orch-owner' "$gd"
+}
+
+stamp_worktree_owner() { # <wdir> -- record this install as the owner
+  local f
+  f="$(_worktree_owner_file "$1")" || return 1
+  printf '%s\n' "$ORCH_ROOT" > "$f"
+}
+
+worktree_owner() { # <wdir> -> prints the owning ORCH_ROOT, empty if unmarked
+  local f
+  f="$(_worktree_owner_file "$1")" || return 0
+  [ -f "$f" ] && cat "$f"
+  return 0
+}
+
+worktree_owned_by_other() { # <wdir> -> 0 if marked with a DIFFERENT ORCH_ROOT
+  local owner
+  owner="$(worktree_owner "$1")"
+  [ -n "$owner" ] && [ "$owner" != "$ORCH_ROOT" ]
+}
+
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 
 # Strip ANSI/OSC/charset escapes. Uses perl (present on macOS by default) because
@@ -445,15 +503,25 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
 # worktree/branch is a no-op, not an error.
 prune_dead_worktree() { # <project_root> <id>
   local proj="$1" id="$2"
-  local wdir="$proj/../wt/$id"
+  local wdir branch
+  wdir="$(worker_wdir "$proj" "$id")"
+  branch="$(worker_branch "$id")"
   if [ -d "$wdir" ]; then
-    git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
-    log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+    # Never remove a path this install did not stamp itself — namespacing means
+    # this should be unreachable in practice, but a dead-worker sweep is automatic
+    # (no operator in the loop), so it gets the same foreign-ownership guard as
+    # spawn.sh rather than trusting the path is ours just because it looks right.
+    if worktree_owned_by_other "$wdir"; then
+      log "prune_dead_worktree: refusing to touch $wdir for $id — owned by a different orch install ($(worktree_owner "$wdir"))"
+    else
+      git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
+      log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+    fi
   fi
   git -C "$proj" worktree prune >/dev/null 2>&1 || true
-  if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
-    git -C "$proj" branch -D "orch/$id" >/dev/null 2>&1 || true
-    log "prune_dead_worktree: deleted branch orch/$id for dead worker $id"
+  if git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$proj" branch -D "$branch" >/dev/null 2>&1 || true
+    log "prune_dead_worktree: deleted branch $branch for dead worker $id"
   fi
 }
 

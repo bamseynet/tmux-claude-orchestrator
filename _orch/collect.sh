@@ -21,7 +21,7 @@ done
 [ -n "$id" ] || { echo "usage: collect.sh <id> [--base <branch>]" >&2; exit 1; }
 
 proj="${PROJECT_ROOT:-$(pwd)}"
-branch="orch/$id"
+branch="$(worker_branch "$id")"
 status_file="$WORKERS_DIR/$id.json"
 
 if [ -f "$status_file" ] && jq -e . "$status_file" >/dev/null 2>&1; then

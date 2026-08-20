@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # _orch/clean.sh <id> — retire a SINGLE worker and every artifact it leaks.
-# Removes, in order: the tmux window, the git worktree at ../wt/<id>, the branch
-# orch/<id>, the status file workers/<id>.json, the watchdog scratch .wd-<id>, and
-# (issue #43) the --no-worktree worker's private settings file settings/<id>.json.
+# Removes, in order: the tmux window, the git worktree at ../wt/<hash>/<id>, the
+# branch orch/<hash>/<id> (issue #86: <hash> namespaces the git layer per orch
+# install, plus a best-effort sweep of the pre-#86 ../wt/<id>/orch/<id> layout),
+# the status file workers/<id>.json, the watchdog scratch .wd-<id>, and (issue
+# #43) the --no-worktree worker's private settings file settings/<id>.json.
 #
 # Idempotent by design: each step is guarded, so a missing session, window,
 # worktree, branch, or file is a no-op rather than an error. This is what lets a
@@ -15,7 +17,10 @@ source "$here/lib.sh"
 id="${1:?usage: clean.sh <id>}"
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
-wdir="$proj/../wt/$id"   # spawn.sh worktree layout: $PROJECT_ROOT/../wt/<id>
+wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)
+branch="$(worker_branch "$id")"
+legacy_wdir="$(legacy_worker_wdir "$proj" "$id")"     # pre-#86 layout, see below
+legacy_branch="$(legacy_worker_branch "$id")"
 
 # 1) tmux window (only if the session exists and holds a window with this name)
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
@@ -26,16 +31,34 @@ fi
 # 2) git worktree — force, because the worker may hold uncommitted changes. Fall
 #    back to a plain rm if git cannot remove it, then prune any stale metadata so
 #    the branch delete below is not blocked by a lingering worktree registration.
+# Refuse to touch a worktree this install did not create — see spawn.sh (issue #86).
+if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
+  echo "clean $id: refusing to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))" >&2
+  log "clean $id: refused to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))"
+  exit 1
+fi
 if [ -d "$wdir" ]; then
   git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
   log "clean $id: removed worktree $wdir"
 fi
+# Back-compat (issue #86): also sweep the pre-namespacing ../wt/<id> layout, so an
+# install upgrading past this change still cleans up worktrees/branches it created
+# for <id> before the upgrade. spawn.sh never creates or reuses this legacy path
+# anymore — this is cleanup-only, not a fallback location for new spawns.
+if [ -d "$legacy_wdir" ]; then
+  git -C "$proj" worktree remove --force "$legacy_wdir" >/dev/null 2>&1 || rm -rf "$legacy_wdir"
+  log "clean $id: removed legacy worktree $legacy_wdir"
+fi
 git -C "$proj" worktree prune >/dev/null 2>&1 || true
 
-# 3) branch orch/<id>
-if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
-  git -C "$proj" branch -D "orch/$id" >/dev/null 2>&1 || true
-  log "clean $id: deleted branch orch/$id"
+# 3) branch (current + legacy)
+if git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
+  git -C "$proj" branch -D "$branch" >/dev/null 2>&1 || true
+  log "clean $id: deleted branch $branch"
+fi
+if git -C "$proj" show-ref --verify --quiet "refs/heads/$legacy_branch"; then
+  git -C "$proj" branch -D "$legacy_branch" >/dev/null 2>&1 || true
+  log "clean $id: deleted legacy branch $legacy_branch"
 fi
 
 # 4) status file + 5) watchdog scratch + 6) --no-worktree settings file (issue #43:

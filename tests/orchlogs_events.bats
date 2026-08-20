@@ -76,8 +76,8 @@ setup() {
 
   printf '{"id":"w4","status":"working","updated":"x"}\n' > "$WORKERS_DIR/w4.json"
 
-  wdir="$PROJECT_ROOT/../wt/w4"
-  git -C "$PROJECT_ROOT" worktree add -q -B orch/w4 "$wdir" >/dev/null
+  wdir="$(worker_wdir "$PROJECT_ROOT" w4)"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w4)" "$wdir" >/dev/null
   echo change > "$wdir/g.txt"
   git -C "$wdir" add g.txt
   git -C "$wdir" commit -q -m "worker commit"

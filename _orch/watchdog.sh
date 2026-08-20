@@ -86,7 +86,7 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 # (e.g. hermetic test repos with no remote at all).
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   local proj="$1" id="$2" wdir base
-  wdir="$proj/../wt/$id"
+  wdir="$(worker_wdir "$proj" "$id")"
   [ -d "$wdir" ] || { echo 0; return 1; }
   if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
     base="origin/main"
