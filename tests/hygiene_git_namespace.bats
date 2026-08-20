@@ -31,11 +31,18 @@ EOF
 
   PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
   mkdir -p "$PROJECT_ROOT"
-  git -C "$PROJECT_ROOT" init -q
+  git -C "$PROJECT_ROOT" init -q -b main
   git -C "$PROJECT_ROOT" config user.email t@example.com
   git -C "$PROJECT_ROOT" config user.name t
   echo hi > "$PROJECT_ROOT/f.txt"
-  git -C "$PROJECT_ROOT" add f.txt
+  # install.sh normally gitignores this in every real target repo (issue #43);
+  # without it, spawn.sh's own settings.local.json write into the worktree
+  # makes worktree_matches_expected's "is it clean" check see a dirty tree,
+  # which only stayed hidden on machines with a coincidental global
+  # `.claude/` exclude -- match real usage so respawn-reuse tests are
+  # environment-independent.
+  echo '.claude/settings.local.json' > "$PROJECT_ROOT/.gitignore"
+  git -C "$PROJECT_ROOT" add f.txt .gitignore
   git -C "$PROJECT_ROOT" commit -q -m init
   export PROJECT_ROOT
 }
