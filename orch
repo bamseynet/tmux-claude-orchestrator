@@ -259,11 +259,13 @@ orch — tmux + Claude Code orchestrator
                                      finish answering, and print its reply
                                      (request/response; see ORCH_ASK_TIMEOUT
                                      and ORCH_ASK_LINES to tune the wait/output)
-  ./orch clean <id>                  retire ONE worker: its tmux window, worktree
+  ./orch clean <id> [--sweep-legacy] retire ONE worker: its tmux window, worktree
                                      ../wt/<hash>/<id>, branch orch/<hash>/<id>
                                      (<hash> namespaces the git layer per orch
                                      install, issue #86), status file and
-                                     watchdog scratch (idempotent)
+                                     watchdog scratch (idempotent). --sweep-legacy
+                                     also removes a pre-#86 ../wt/<id>/orch/<id>
+                                     leftover for this id (opt-in: see clean.sh)
   ./orch kill  <id>                  alias for clean
   ./orch prune                       reap ALL terminal (done/spawn-failed)
                                      workers right now, ignoring retention —

@@ -86,7 +86,12 @@ _orch_session_hash() { # <string> -> 8 hex chars, stable across shells/platforms
 # hand it the first install's worktree and branch. Key the worktree path and branch
 # name on the same per-ORCH_ROOT hash used for SESSION_NAME above, so two installs
 # never collide on the git layer by accident, same as #81 did for the tmux session.
-ORCH_HASH="$(_orch_session_hash "$ORCH_ROOT")"
+# Normalize a trailing slash before hashing (ORCH_ROOT=/foo/bar/ vs /foo/bar must
+# not silently fork the git namespace) and allow an explicit ORCH_HASH override —
+# a manual recovery escape hatch if ORCH_ROOT's resolved form ever changes out from
+# under an install (moved, re-symlinked) and stranded worktrees/branches under the
+# old hash; same override precedent as SESSION_NAME above.
+: "${ORCH_HASH:=$(_orch_session_hash "${ORCH_ROOT%/}")}"
 
 worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
   printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"
@@ -111,17 +116,23 @@ legacy_worker_branch() { printf 'orch/%s' "$1"; }        # <id>
 # `git status` and can't break the "is this worktree clean" reuse check below. A
 # foreign install can then tell it does not own a path it's about to touch and
 # refuse loudly instead of silently adopting it.
-_worktree_owner_file() { # <wdir> -> admin-dir path, empty/nonzero if not a worktree
+_worktree_owner_file() { # <wdir> -> admin-dir path, empty/nonzero if not a LINKED worktree
   local gd
   gd="$(git -C "$1" rev-parse --git-dir 2>/dev/null)" || return 1
   case "$gd" in /*) ;; *) gd="$1/$gd" ;; esac
+  # A linked worktree's private git-dir always lives under <main-repo>/.git/worktrees/
+  # <name>/. Anything else (the main working tree itself, or some OTHER path that
+  # simply happens to sit inside a git repo, e.g. a stray dir under an enclosing
+  # dotfiles/monorepo checkout) is not a worktree admin dir -- refuse it rather than
+  # writing/reading an owner file that would actually belong to the enclosing repo.
+  case "$gd" in */worktrees/*) ;; *) return 1 ;; esac
   printf '%s/orch-owner' "$gd"
 }
 
 stamp_worktree_owner() { # <wdir> -- record this install as the owner
   local f
   f="$(_worktree_owner_file "$1")" || return 1
-  printf '%s\n' "$ORCH_ROOT" > "$f"
+  printf '%s\n' "$ORCH_ROOT" > "$f" || { log "stamp_worktree_owner: failed to write $f"; return 1; }
 }
 
 worktree_owner() { # <wdir> -> prints the owning ORCH_ROOT, empty if unmarked
@@ -503,7 +514,7 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
 # worktree/branch is a no-op, not an error.
 prune_dead_worktree() { # <project_root> <id>
   local proj="$1" id="$2"
-  local wdir branch
+  local wdir branch owned_by_other=0
   wdir="$(worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
   if [ -d "$wdir" ]; then
@@ -511,7 +522,11 @@ prune_dead_worktree() { # <project_root> <id>
     # this should be unreachable in practice, but a dead-worker sweep is automatic
     # (no operator in the loop), so it gets the same foreign-ownership guard as
     # spawn.sh rather than trusting the path is ours just because it looks right.
+    # The guard covers the branch delete below too (not just the worktree itself):
+    # `worktree prune` right after can un-register a foreign worktree, which would
+    # otherwise let git's own "branch checked out elsewhere" refusal be bypassed.
     if worktree_owned_by_other "$wdir"; then
+      owned_by_other=1
       log "prune_dead_worktree: refusing to touch $wdir for $id — owned by a different orch install ($(worktree_owner "$wdir"))"
     else
       git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
@@ -519,7 +534,7 @@ prune_dead_worktree() { # <project_root> <id>
     fi
   fi
   git -C "$proj" worktree prune >/dev/null 2>&1 || true
-  if git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
+  if [ "$owned_by_other" -eq 0 ] && git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$proj" branch -D "$branch" >/dev/null 2>&1 || true
     log "prune_dead_worktree: deleted branch $branch for dead worker $id"
   fi

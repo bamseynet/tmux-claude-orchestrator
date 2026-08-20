@@ -11,8 +11,9 @@
 #       session dies, no Stop hook fires and workers/<id>.json stays "working"
 #       forever, so the task is silently lost. Detect a status file that still says
 #       "spawning"/"working" but has NO live tmux window, mark it "dead", notify
-#       the master once, and prune its ../wt/<id> worktree + orch/<id> branch (issue
-#       #37) so the path frees up for a respawn without waiting on `orch clean`.
+#       the master once, and prune its ../wt/<hash>/<id> worktree + orch/<hash>/<id>
+#       branch (issue #37; namespaced per-install since #86) so the path frees up
+#       for a respawn without waiting on `orch clean`.
 #       Unlike (1)/(2) this iterates STATUS FILES (the window is gone, so a window
 #       sweep would never see it).
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,6 +88,9 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   local proj="$1" id="$2" wdir base
   wdir="$(worker_wdir "$proj" "$id")"
+  # Back-compat (issue #86): a worker spawned before this install upgraded to
+  # the namespaced layout still lives at the pre-#86 ../wt/<id> worktree.
+  [ -d "$wdir" ] || wdir="$(legacy_worker_wdir "$proj" "$id")"
   [ -d "$wdir" ] || { echo 0; return 1; }
   if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
     base="origin/main"

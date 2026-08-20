@@ -110,6 +110,13 @@ mkbranch() { # <id>
   [[ "$output" == *"does not exist"* ]]
 }
 
+@test "merge.sh falls back to the legacy orch/<id> branch when the namespaced one doesn't exist (issue #86 back-compat)" {
+  git -C "$PROJECT_ROOT" branch "orch/w0legacy" main >/dev/null
+  run "$MERGE" w0legacy
+  [ "$status" -eq 0 ]
+  grep -q "push -u origin orch/w0legacy" "$GIT_LOG"
+}
+
 @test "merge.sh without --auto only pushes + opens a PR, never merges" {
   mkbranch w1
   run "$MERGE" w1

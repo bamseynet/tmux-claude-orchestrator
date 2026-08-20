@@ -35,6 +35,15 @@ done
 
 proj="${PROJECT_ROOT:-$(pwd)}"
 branch="$(worker_branch "$id")"
+# Back-compat (issue #86): fall back to the pre-#86 orch/<id> branch for a
+# worker spawned before this install upgraded to the namespaced layout, so an
+# in-flight worker's PR can still be pushed/merged across the upgrade.
+if ! git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
+  legacy_branch="$(legacy_worker_branch "$id")"
+  if git -C "$proj" show-ref --verify --quiet "refs/heads/$legacy_branch"; then
+    branch="$legacy_branch"
+  fi
+fi
 
 # merge.auto in config.json lets an operator opt the whole toolkit into
 # auto-merge without repeating --auto on every invocation; the CLI flag always
