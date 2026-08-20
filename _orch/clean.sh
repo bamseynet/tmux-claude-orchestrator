@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-# _orch/clean.sh <id> — retire a SINGLE worker and every artifact it leaks.
-# Removes, in order: the tmux window, the git worktree at ../wt/<id>, the branch
-# orch/<id>, the status file workers/<id>.json, the watchdog scratch .wd-<id>, and
-# (issue #43) the --no-worktree worker's private settings file settings/<id>.json.
+# _orch/clean.sh <id> [--sweep-legacy] — retire a SINGLE worker and every
+# artifact it leaks. Removes, in order: the tmux window, the git worktree at
+# ../wt/<hash>/<id>, the branch orch/<hash>/<id> (issue #86: <hash> namespaces
+# the git layer per orch install), the status file workers/<id>.json, the
+# watchdog scratch .wd-<id>, and (issue #43) the --no-worktree worker's
+# private settings file settings/<id>.json.
+#
+# --sweep-legacy (issue #86 migration): ALSO remove the pre-#86, un-namespaced
+# ../wt/<id> worktree and orch/<id> branch for the same id, if present. Off by
+# default and opt-in only: an un-namespaced worktree carries no ownership
+# marker (the feature predates it), so unlike the namespaced path above this
+# install cannot tell whether it or a DIFFERENT, not-yet-upgraded orch install
+# targeting the same repo created it. Auto-sweeping it would reintroduce the
+# exact cross-install destruction #86 fixes, just against legacy artifacts, in
+# a mixed-version rollout where one install has upgraded past this change and
+# another (still on old spawn.sh) is actively using the legacy layout for a
+# live worker with the same id. Pass --sweep-legacy only once you know every
+# install touching this repo has upgraded, or you've confirmed by hand that
+# the legacy worktree is actually stale.
 #
 # Idempotent by design: each step is guarded, so a missing session, window,
 # worktree, branch, or file is a no-op rather than an error. This is what lets a
@@ -12,10 +27,34 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
 source "$here/lib.sh"
 
-id="${1:?usage: clean.sh <id>}"
+id=""
+sweep_legacy=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sweep-legacy) sweep_legacy=1; shift ;;
+    *)
+      if [ -z "$id" ]; then id="$1"; shift; else echo "clean: unexpected arg: $1" >&2; exit 1; fi
+      ;;
+  esac
+done
+[ -n "$id" ] || { echo "usage: clean.sh <id> [--sweep-legacy]" >&2; exit 1; }
+
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
-wdir="$proj/../wt/$id"   # spawn.sh worktree layout: $PROJECT_ROOT/../wt/<id>
+wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)
+branch="$(worker_branch "$id")"
+legacy_wdir="$(legacy_worker_wdir "$proj" "$id")"     # pre-#86 layout, see above
+legacy_branch="$(legacy_worker_branch "$id")"
+
+# 0) Refuse up front, before touching ANYTHING, if the worktree belongs to a
+# different orch install (issue #86) — checked first so a refusal is a true
+# no-op (all-or-nothing) rather than leaving the tmux window already killed
+# while the worktree/branch/status file survive in a half-torn-down state.
+if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
+  echo "clean $id: refusing to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))" >&2
+  log "clean $id: refused to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))"
+  exit 1
+fi
 
 # 1) tmux window (only if the session exists and holds a window with this name)
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
@@ -29,13 +68,32 @@ fi
 if [ -d "$wdir" ]; then
   git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
   log "clean $id: removed worktree $wdir"
+  # This install's own namespace dir ($proj/../wt/<hash>) is otherwise never
+  # cleaned up once the last worker under it is retired.
+  rmdir "$(dirname "$wdir")" 2>/dev/null || true
+fi
+# Back-compat (issue #86): the pre-namespacing ../wt/<id> layout is swept ONLY
+# on explicit --sweep-legacy (see the header comment above for why this is not
+# automatic). Without the flag, just tell the operator it's there.
+if [ -d "$legacy_wdir" ]; then
+  if [ "$sweep_legacy" -eq 1 ]; then
+    git -C "$proj" worktree remove --force "$legacy_wdir" >/dev/null 2>&1 || rm -rf "$legacy_wdir"
+    log "clean $id: removed legacy worktree $legacy_wdir (--sweep-legacy)"
+  else
+    echo "clean $id: leaving pre-#86 legacy worktree $legacy_wdir in place (pass --sweep-legacy to remove it, once you're sure no other un-upgraded orch install owns it)" >&2
+    log "clean $id: found legacy worktree $legacy_wdir, not removed (no --sweep-legacy)"
+  fi
 fi
 git -C "$proj" worktree prune >/dev/null 2>&1 || true
 
-# 3) branch orch/<id>
-if git -C "$proj" show-ref --verify --quiet "refs/heads/orch/$id"; then
-  git -C "$proj" branch -D "orch/$id" >/dev/null 2>&1 || true
-  log "clean $id: deleted branch orch/$id"
+# 3) branch (current always; legacy only with --sweep-legacy, see above)
+if git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
+  git -C "$proj" branch -D "$branch" >/dev/null 2>&1 || true
+  log "clean $id: deleted branch $branch"
+fi
+if [ "$sweep_legacy" -eq 1 ] && git -C "$proj" show-ref --verify --quiet "refs/heads/$legacy_branch"; then
+  git -C "$proj" branch -D "$legacy_branch" >/dev/null 2>&1 || true
+  log "clean $id: deleted legacy branch $legacy_branch (--sweep-legacy)"
 fi
 
 # 4) status file + 5) watchdog scratch + 6) --no-worktree settings file (issue #43:

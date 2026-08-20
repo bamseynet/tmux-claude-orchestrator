@@ -230,16 +230,32 @@ fi
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
 else
-  wdir="$proj/../wt/$id"
+  # Namespaced per install (issue #86): $proj/../wt/<hash-of-ORCH_ROOT>/<id> on
+  # branch orch/<hash>/<id>, so two orch installs targeting the same repo never
+  # want the same path/branch for the same worker id.
+  wdir="$(worker_wdir "$proj" "$id")"
+  branch="$(worker_branch "$id")"
   # Guard (issue #37): a pre-existing path at $wdir must not be silently reused
   # just because `worktree add` failed on it. Decide deterministically instead:
-  # reuse only if it is verifiably a clean worktree of THIS repo on orch/<id>;
-  # otherwise fail loudly rather than run the worker against an unknown tree.
+  # reuse only if it is verifiably a clean worktree of THIS repo on $branch AND
+  # owned by THIS install (issue #86); otherwise fail loudly rather than run the
+  # worker against an unknown or foreign-owned tree.
   if [ -e "$wdir" ]; then
-    if worktree_matches_expected "$proj" "$wdir" "orch/$id"; then
-      log "worktree add: $wdir already a clean worktree of $proj on orch/$id; reusing"
+    if worktree_owned_by_other "$wdir"; then
+      owner="$(worktree_owner "$wdir")"
+      log "spawn refused for $id: $wdir is owned by a different orch install ($owner)"
+      update_worker_status "$id" '.status="spawn-failed"'
+      sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
+      printf '%s\n' "$sf_line" >> "$INBOX"
+      printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
+      echo "spawn-failed $id: $wdir is owned by a different orch install ($owner), not this one ($ORCH_ROOT)." >&2
+      echo "Use a different id, or clean it up from that install." >&2
+      exit 1
+    elif worktree_matches_expected "$proj" "$wdir" "$branch"; then
+      log "worktree add: $wdir already a clean worktree of $proj on $branch; reusing"
+      stamp_worktree_owner "$wdir" || true
     else
-      log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on orch/$id"
+      log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on $branch"
       update_worker_status "$id" '.status="spawn-failed"'
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
@@ -248,7 +264,7 @@ else
       echo "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! git -C "$proj" worktree add -B "orch/$id" "$wdir" >/dev/null 2>&1; then
+  elif ! git -C "$proj" worktree add -B "$branch" "$wdir" >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
@@ -256,6 +272,8 @@ else
     printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
     echo "spawn-failed $id: git worktree add failed for $wdir" >&2
     exit 1
+  else
+    stamp_worktree_owner "$wdir" || true
   fi
 fi
 # 2) per-worker settings: report hooks -> orchestrator (always), merged with an

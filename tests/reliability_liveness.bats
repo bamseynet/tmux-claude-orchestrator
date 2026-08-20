@@ -117,10 +117,10 @@ mkworker() { # <id> <status>
 }
 
 @test "liveness_check: idle worker with commits ahead emits ready-for-review" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
-  echo more > "$PROJECT_ROOT/../wt/w1/g.txt"
-  git -C "$PROJECT_ROOT/../wt/w1" add g.txt
-  git -C "$PROJECT_ROOT/../wt/w1" commit -q -m "unmerged work"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
+  echo more > "$(worker_wdir "$PROJECT_ROOT" w1)/g.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" add g.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" commit -q -m "unmerged work"
   mkworker w1 needs-input
 
   liveness_check w1 "idle at prompt" 1000
@@ -131,7 +131,7 @@ mkworker() { # <id> <status>
 }
 
 @test "liveness_check: idle worker with a clean branch never emits ready-for-review" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
   mkworker w1 done
 
   liveness_check w1 "idle at prompt" 1000
@@ -141,10 +141,10 @@ mkworker() { # <id> <status>
 }
 
 @test "liveness_check: ready-for-review re-alerts with backoff, not fire-once" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
-  echo more > "$PROJECT_ROOT/../wt/w1/g.txt"
-  git -C "$PROJECT_ROOT/../wt/w1" add g.txt
-  git -C "$PROJECT_ROOT/../wt/w1" commit -q -m "unmerged work"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
+  echo more > "$(worker_wdir "$PROJECT_ROOT" w1)/g.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" add g.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" commit -q -m "unmerged work"
   mkworker w1 done
 
   liveness_check w1 "idle at prompt" 1000
@@ -158,10 +158,10 @@ mkworker() { # <id> <status>
 }
 
 @test "liveness_check: ready-for-review clears once the branch is merged/clean" {
-  git -C "$PROJECT_ROOT" worktree add -q -B "orch/w1" "$PROJECT_ROOT/../wt/w1" >/dev/null
-  echo more > "$PROJECT_ROOT/../wt/w1/g.txt"
-  git -C "$PROJECT_ROOT/../wt/w1" add g.txt
-  git -C "$PROJECT_ROOT/../wt/w1" commit -q -m "unmerged work"
+  git -C "$PROJECT_ROOT" worktree add -q -B "$(worker_branch w1)" "$(worker_wdir "$PROJECT_ROOT" w1)" >/dev/null
+  echo more > "$(worker_wdir "$PROJECT_ROOT" w1)/g.txt"
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" add g.txt
+  git -C "$(worker_wdir "$PROJECT_ROOT" w1)" commit -q -m "unmerged work"
   mkworker w1 done
 
   liveness_check w1 "idle at prompt" 1000
@@ -169,7 +169,7 @@ mkworker() { # <id> <status>
   [ -e "$STATE_DIR/.review-w1" ]
 
   # Fast-forward main to include the worktree's commit -> nothing ahead anymore.
-  git -C "$PROJECT_ROOT" merge -q "orch/w1"
+  git -C "$PROJECT_ROOT" merge -q "$(worker_branch w1)"
   : > "$INBOX"
   liveness_check w1 "idle at prompt" 1400
   [ ! -s "$INBOX" ]

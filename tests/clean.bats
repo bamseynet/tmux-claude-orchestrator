@@ -35,8 +35,9 @@ ORCH_DIR="$BATS_TEST_DIRNAME/../_orch"
   grep -Eq 'worktree remove --force' "$ORCH_DIR/clean.sh"
 }
 
-@test "clean.sh deletes the orch/<id> branch" {
-  grep -Eq 'branch -D "orch/\$id"' "$ORCH_DIR/clean.sh"
+@test "clean.sh deletes the namespaced orch/<hash>/<id> branch (issue #86)" {
+  grep -Fq 'branch="$(worker_branch "$id")"' "$ORCH_DIR/clean.sh"
+  grep -Eq 'branch -D "\$branch"' "$ORCH_DIR/clean.sh"
 }
 
 @test "clean.sh removes the status file and watchdog scratch" {
@@ -87,17 +88,20 @@ EOF
 }
 
 @test "clean.sh tears down every artifact and is idempotent" {
-  # Seed the artifacts a worker 'w1' would leave behind.
+  # Seed the artifacts a worker 'w1' would leave behind. Worktree path/branch
+  # are namespaced per ORCH_ROOT (issue #86); ask lib.sh for the real path
+  # instead of assuming the old bare "../wt/<id>" layout.
+  wdir="$(ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$ORCH_DIR"'/lib.sh"; worker_wdir "'"$PROJECT_ROOT"'" w1')"
   mkdir -p "$ORCH_ROOT/_orch/state/workers"
   echo '{"id":"w1"}' > "$ORCH_ROOT/_orch/state/workers/w1.json"
   echo x > "$ORCH_ROOT/_orch/state/.wd-w1"
-  mkdir -p "$PROJECT_ROOT/../wt/w1"
+  mkdir -p "$wdir"
 
   run "$ORCH_DIR/clean.sh" w1
   [ "$status" -eq 0 ]
   [ ! -e "$ORCH_ROOT/_orch/state/workers/w1.json" ]
   [ ! -e "$ORCH_ROOT/_orch/state/.wd-w1" ]
-  [ ! -d "$PROJECT_ROOT/../wt/w1" ]
+  [ ! -d "$wdir" ]
 
   # Second run against an already-clean id must still succeed (idempotent).
   run "$ORCH_DIR/clean.sh" w1

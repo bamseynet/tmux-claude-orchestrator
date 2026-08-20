@@ -16,6 +16,11 @@
 
 SPAWN="$BATS_TEST_DIRNAME/../_orch/spawn.sh"
 CLEAN="$BATS_TEST_DIRNAME/../_orch/clean.sh"
+LIB="$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+worker_wdir_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_wdir "'"$PROJECT_ROOT"'" "'"$1"'"'
+}
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -93,7 +98,7 @@ JSON
 @test "worktree-mode spawns are unaffected: hooks still land in the worktree's own .claude/settings.local.json" {
   run "$SPAWN" a5 sonnet "do the thing"
   [ "$status" -eq 0 ]
-  [ -f "$PROJECT_ROOT/../wt/a5/.claude/settings.local.json" ]
+  [ -f "$(worker_wdir_for a5)/.claude/settings.local.json" ]
   [ ! -e "$ORCH_ROOT/_orch/state/settings/a5.json" ]
 }
 

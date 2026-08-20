@@ -11,6 +11,11 @@
 # exercised for real.
 
 SPAWN="$BATS_TEST_DIRNAME/../_orch/spawn.sh"
+LIB="$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+worker_branch_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_branch "'"$1"'"'
+}
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -78,7 +83,7 @@ write_config() { # <target_repo value>
   # the worktree must be registered against the CONFIGURED target repo, not cwd.
   run git -C "$TARGET" worktree list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"orch/w2"* ]]
+  [[ "$output" == *"$(worker_branch_for w2)"* ]]
 
   run git -C "$OTHERCWD" rev-parse --show-toplevel
   [ "$status" -ne 0 ]
@@ -126,7 +131,7 @@ write_config() { # <target_repo value>
   [ "$status" -eq 0 ]
 
   run git -C "$TARGET" worktree list
-  [[ "$output" == *"orch/w5"* ]]
+  [[ "$output" == *"$(worker_branch_for w5)"* ]]
   run git -C "$other_target" worktree list
-  [[ "$output" != *"orch/w5"* ]]
+  [[ "$output" != *"$(worker_branch_for w5)"* ]]
 }

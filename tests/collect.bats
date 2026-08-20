@@ -6,6 +6,15 @@
 # are real, not stubbed; no tmux window and no `claude` process is ever launched.
 
 COLLECT="$BATS_TEST_DIRNAME/../_orch/collect.sh"
+LIB="$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+# Issue #86: the branch collect.sh diffs against is namespaced per ORCH_ROOT.
+worker_branch_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_branch "'"$1"'"'
+}
+worker_wdir_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_wdir "'"$PROJECT_ROOT"'" "'"$1"'"'
+}
 
 setup() {
   export ORCH_ROOT="$BATS_TEST_TMPDIR/root"
@@ -26,10 +35,13 @@ mkworker() { # <id> <json>
 }
 
 mkbranch() { # <id> <file-content>
-  git -C "$PROJECT_ROOT" branch "orch/$1" main >/dev/null
-  git -C "$PROJECT_ROOT" worktree add -q "$PROJECT_ROOT/../wt/$1" "orch/$1" >/dev/null
-  echo "$2" >> "$PROJECT_ROOT/../wt/$1/f.txt"
-  git -C "$PROJECT_ROOT/../wt/$1" commit -q -am "work on $1"
+  local branch wdir
+  branch="$(worker_branch_for "$1")"
+  wdir="$(worker_wdir_for "$1")"
+  git -C "$PROJECT_ROOT" branch "$branch" main >/dev/null
+  git -C "$PROJECT_ROOT" worktree add -q "$wdir" "$branch" >/dev/null
+  echo "$2" >> "$wdir/f.txt"
+  git -C "$wdir" commit -q -am "work on $1"
 }
 
 @test "collect.sh emits diff + status for an existing branch and worker" {
@@ -41,7 +53,7 @@ mkbranch() { # <id> <file-content>
   json="$output"
 
   run jq -r '.id' <<< "$json"; [ "$output" = "w1" ]
-  run jq -r '.branch' <<< "$json"; [ "$output" = "orch/w1" ]
+  run jq -r '.branch' <<< "$json"; [ "$output" = "$(worker_branch_for w1)" ]
   run jq -r '.base' <<< "$json"; [ "$output" = "main" ]
   run jq -r '.branch_exists' <<< "$json"; [ "$output" = "true" ]
   run jq -r '.status.status' <<< "$json"; [ "$output" = "done" ]

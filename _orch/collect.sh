@@ -21,7 +21,17 @@ done
 [ -n "$id" ] || { echo "usage: collect.sh <id> [--base <branch>]" >&2; exit 1; }
 
 proj="${PROJECT_ROOT:-$(pwd)}"
-branch="orch/$id"
+branch="$(worker_branch "$id")"
+# Back-compat (issue #86): a worker spawned before this install upgraded past
+# the namespaced layout lives on the pre-#86 branch orch/<id>. Read-only
+# fallback so an in-flight worker doesn't just vanish from collect.sh across
+# an upgrade — only spawn.sh ever WRITES to the namespaced layout.
+if ! git -C "$proj" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; then
+  legacy_branch="$(legacy_worker_branch "$id")"
+  if git -C "$proj" rev-parse --verify --quiet "refs/heads/$legacy_branch" >/dev/null 2>&1; then
+    branch="$legacy_branch"
+  fi
+fi
 status_file="$WORKERS_DIR/$id.json"
 
 if [ -f "$status_file" ] && jq -e . "$status_file" >/dev/null 2>&1; then

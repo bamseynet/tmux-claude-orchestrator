@@ -88,12 +88,13 @@ mkworker() { # <id> <status> <updated-epoch>
 # --- reap_terminal_workers: behavioural, stubbed tmux + git ---------------------
 
 @test "reap_terminal_workers removes a done worker past retention" {
-  mkdir -p "$PROJECT_ROOT/../wt/w1"
+  wdir="$(worker_wdir "$PROJECT_ROOT" w1)"
+  mkdir -p "$wdir"
   mkworker w1 done 1000
 
   reap_terminal_workers 500 "" 2000
   [ ! -e "$WORKERS_DIR/w1.json" ]
-  [ ! -d "$PROJECT_ROOT/../wt/w1" ]
+  [ ! -d "$wdir" ]
 }
 
 @test "reap_terminal_workers leaves a done worker within retention untouched" {

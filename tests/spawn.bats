@@ -10,6 +10,14 @@
 # worktree, or `claude` process is ever launched — fully offline in CI.
 
 SPAWN="$BATS_TEST_DIRNAME/../_orch/spawn.sh"
+LIB="$BATS_TEST_DIRNAME/../_orch/lib.sh"
+
+# Issue #86: worktree paths/branches are namespaced per ORCH_ROOT, so tests must
+# compute the expected path/branch the same way lib.sh does instead of assuming
+# the old bare "../wt/<id>" / "orch/<id>" layout.
+worker_wdir_for() { # <id>
+  ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$LIB"'"; worker_wdir "'"$PROJECT_ROOT"'" "'"$1"'"'
+}
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -159,7 +167,7 @@ JSON
   # ../wt/w3 worktree, and not the shared project root either (issue #43).
   [ -f "$ORCH_ROOT/_orch/state/settings/w3.json" ]
   [ ! -f "$PROJECT_ROOT/.claude/settings.local.json" ]
-  [ ! -d "$PROJECT_ROOT/../wt/w3" ]
+  [ ! -d "$(worker_wdir_for w3)" ]
   grep -Fq 'resume requested -> forcing --no-worktree' "$ORCH_ROOT/_orch/state/orch.log"
 }
 
@@ -171,7 +179,7 @@ JSON
 @test "spawn.sh --continue also forces --no-worktree (it sets the resume flag too)" {
   run "$SPAWN" w4 sonnet "do the thing" --continue
   [ "$status" -eq 0 ]
-  [ ! -d "$PROJECT_ROOT/../wt/w4" ]
+  [ ! -d "$(worker_wdir_for w4)" ]
   grep -Fq 'resume requested -> forcing --no-worktree' "$ORCH_ROOT/_orch/state/orch.log"
 }
 
@@ -208,15 +216,15 @@ EOF
   [[ "$output" == *"spawned w7 (sonnet)"* ]]
   run jq -r .status "$ORCH_ROOT/_orch/state/workers/w7.json"
   [ "$output" = "working" ]
-  [ -d "$PROJECT_ROOT/../wt/w7" ]
-  [ -f "$PROJECT_ROOT/../wt/w7/.claude/settings.local.json" ]
+  [ -d "$(worker_wdir_for w7)" ]
+  [ -f "$(worker_wdir_for w7)/.claude/settings.local.json" ]
 }
 
 @test "smoke: spawn.sh end-to-end with --allow \"git,jq\" wraps rules in the worktree settings file (issue #78)" {
   run "$SPAWN" w7b sonnet "do the thing" --allow "git,jq"
   [ "$status" -eq 0 ]
   [[ "$output" == *"spawned w7b (sonnet)"* ]]
-  settings="$PROJECT_ROOT/../wt/w7b/.claude/settings.local.json"
+  settings="$(worker_wdir_for w7b)/.claude/settings.local.json"
   [ -f "$settings" ]
   run jq -c '.permissions.allow' "$settings"
   [ "$output" = '["Bash(git:*)","Bash(jq:*)"]' ]
@@ -230,5 +238,5 @@ EOF
   [[ "$output" == *"spawn queued: w8"* ]]
   run jq -r .status "$ORCH_ROOT/_orch/state/workers/w8.json"
   [ "$output" = "queued" ]
-  [ ! -d "$PROJECT_ROOT/../wt/w8" ]
+  [ ! -d "$(worker_wdir_for w8)" ]
 }

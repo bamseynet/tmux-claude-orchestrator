@@ -99,13 +99,22 @@ JSON
 }
 
 mkbranch() { # <id>
-  git -C "$PROJECT_ROOT" branch "orch/$1" main >/dev/null
+  local branch
+  branch="$(ORCH_ROOT="$ORCH_ROOT" bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_branch "'"$1"'"')"
+  git -C "$PROJECT_ROOT" branch "$branch" main >/dev/null
 }
 
 @test "merge.sh fails for a nonexistent branch" {
   run "$MERGE" nope
   [ "$status" -ne 0 ]
   [[ "$output" == *"does not exist"* ]]
+}
+
+@test "merge.sh falls back to the legacy orch/<id> branch when the namespaced one doesn't exist (issue #86 back-compat)" {
+  git -C "$PROJECT_ROOT" branch "orch/w0legacy" main >/dev/null
+  run "$MERGE" w0legacy
+  [ "$status" -eq 0 ]
+  grep -q "push -u origin orch/w0legacy" "$GIT_LOG"
 }
 
 @test "merge.sh without --auto only pushes + opens a PR, never merges" {
