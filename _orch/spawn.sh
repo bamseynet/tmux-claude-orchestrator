@@ -281,10 +281,14 @@ fi
 
 # --allow entries are translated into valid permissions.allow tool rules (issue #78):
 # Claude Code wants `ToolName` or `ToolName(specifier)` (capitalised), not bare command
-# names — an entry already shaped like a tool rule (starts uppercase, optionally with
-# "(...)") passes through untouched so --preset bundles and hand-written rules like
+# names — an entry already shaped like a tool rule (canonical `Name` or `Name(...)`)
+# passes through untouched so --preset bundles and hand-written rules like
 # `Bash(git diff:*)` keep working; a bare command (`git`, `gh`, `jq`) is wrapped as
 # `Bash(<cmd>:*)`, which per the Claude Code docs is equivalent to `Bash(<cmd> *)`.
+# MCP tool names are lowercase by convention (`mcp__server__tool`, optionally with
+# a "(...)" specifier) so they fail the capitalised-canonical check on their own;
+# they are special-cased through unwrapped rather than being wrapped as a
+# (nonexistent) shell command, which silently dropped the permission (issue #84).
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   {
     hooks: {
@@ -296,7 +300,8 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   + (if $allow == "" then {}
      else {permissions: {allow: ($allow | split(",") | map(gsub("^\\s+|\\s+$"; ""))
        | map(select(length > 0))
-       | map(if test("^[A-Z]") then . else "Bash(\(.):*)" end))}}
+       | map(if test("^([A-Z][A-Za-z0-9]*)(\\(.*\\))?$") or test("^mcp__")
+             then . else "Bash(\(.):*)" end))}}
      end)
 ' > "$settings_file"
 

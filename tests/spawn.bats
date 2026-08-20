@@ -91,6 +91,36 @@ JSON
   [ "$output" = '["Bash(git diff:*)","WebSearch","WebFetch(domain:example.com)","Read"]' ]
 }
 
+@test "spawn.sh passes lowercase mcp__ tool names through unwrapped (issue #84)" {
+  run "$SPAWN" w1e sonnet "do the thing" --no-worktree \
+    --allow "mcp__playwright__browser_click, git"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1e.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["mcp__playwright__browser_click","Bash(git:*)"]' ]
+}
+
+@test "spawn.sh passes mcp__ tool names with an args specifier through unwrapped (issue #84)" {
+  run "$SPAWN" w1f sonnet "do the thing" --no-worktree \
+    --allow 'mcp__playwright__browser_click(selector:*)'
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1f.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["mcp__playwright__browser_click(selector:*)"]' ]
+}
+
+@test "spawn.sh wraps a lowercase non-mcp entry as a shell command (issue #84)" {
+  # A lowercase entry that isn't an mcp__ tool and isn't already canonical is
+  # still assumed to be a shell command, e.g. a hypothetical bare "foo" — this
+  # documents that mcp__ is a special-cased prefix, not a blanket "lowercase
+  # means tool name" rule.
+  run "$SPAWN" w1g sonnet "do the thing" --no-worktree --allow "foo"
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1g.json"
+  run jq -c '.permissions.allow' "$settings"
+  [ "$output" = '["Bash(foo:*)"]' ]
+}
+
 @test "spawn.sh --preset combined with a bare-command --allow yields only valid rules (issue #78)" {
   run "$SPAWN" w1d --preset review --no-worktree --allow "gh,bats"
   [ "$status" -eq 0 ]
