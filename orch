@@ -186,6 +186,7 @@ case "$cmd" in
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
+  remote-control) exec "$here/_orch/send-remote-control.sh" "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
   logs)
     state_dir="$ORCH_ROOT/_orch/state"
@@ -313,14 +314,12 @@ orch — tmux + Claude Code orchestrator
   ./orch events                      formatted view of the durable event history
                                      (every done/needs-input/stalled/spawn-failed
                                      event, surviving the inbox's destructive drain)
-
-  ./send-remote-control.sh [--force] [<session:window>]
+  ./orch remote-control [--force] [<session:window>]
                                      type /remote-control into the ORCHESTRATOR's
                                      own pane and submit it (keepalive/reconnect
-                                     nudge). Defaults to \$SESSION_NAME:\$ORCH_WINDOW;
-                                     skips a pane with an unsent draft unless
-                                     --force. Standalone script, not an \`orch\`
-                                     subcommand — run it directly, e.g. from cron.
+                                     nudge, e.g. from cron). Defaults to
+                                     \$SESSION_NAME:\$ORCH_WINDOW; skips a pane with
+                                     an unsent draft unless --force.
 
 Env overrides: SESSION_NAME (default: orch-<hash of this toolkit's resolved root>,
 so two installs in different directories never collide on one tmux session —
