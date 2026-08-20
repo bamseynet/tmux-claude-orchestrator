@@ -16,6 +16,10 @@ setup() {
   WORKERS_DIR="$WORK/toolkit/_orch/state/workers"
   STATE_DIR="$WORK/toolkit/_orch/state"
   export ORCH_ROOT="$WORK/toolkit"
+  # Pin the session name. Since #81, lib.sh defaults it to "orch-<hash of
+  # ORCH_ROOT>", which is a fresh temp dir on every run -- so any assertion
+  # naming the session has to fix it here rather than assume the bare "orch".
+  export SESSION_NAME="orch"
 
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
