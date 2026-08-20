@@ -58,6 +58,11 @@ cd /path/to/your/project
 ./orch down          # stop background loops
 ```
 
+Each toolkit install gets its own tmux session, named `orch-<hash of the toolkit's
+resolved root>` by default — so two installs in different directories never fight
+over the same session or over each other's loops (issue #81). Set `SESSION_NAME`
+to pin a memorable name, e.g. `SESSION_NAME=orch ./orch up`.
+
 ### Resuming a session
 
 By default `spawn` launches a fresh Claude session. To resume prior context instead, pass a

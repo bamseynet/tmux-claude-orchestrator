@@ -61,6 +61,9 @@ target_repo="$(cd "$target_repo" 2>/dev/null && pwd)" || {
 }
 export PROJECT_ROOT="$target_repo"
 
+# Default (issue #81): a per-toolkit-root name (see lib.sh's _orch_session_hash),
+# so two installs never collide on the bare literal "orch". Falls back to the
+# literal "orch" only when lib.sh wasn't sourced above (no sibling _orch/).
 export SESSION_NAME="${SESSION_NAME:-orch}"
 
 cmd="${1:-help}"; shift || true
@@ -132,6 +135,14 @@ case "$cmd" in
       managed="$(managed_by "$id")"
       printf '%-12s %-8s %-12s %-8s %-8s %s\n' "$id" "$model" "$st" "$age" "$managed" "$task"
     done
+
+    # queue depth (issue #79): "a queue nobody can see is a queue nobody
+    # maintains" — surface it here rather than requiring an operator to read
+    # queue.jsonl by hand.
+    queue_file="$here/_orch/state/queue.jsonl"
+    if [ -s "$queue_file" ]; then
+      printf 'queued: %s\n' "$(wc -l < "$queue_file" | tr -d ' ')"
+    fi
     ;;
   collect)      exec "$here/_orch/collect.sh" "$@" ;;
   merge)        exec "$here/_orch/merge.sh" "$@" ;;
@@ -299,7 +310,10 @@ orch — tmux + Claude Code orchestrator
                                      (every done/needs-input/stalled/spawn-failed
                                      event, surviving the inbox's destructive drain)
 
-Env overrides: SESSION_NAME (default: orch), PROJECT_ROOT (default: cwd)
+Env overrides: SESSION_NAME (default: orch-<hash of this toolkit's resolved root>,
+so two installs in different directories never collide on one tmux session —
+issue #81; set explicitly to pin a memorable name or to intentionally share a
+session), PROJECT_ROOT (default: cwd)
 
 Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGET_REPO
 > .target_repo in _orch/config.json > cwd. Workers' worktrees are always created

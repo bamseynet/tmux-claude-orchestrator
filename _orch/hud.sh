@@ -54,4 +54,10 @@ if [ -f "$here/config.json" ]; then
   fi
 fi
 
-printf '%s' "${budget_out}${out}"
+# Queue depth (issue #79): a queue nobody can see is a queue nobody maintains.
+queue_out=""
+if [ -s "${QUEUE:-}" ]; then
+  queue_out="#[fg=cyan]q:$(wc -l < "$QUEUE" | tr -d ' ')#[default] "
+fi
+
+printf '%s' "${budget_out}${queue_out}${out}"
