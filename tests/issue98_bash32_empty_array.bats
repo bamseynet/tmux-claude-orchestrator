@@ -21,13 +21,12 @@
 # `set -- "${bootstrap_args[@]}"`, passes against
 # `set -- ${bootstrap_args[@]+"${bootstrap_args[@]}"}`.
 
-# Pinned by digest so this test and the .github/workflows/ci.yml `bash32` job
-# can never silently drift onto different bash-3.2 builds -- keep these in
-# sync if either one is repinned.
-BASH32_IMAGE="bash@sha256:3a13e5da38baa575985778cd09ce8ac736d4b4dafc91a430e71271f6e5311b89" # bash:3.2, alpine 3.22.5
-
 setup() {
   ORCH_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+  # Single source of truth for the pinned digest, shared with the
+  # .github/workflows/ci.yml `bash32` job -- both read this file so they
+  # can never silently drift onto different bash-3.2 builds.
+  BASH32_IMAGE="$(cat "$BATS_TEST_DIRNAME/bash32-image.txt")"
   if ! command -v docker >/dev/null 2>&1; then
     skip "docker not available -- cannot exercise real bash 3.2 semantics"
   fi

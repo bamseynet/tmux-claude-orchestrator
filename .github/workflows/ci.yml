@@ -119,20 +119,27 @@ jobs:
           # the same mechanism #99's regression test (tests/issue98_*.bats)
           # already proved fast (~15s) and reliable on this runner.
           #
-          # Pinned by digest (mirrors the actionlint/bats pinning style below).
-          # `docker run --rm` with no daemon args can only hang as long as the
-          # command inside it hangs -- wrap in `timeout` as a backstop: today
-          # the smoke always dies at the `claude` dependency check, but if
-          # this container ever grows more deps, `orch up` would reach
-          # `tmux new-session` and could otherwise hang to the job default.
+          # Pinned by digest, read from tests/bash32-image.txt -- the single
+          # source of truth shared with tests/issue98_bash32_empty_array.bats,
+          # so the two can't silently drift onto different bash-3.2 builds.
           # bash:3.2 == bash 3.2.57(1)-release on Alpine 3.22.5 (musl) -- the
           # only bash:3.2 tag Docker Hub publishes (no Debian/glibc variant).
+          BASH32_IMAGE="$(cat tests/bash32-image.txt)"
+          #
+          # Bounded by `timeout -k 10 120`, not a bare `timeout`: plain
+          # `timeout` only sends SIGTERM, which `docker run` (attached, no -d)
+          # does not act on promptly -- verified locally, `timeout 3 docker
+          # run ... sleep 30` still ran the full 30s. `-k 10` follows up with
+          # SIGKILL after a 10s grace period, which does reliably stop it
+          # (verified: killed at ~8s). `timeout-minutes: 5` on the job above
+          # is a second, independent backstop in case this step-level one is
+          # ever removed or miscopied elsewhere.
           #
           # The -c '...' body below is deliberately single-quoted: it's a
           # literal script for the CONTAINER's bash to expand, not this shell.
           # shellcheck disable=SC2016
-          timeout 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
-            bash@sha256:3a13e5da38baa575985778cd09ce8ac736d4b4dafc91a430e71271f6e5311b89 \
+          timeout -k 10 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
+            "$BASH32_IMAGE" \
             -c '
               set -u
               apk add --no-cache bash git tmux jq perl >/dev/null 2>&1
@@ -141,9 +148,14 @@ jobs:
               fail=0
 
               echo "== bash -n syntax check under real bash 3.2 (every tracked script) =="
-              # Catches bash4+-only *syntax* repo-wide: ${var^^}/${var,,},
-              # declare -A, etc. Cheap parse-time check, not just this repos
-              # entrypoint scripts.
+              # Catches genuine PARSE errors under real 3.2, repo-wide, and
+              # ONLY those: constructs bash 3.2s grammar itself rejects, e.g.
+              # &>>, |&, coproc, ;;& (all verified locally: bash -n exits
+              # non-zero on each). It does NOT catch declare -A, ${var^^}, or
+              # ${var,,} -- those parse FINE on 3.2 (bash -n exits 0) and only
+              # fail at runtime, so they are invisible to this layer. Cheap,
+              # and covers every tracked script, not just the entrypoints the
+              # runtime smoke below exercises.
               scripts="$(git ls-files "*.sh"; echo orch)"
               for f in $scripts; do
                 [ -f "$f" ] || continue
@@ -160,6 +172,24 @@ jobs:
               # for bash-version-specific failure signatures rather than
               # exit code (a missing `claude`/`jq` dependency in this bare
               # container also exits non-zero, and is expected).
+              #
+              # What this layer catches: FATAL runtime failures (unbound-var
+              # expansions, declare -A, mapfile/readarray, bad substitutions,
+              # etc.) on the orch up path specifically. Under every _orch/*.sh
+              # scripts `set -euo pipefail`, a failing declare -A DOES abort
+              # the script (verified locally) -- it is not silently swallowed
+              # if it sits on this path.
+              #
+              # What it does NOT catch: (a) COVERAGE -- spawn.sh, send.sh,
+              # merge.sh, watchdog.sh, and every other _orch/*.sh entrypoint
+              # this smoke never invokes could carry any of these constructs
+              # and ship green; bash -n above only catches the parse-error
+              # subset of that gap, not the runtime-error subset. (b) NON-
+              # FATAL divergences anywhere, even on this path: a `... || true`
+              # or a discarded subshell exit status swallows the failure, so
+              # the command runs wrong on 3.2 and the smoke stays green. A
+              # green tick here means "no known crash class on orch up," not
+              # "this codebase behaves identically on bash 3.2."
               #
               # A "no failure signature seen" check alone is vacuous: it also
               # passes if the script dies BEFORE reaching line 80 for an
