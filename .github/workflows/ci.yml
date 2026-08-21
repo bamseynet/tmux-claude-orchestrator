@@ -104,6 +104,7 @@ jobs:
   bash32:
     name: bash 3.2 compatibility smoke (macOS /bin/bash)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -119,7 +120,18 @@ jobs:
           # already proved fast (~15s) and reliable on this runner.
           #
           # Pinned by digest (mirrors the actionlint/bats pinning style below).
-          docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
+          # `docker run --rm` with no daemon args can only hang as long as the
+          # command inside it hangs -- wrap in `timeout` as a backstop: today
+          # the smoke always dies at the `claude` dependency check, but if
+          # this container ever grows more deps, `orch up` would reach
+          # `tmux new-session` and could otherwise hang to the job default.
+          # bash:3.2 == bash 3.2.57(1)-release on Alpine 3.22.5 (musl) -- the
+          # only bash:3.2 tag Docker Hub publishes (no Debian/glibc variant).
+          #
+          # The -c '...' body below is deliberately single-quoted: it's a
+          # literal script for the CONTAINER's bash to expand, not this shell.
+          # shellcheck disable=SC2016
+          timeout 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
             bash@sha256:3a13e5da38baa575985778cd09ce8ac736d4b4dafc91a430e71271f6e5311b89 \
             -c '
               set -u
@@ -167,7 +179,7 @@ jobs:
               check_smoke() {
                 desc="$1"; shift
                 out="$(set -x; export SHELLOPTS; "$@" 2>&1)" || true
-                if printf "%s" "$out" | grep -Eq "unbound variable|bad substitution|bad array subscript|declare: usage|declare:.*invalid option|bash: mapfile: command not found|bash: readarray: command not found|syntax error near unexpected token"; then
+                if printf "%s" "$out" | grep -Eq "unbound variable|bad substitution|bad array subscript|declare: usage|declare:.*invalid option|mapfile: command not found|readarray: command not found|syntax error near unexpected token"; then
                   echo "BASH-3.2 INCOMPATIBILITY in: $desc"
                   printf "%s\n" "$out"
                   fail=1

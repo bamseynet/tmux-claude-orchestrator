@@ -21,12 +21,17 @@
 # `set -- "${bootstrap_args[@]}"`, passes against
 # `set -- ${bootstrap_args[@]+"${bootstrap_args[@]}"}`.
 
+# Pinned by digest so this test and the .github/workflows/ci.yml `bash32` job
+# can never silently drift onto different bash-3.2 builds -- keep these in
+# sync if either one is repinned.
+BASH32_IMAGE="bash@sha256:3a13e5da38baa575985778cd09ce8ac736d4b4dafc91a430e71271f6e5311b89" # bash:3.2, alpine 3.22.5
+
 setup() {
   ORCH_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   if ! command -v docker >/dev/null 2>&1; then
     skip "docker not available -- cannot exercise real bash 3.2 semantics"
   fi
-  if ! docker image inspect bash:3.2 >/dev/null 2>&1 && ! docker pull bash:3.2 >/dev/null 2>&1; then
+  if ! docker image inspect "$BASH32_IMAGE" >/dev/null 2>&1 && ! docker pull "$BASH32_IMAGE" >/dev/null 2>&1; then
     skip "bash:3.2 docker image unavailable (no network / pull failed)"
   fi
 }
@@ -46,7 +51,7 @@ extract_parse_block() {
   # `--name test` is consumed entirely by the --name case, so bootstrap_args
   # stays empty -- exactly the failure mode from issue #98 (also hit by bare
   # `orch up`, which starts with zero args and never populates the array).
-  run docker run --rm -i bash:3.2 bash -c '
+  run docker run --rm -i "$BASH32_IMAGE" bash -c '
     set -euo pipefail
     '"$block"'
     echo "OK args=$#"
@@ -60,7 +65,7 @@ extract_parse_block() {
 @test "bootstrap.sh's --name arg-parsing block survives zero args (bare 'orch up') under bash 3.2" {
   block="$(extract_parse_block)"
 
-  run docker run --rm -i bash:3.2 bash -c '
+  run docker run --rm -i "$BASH32_IMAGE" bash -c '
     set -euo pipefail
     '"$block"'
     echo "OK args=$#"
