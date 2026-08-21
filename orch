@@ -186,7 +186,11 @@ case "$cmd" in
     # session_exists() (issue #96): `tmux -t "$SESSION_NAME"` alone matches by
     # UNAMBIGUOUS PREFIX, so a bare list-windows here could silently read a
     # DIFFERENT, longer-named live session's windows instead of failing.
-    if ! command -v session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+    # `declare -F`, not `command -v` (issue #98/#99): command -v also matches a
+    # same-named BINARY on PATH, which would make this guard wrongly conclude
+    # session_exists is defined. Same standalone-mode guard style as
+    # require_valid_session_name just above.
+    if ! declare -F session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
       say "no such tmux session: $SESSION_NAME" >&2
       exit 1
     fi
@@ -200,7 +204,8 @@ case "$cmd" in
     command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
     # session_exists() (issue #96): same prefix-match hazard as `tail` above --
     # must not silently attach a human operator to a DIFFERENT live session.
-    if ! command -v session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+    # `declare -F`, not `command -v` (issue #98/#99) -- see `tail` above.
+    if ! declare -F session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
       say "no such tmux session: $SESSION_NAME" >&2
       exit 1
     fi
