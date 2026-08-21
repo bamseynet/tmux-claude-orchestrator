@@ -99,3 +99,54 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"reply text"* ]]
 }
+
+# --- prefix-hijack regressions (issue #96) ----------------------------------
+# Real tmux's `has-session -t <name>` matches an unambiguous PREFIX (confirmed
+# against tmux 3.4), not just an exact name. Model that here (never stricter
+# than real tmux, same convention as hygiene_session_namespace.bats /
+# issue92_named_persistent_sessions.bats / send_remote_control.bats): only
+# "billing" is actually live and holds window "w1"; this install's own session
+# ("bill") is NOT running. A bare `has-session`/`list-windows -t "$S"` would
+# still resolve against "billing" and let ask.sh/tail read or write into a
+# stranger's live pane. session_exists() must refuse instead -- and the
+# assertion checks the actual hijack signal (no capture-pane/load-buffer/
+# paste-buffer call ever reaches "billing"), not a status-code proxy for it.
+stub_tmux_prefix_hijack() {
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+case "\${1:-}" in
+  has-session)
+    [ "\${3:-}" = "billing" ] && exit 0
+    [[ "billing" == "\${3:-}"* ]] && exit 0
+    exit 1
+    ;;
+  list-sessions) echo "billing" ;;
+  list-windows) printf '%s\n' orchestrator w1 ;;
+  capture-pane) echo "> ready for shortcuts" ;;
+  load-buffer) cat >/dev/null ;;
+  paste-buffer) exit 0 ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+}
+
+@test "ask.sh refuses to drive a DIFFERENT live session whose name is a prefix of the target (issue #96)" {
+  stub_tmux_prefix_hijack
+  SESSION_NAME="bill" PATH="$STUBBIN:$PATH" run "$ASK" w1 "hello?"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux session: bill"* ]]
+  ! grep -q '^capture-pane\|^load-buffer\|^paste-buffer' "$CALLS"
+}
+
+@test "orch tail refuses to read a DIFFERENT live session whose name is a prefix of the target (issue #96)" {
+  stub_tmux_prefix_hijack
+  SESSION_NAME="bill" PATH="$STUBBIN:$PATH" run "$ORCH" tail w1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux session: bill"* ]]
+  ! grep -q '^capture-pane' "$CALLS"
+}

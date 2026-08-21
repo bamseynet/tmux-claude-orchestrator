@@ -217,6 +217,38 @@ EOF
   [ ! -s "$GIT_CLONE_LOG" ]
 }
 
+@test "orch update is NOT fooled by a DIFFERENT live session whose name is a prefix of SESSION_NAME (issue #96)" {
+  # Real tmux's `has-session -t <name>` matches an unambiguous PREFIX (confirmed
+  # against tmux 3.4), not just an exact name -- model that here so this stub is
+  # never stricter than real tmux, same convention as
+  # hygiene_session_namespace.bats / issue92_named_persistent_sessions.bats /
+  # send_remote_control.bats. Only "billing" is actually live; this install's
+  # own session ("bill") is NOT. A bare `tmux has-session -t bill` would still
+  # exit 0 (prefix match against "billing") and _update_would_disrupt_live_session
+  # would wrongly refuse to apply, believing THIS install's session is up when it
+  # is really a stranger's. session_exists() must see through the prefix and let
+  # the update proceed.
+  export SESSION_NAME="bill"
+  cat > "$STUBBIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  has-session)
+    [ "${3:-}" = "billing" ] && exit 0
+    [[ "billing" == "${3:-}"* ]] && exit 0
+    exit 1
+    ;;
+  list-sessions) echo "billing" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  GH_VERSION=0.2.0 run "$UPDATE"
+  [ "$status" -eq 0 ]
+  [ -s "$GIT_CLONE_LOG" ]
+  [ "$(cat "$ORCH_ROOT/.orch-version")" = "0.2.0" ]
+}
+
 @test "orch update --force applies despite a live worker" {
   mkdir -p "$ORCH_ROOT/_orch/state/workers"
   echo '{"status":"working"}' > "$ORCH_ROOT/_orch/state/workers/w1.json"
