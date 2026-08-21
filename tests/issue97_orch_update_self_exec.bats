@@ -205,13 +205,27 @@ GHEOF
   [ -d /proc/self/fd ] && has_procfs=1
 
   observed_live_process_holding_old_inode_after_path_swapped=0
+  # Tracked independently of the observation above, purely for diagnosis: did
+  # the on-disk path's inode ever change AT ALL during the poll, regardless of
+  # whether we also caught fd 255 still on the old one at that instant? This
+  # is what turns an ambiguous failure into a self-diagnosing one below -- a
+  # failure to observe splits into two very different causes that must not
+  # read the same: "the swap never happened" (a real atomic-rename
+  # regression, e.g. back to plain `cp`) vs. "the swap happened but our poll
+  # missed the narrow window" (a flake in THIS test, not in install.sh). Both
+  # currently produce the exact same assertion failure message, which is the
+  # worst possible false alarm on this specific check: a flake reads as
+  # "the regression we just fixed a review round ago is back."
+  saw_path_inode_change=0
   if [ "$has_procfs" -eq 1 ]; then
     # No sleep in the loop body: the post-swap window (mv-loop finishes ->
     # process exit) is short, and under load a 1-2ms sleep can overshoot it
     # entirely. A tight busy-poll (stat/kill overhead alone paces it, sub-ms
     # per iteration) maximizes the chance of landing inside that window; the
-    # 0.4s gh sleep above gives plenty of headroom before it even opens.
-    # Capped by wall-clock, not just iteration count, so this can't hang.
+    # 0.4s gh sleep above doesn't protect the observation itself -- it just
+    # guarantees the poller is already running before install.sh starts, so
+    # no fixed-offset sleep is racing the swap. Capped by wall-clock, not
+    # just iteration count, so this can't hang.
     deadline=$(($(date +%s%N) + 3000000000))
     while [ "$(date +%s%N)" -lt "$deadline" ]; do
       kill -0 "$bg_pid" 2>/dev/null || break
@@ -219,10 +233,12 @@ GHEOF
       if [ -r "$fd_target" ]; then
         fd_inode="$(stat -L -c %i "$fd_target" 2>/dev/null || true)"
         cur_path_inode="$(_inode "$update_path" || true)"
-        if [ "$fd_inode" = "$before_update_inode" ] && [ -n "$cur_path_inode" ] \
-           && [ "$cur_path_inode" != "$before_update_inode" ]; then
-          observed_live_process_holding_old_inode_after_path_swapped=1
-          break
+        if [ -n "$cur_path_inode" ] && [ "$cur_path_inode" != "$before_update_inode" ]; then
+          saw_path_inode_change=1
+          if [ "$fd_inode" = "$before_update_inode" ]; then
+            observed_live_process_holding_old_inode_after_path_swapped=1
+            break
+          fi
         fi
       fi
     done
@@ -243,7 +259,14 @@ GHEOF
     # DIFFERENT (new) inode. That is "a running script kept reading its
     # original inode while the on-disk path changed" -- caught live, mid-run,
     # not inferred from the final state afterward.
-    [ "$observed_live_process_holding_old_inode_after_path_swapped" -eq 1 ]
+    if [ "$observed_live_process_holding_old_inode_after_path_swapped" -ne 1 ]; then
+      if [ "$saw_path_inode_change" -eq 1 ]; then
+        echo "MISSED WINDOW (test flake, not a regression): the on-disk path's inode DID change during the poll (install.sh's atomic rename did run), but this poller never caught fd 255 still holding the OLD inode at that exact instant. Re-run; if this recurs often, the poll needs tightening, not install.sh." >&2
+      else
+        echo "REGRESSION SUSPECTED: the on-disk path's inode NEVER changed during the entire poll window -- install.sh's swap loop did not perform an atomic rename (e.g. a regression back to in-place 'cp'). This is the real failure mode this test exists to catch." >&2
+      fi
+      false
+    fi
   else
     skip "no /proc on this platform -- cannot observe another process's live fd table"
   fi
