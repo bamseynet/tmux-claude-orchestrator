@@ -360,6 +360,13 @@ TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
 TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for shortcuts|\? for shortcuts|Context (left|low)|tokens? (saved|left|used))')"
+# Dim/faint SGR attribute (issue #101): Claude Code renders its own
+# suggested-next-prompt ghost text on the input line using ESC[2m; real
+# operator input renders bright (38;5;231 on 48;5;237). Matches the code
+# combined with others in one escape (ESC[0;2m, ESC[2;39m, …) as well as on
+# its own — see pane_has_draft() below for how this is used.
+_dim_esc="$(printf '\x1b')"
+TUI_DIM_ATTR_REGEX="$(_tui_pattern dim_attr_regex "${_dim_esc}"'\[([0-9]+;)*2(;[0-9]+)*m')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -417,7 +424,7 @@ confirm_inject() { # <target> [timeout_s]
   return 1
 }
 
-# --- Master draft guard (issue #38, hardened by #52) --------------------------------
+# --- Master draft guard (issue #38, hardened by #52 and #101) -----------------------
 # An idle input box with an unsent operator draft looks identical to an empty idle
 # input box to is_ready() — both are "not busy, prompt glyph visible". Heartbeat
 # injection must not paste over (and Enter away) a draft the operator is mid-typing.
@@ -435,14 +442,42 @@ confirm_inject() { # <target> [timeout_s]
 # line, a placeholder/hint, or an empty pane — is treated as "no draft", the safe
 # default, and lets the placeholder allow-list broaden via config instead of code
 # changes (issue #52 config knob).
+#
+# Issue #101: Claude Code's own suggested-next-prompt ghost text renders on this
+# same input row once a turn ends, and it's model-generated prose -- no static
+# placeholder pattern can match it, so #52's guard alone reported it as a real
+# draft. The one reliable discriminator is color: the ghost suggestion renders
+# dim (ESC[2m); real operator input renders bright (38;5;231 on 48;5;237).
+# strip_ansi()/pane_tail() discard escapes before the text check above, so this
+# needs a SEPARATE raw capture (`capture-pane -e`) to inspect them, taken from
+# the SAME pane read so the two never observe different pane states. The raw and
+# de-ANSI'd captures stay line-for-line aligned (strip_ansi is a per-line s///,
+# never adds/removes a line), so the same line index found above is reused to
+# pull the corresponding raw (escaped) line and test it for the dim attribute.
+#
+# Fails toward "draft" (today's over-detection), not toward "no draft", when
+# color can't be read at all (no escapes captured -- an ancient tmux without -e
+# support, or the pane vanished mid-read): the dim check only ever SUPPRESSES a
+# draft classification the checks above already reached; it never independently
+# asserts one. No positive dim evidence just means the #52 result stands as-is,
+# which is the deliberate direction here -- silently clobbering a real unsent
+# operator draft is worse than an occasional late/duplicate heartbeat nudge from
+# over-detecting a ghost suggestion, and that's exactly the failure mode this
+# guard already tolerated before #101 existed.
 pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
-  local line rest
-  line="$(pane_tail "$1" 15 | grep -v '^[[:space:]]*$' | tail -n 1)"
-  [ -n "$line" ] || return 1
+  local raw stripped idx line rest raw_line
+  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n 15)"
+  [ -n "$raw" ] || return 1
+  stripped="$(printf '%s\n' "$raw" | strip_ansi)"
+  idx="$(printf '%s\n' "$stripped" | grep -vn '^[[:space:]]*$' | tail -n 1 | cut -d: -f1)"
+  [ -n "$idx" ] || return 1
+  line="$(printf '%s\n' "$stripped" | sed -n "${idx}p")"
   [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
   rest="${BASH_REMATCH[2]}"
   [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
   [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
+  raw_line="$(printf '%s\n' "$raw" | sed -n "${idx}p")"
+  [[ "$raw_line" =~ $TUI_DIM_ATTR_REGEX ]] && return 1
   return 0
 }
 
