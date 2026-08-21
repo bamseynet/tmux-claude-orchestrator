@@ -102,7 +102,26 @@ jobs:
         run: bats tests/
 
   bash32:
-    name: bash 3.2 compatibility smoke (macOS /bin/bash)
+    # #113: this job runs `bash -n` plus a single ./orch-up smoke path under
+    # real bash 3.2 -- it does NOT run the bats suite (bats runs on bash 5.x
+    # in the `test` job above, on ubuntu-latest, never under 3.2). The name
+    # says so explicitly: a green tick here means "no known 3.2 crash class
+    # on the orch-up path," not "this codebase behaves identically on 3.2."
+    # Measured attempt at running the full bats suite for real under this
+    # same container (minus tests/issue98_bash32_empty_array.bats, which
+    # would be docker-in-docker): it completes, but takes ~15-18 minutes
+    # (vs seconds for the `test` job's bash-5.x run) and reports 435/530
+    # passing, 95 failing. Ran the identical suite in an alpine:3.22
+    # container on bash 5.2 as a control: same 435/95 split, same failing
+    # test names -- so none of the 95 are bash-3.2-specific; they're
+    # artifacts of this container (musl coreutils, no systemd/cgroups,
+    # etc.), the same conclusion the issue itself reached. Triaging and
+    # skip-listing 95 individual tests, plus absorbing ~15 minutes of extra
+    # CI time, for a run that would prove nothing about bash 3.2 beyond what
+    # the smoke below already proves, is out of scope for this additive-only
+    # change -- narrowing the name is the honest alternative the issue
+    # itself allows.
+    name: "bash 3.2: syntax + orch-up smoke (no bats)"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
