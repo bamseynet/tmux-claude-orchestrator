@@ -145,7 +145,14 @@ require_valid_session_name() { # call before interpolating $SESSION_NAME into a 
 # against a completely different, longer-named session, which is exactly the
 # --name hijack trap issue #92 warns about. List sessions and match the name
 # literally instead. (Promoted from bootstrap.sh, where issue #92 originally
-# added it -- every other has-session call in the toolkit had the same hazard.)
+# added it.)
+#
+# session_exists() itself only answers the existence question -- it does not
+# stop a caller from going on to pass `-t "$S"` straight to a MUTATING tmux
+# command, which would still get tmux's own prefix resolution. That write-path
+# hazard is what require_session_exists(), just below, guards against (#107);
+# read paths (tail/attach/ask) and decision paths (update/bootstrap) call
+# session_exists() directly (#104).
 session_exists() { # <name> -> 0 if a session with that EXACT name exists
   tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$1"
 }
