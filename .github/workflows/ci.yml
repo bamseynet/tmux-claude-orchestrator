@@ -102,7 +102,26 @@ jobs:
         run: bats tests/
 
   bash32:
-    name: bash 3.2 compatibility smoke (macOS /bin/bash)
+    # #113: this job runs `bash -n` plus a single ./orch-up smoke path under
+    # real bash 3.2 -- it does NOT run the bats suite (bats runs on bash 5.x
+    # in the `test` job above, on ubuntu-latest, never under 3.2). The name
+    # says so explicitly: a green tick here means "no known 3.2 crash class
+    # on the orch-up path," not "this codebase behaves identically on 3.2."
+    # Measured attempt at running the full bats suite for real under this
+    # same container (minus tests/issue98_bash32_empty_array.bats, which
+    # would be docker-in-docker): it completes, but takes ~15-18 minutes
+    # (vs seconds for the `test` job's bash-5.x run) and reports 435/530
+    # passing, 95 failing. Ran the identical suite in an alpine:3.22
+    # container on bash 5.2 as a control: same 435/95 split, same failing
+    # test names -- so none of the 95 are bash-3.2-specific; they're
+    # artifacts of this container (musl coreutils, no systemd/cgroups,
+    # etc.), the same conclusion the issue itself reached. Triaging and
+    # skip-listing 95 individual tests, plus absorbing ~15 minutes of extra
+    # CI time, for a run that would prove nothing about bash 3.2 beyond what
+    # the smoke below already proves, is out of scope for this additive-only
+    # change -- narrowing the name is the honest alternative the issue
+    # itself allows.
+    name: "bash 3.2: syntax + orch-up smoke (no bats)"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -135,15 +154,28 @@ jobs:
           # is a second, independent backstop in case this step-level one is
           # ever removed or miscopied elsewhere.
           #
+          # #106: no `-v "$PWD":/repo` bind mount. The container runs as
+          # root (it has to, for `apk add`), and a bind-mounted checkout lets
+          # it write root-owned files straight into the host tree -- observed
+          # in practice breaking `orch clean` locally, which is the only way
+          # anyone verifies this job still works (CI's checkout is discarded
+          # per run, so it never felt this). Instead the tracked tree is
+          # piped in as a tarball and unpacked inside the container's own
+          # filesystem; nothing the container does can touch the host tree.
+          # See tests/issue106_bash32_no_root_files.bats.
+          #
           # The -c '...' body below is deliberately single-quoted: it's a
           # literal script for the CONTAINER's bash to expand, not this shell.
           # shellcheck disable=SC2016
-          timeout -k 10 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
+          tar -cf - --exclude=.git --exclude=_orch/state . | \
+            timeout -k 10 120 docker run --rm -i --entrypoint bash \
             "$BASH32_IMAGE" \
             -c '
               set -u
               apk add --no-cache bash git tmux jq perl >/dev/null 2>&1
               git config --global --add safe.directory "*"
+              mkdir -p /repo && cd /repo && tar -xf -
+              git init -q . && git add -A && git -c user.email=ci@ci -c user.name=ci commit -q -m ci
 
               fail=0
 
@@ -157,6 +189,17 @@ jobs:
               # and covers every tracked script, not just the entrypoints the
               # runtime smoke below exercises.
               scripts="$(git ls-files "*.sh"; echo orch)"
+              # Sanity: if the tar-pipe extraction or the in-container git
+              # init/add/commit silently failed or came up short (this
+              # script only sets `set -u`, not `-e`, so a failure in that
+              # earlier `&&` chain does not stop execution here), `scripts`
+              # could come back empty or truncated and this loop would just
+              # do nothing -- reporting success while having checked
+              # nothing. Fail loudly instead of passing vacuously.
+              [ "$(printf "%s\n" "$scripts" | grep -c .)" -ge 5 ] || {
+                echo "FATAL: too few tracked scripts found ($scripts) -- checkout extraction into the container likely failed"
+                exit 1
+              }
               for f in $scripts; do
                 [ -f "$f" ] || continue
                 bash -n "$f" && echo "ok: $f" || { echo "SYNTAX FAIL: $f"; fail=1; }
