@@ -228,6 +228,36 @@ EOF
   [[ "$output" == *"nothing to do"* || "$output" == *"newer"* ]]
 }
 
+# --- session-name validity guard (issue #97 comment: require_valid_session_name
+# in _update_would_disrupt_live_session was untested -- removing that line
+# fails nothing here otherwise) ------------------------------------------------
+
+@test "orch update refuses to apply with an invalid SESSION_NAME, before touching anything" {
+  # `:` is a tmux target separator -- an unvalidated SESSION_NAME here would
+  # silently target the wrong pane instead of hard-exiting. No live worker and
+  # no tmux session up (default stub), so this exercises ONLY the
+  # require_valid_session_name call itself, not the live-worker/session checks
+  # earlier in _update_would_disrupt_live_session.
+  SESSION_NAME="bad:name" GH_VERSION=0.2.0 run "$UPDATE"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid session name"* ]]
+  [ ! -s "$GIT_CLONE_LOG" ]
+  [ "$(cat "$ORCH_ROOT/.orch-version")" = "0.1.0" ]
+}
+
+@test "orch update --check is unaffected by an invalid SESSION_NAME (guard sits after the check-only exit)" {
+  SESSION_NAME="bad:name" GH_VERSION=0.2.0 run "$UPDATE" --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"update available"* ]]
+  [ ! -s "$GIT_CLONE_LOG" ]
+}
+
+@test "orch update --force bypasses the SESSION_NAME validity guard, same as the rest of the live-session guard" {
+  SESSION_NAME="bad:name" GH_VERSION=0.2.0 run "$UPDATE" --force
+  [ "$status" -eq 0 ]
+  [ "$(cat "$ORCH_ROOT/.orch-version")" = "0.2.0" ]
+}
+
 # --- daily background check: throttle -------------------------------------
 
 @test "daily check performs one network call and records it" {
