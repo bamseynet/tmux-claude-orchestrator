@@ -154,15 +154,28 @@ jobs:
           # is a second, independent backstop in case this step-level one is
           # ever removed or miscopied elsewhere.
           #
+          # #106: no `-v "$PWD":/repo` bind mount. The container runs as
+          # root (it has to, for `apk add`), and a bind-mounted checkout lets
+          # it write root-owned files straight into the host tree -- observed
+          # in practice breaking `orch clean` locally, which is the only way
+          # anyone verifies this job still works (CI's checkout is discarded
+          # per run, so it never felt this). Instead the tracked tree is
+          # piped in as a tarball and unpacked inside the container's own
+          # filesystem; nothing the container does can touch the host tree.
+          # See tests/issue106_bash32_no_root_files.bats.
+          #
           # The -c '...' body below is deliberately single-quoted: it's a
           # literal script for the CONTAINER's bash to expand, not this shell.
           # shellcheck disable=SC2016
-          timeout -k 10 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
+          tar -cf - --exclude=.git --exclude=_orch/state . | \
+            timeout -k 10 120 docker run --rm -i --entrypoint bash \
             "$BASH32_IMAGE" \
             -c '
               set -u
               apk add --no-cache bash git tmux jq perl >/dev/null 2>&1
               git config --global --add safe.directory "*"
+              mkdir -p /repo && cd /repo && tar -xf -
+              git init -q . && git add -A && git -c user.email=ci@ci -c user.name=ci commit -q -m ci
 
               fail=0
 
