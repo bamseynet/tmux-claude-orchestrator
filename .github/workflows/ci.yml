@@ -100,3 +100,129 @@ jobs:
 
       - name: Run bats tests
         run: bats tests/
+
+  bash32:
+    name: bash 3.2 compatibility smoke (macOS /bin/bash)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Syntax-check + bootstrap smoke under real bash 3.2 (Docker)
+        run: |
+          set -euo pipefail
+          # #98 shipped a `set -- "${arr[@]}"` empty-array crash that only
+          # reproduces on bash < 4.4 (macOS ships bash 3.2). ubuntu-latest's
+          # bash is 5.x, so this repo's only way to exercise real 3.2
+          # semantics is to run the actual interpreter in a container --
+          # the same mechanism #99's regression test (tests/issue98_*.bats)
+          # already proved fast (~15s) and reliable on this runner.
+          #
+          # Pinned by digest, read from tests/bash32-image.txt -- the single
+          # source of truth shared with tests/issue98_bash32_empty_array.bats,
+          # so the two can't silently drift onto different bash-3.2 builds.
+          # bash:3.2 == bash 3.2.57(1)-release on Alpine 3.22.5 (musl) -- the
+          # only bash:3.2 tag Docker Hub publishes (no Debian/glibc variant).
+          BASH32_IMAGE="$(cat tests/bash32-image.txt)"
+          #
+          # Bounded by `timeout -k 10 120`, not a bare `timeout`: plain
+          # `timeout` only sends SIGTERM, which `docker run` (attached, no -d)
+          # does not act on promptly -- verified locally, `timeout 3 docker
+          # run ... sleep 30` still ran the full 30s. `-k 10` follows up with
+          # SIGKILL after a 10s grace period, which does reliably stop it
+          # (verified: killed at ~8s). `timeout-minutes: 5` on the job above
+          # is a second, independent backstop in case this step-level one is
+          # ever removed or miscopied elsewhere.
+          #
+          # The -c '...' body below is deliberately single-quoted: it's a
+          # literal script for the CONTAINER's bash to expand, not this shell.
+          # shellcheck disable=SC2016
+          timeout -k 10 120 docker run --rm -v "$PWD":/repo -w /repo --entrypoint bash \
+            "$BASH32_IMAGE" \
+            -c '
+              set -u
+              apk add --no-cache bash git tmux jq perl >/dev/null 2>&1
+              git config --global --add safe.directory "*"
+
+              fail=0
+
+              echo "== bash -n syntax check under real bash 3.2 (every tracked script) =="
+              # Catches genuine PARSE errors under real 3.2, repo-wide, and
+              # ONLY those: constructs bash 3.2s grammar itself rejects, e.g.
+              # &>>, |&, coproc, ;;& (all verified locally: bash -n exits
+              # non-zero on each). It does NOT catch declare -A, ${var^^}, or
+              # ${var,,} -- those parse FINE on 3.2 (bash -n exits 0) and only
+              # fail at runtime, so they are invisible to this layer. Cheap,
+              # and covers every tracked script, not just the entrypoints the
+              # runtime smoke below exercises.
+              scripts="$(git ls-files "*.sh"; echo orch)"
+              for f in $scripts; do
+                [ -f "$f" ] || continue
+                bash -n "$f" && echo "ok: $f" || { echo "SYNTAX FAIL: $f"; fail=1; }
+              done
+
+              echo "== ./orch up bootstrap smoke (the exact code path #98 broke) =="
+              # bash -n cannot catch #98s bug class: `"${arr[@]}"` on an EMPTY
+              # array under `set -u` is valid syntax, it only crashes at
+              # runtime, and only pre-4.4. So actually run the real
+              # entrypoint -- both call shapes that hit the empty-array
+              # expansion (bare `orch up`, and `--name` which consumes every
+              # arg leaving bootstrap_args empty) -- and inspect the output
+              # for bash-version-specific failure signatures rather than
+              # exit code (a missing `claude`/`jq` dependency in this bare
+              # container also exits non-zero, and is expected).
+              #
+              # What this layer catches: FATAL runtime failures (unbound-var
+              # expansions, declare -A, mapfile/readarray, bad substitutions,
+              # etc.) on the orch up path specifically. Under every _orch/*.sh
+              # scripts `set -euo pipefail`, a failing declare -A DOES abort
+              # the script (verified locally) -- it is not silently swallowed
+              # if it sits on this path.
+              #
+              # What it does NOT catch: (a) COVERAGE -- spawn.sh, send.sh,
+              # merge.sh, watchdog.sh, and every other _orch/*.sh entrypoint
+              # this smoke never invokes could carry any of these constructs
+              # and ship green; bash -n above only catches the parse-error
+              # subset of that gap, not the runtime-error subset. (b) NON-
+              # FATAL divergences anywhere, even on this path: a `... || true`
+              # or a discarded subshell exit status swallows the failure, so
+              # the command runs wrong on 3.2 and the smoke stays green. A
+              # green tick here means "no known crash class on orch up," not
+              # "this codebase behaves identically on bash 3.2."
+              #
+              # A "no failure signature seen" check alone is vacuous: it also
+              # passes if the script dies BEFORE reaching line 80 for an
+              # unrelated reason (a missing dep, an earlier guard added
+              # later), or if bootstrap.sh is restructured and the vulnerable
+              # expansion moves. So run under `set -x` (propagated through
+              # the `exec` into bootstrap.sh via SHELLOPTS) and additionally
+              # require a POSITIVE marker only reachable after line 80: the
+              # trace of bootstrap.shs own dependency loop (line ~126,
+              # `for dep in tmux jq claude perl git`). This is distinct from
+              # orchs own earlier pre-flight check_deps (tmux/jq/perl only,
+              # no claude/git) so it cannot be satisfied by tracing that
+              # instead. Verified locally: this marker is present when the
+              # fix is in place and ABSENT when issue #98s bug is reintroduced
+              # (the crash happens before the loop is ever reached).
+              REACH_MARKER="for dep in tmux jq claude perl git"
+              check_smoke() {
+                desc="$1"; shift
+                out="$(set -x; export SHELLOPTS; "$@" 2>&1)" || true
+                if printf "%s" "$out" | grep -Eq "unbound variable|bad substitution|bad array subscript|declare: usage|declare:.*invalid option|mapfile: command not found|readarray: command not found|syntax error near unexpected token"; then
+                  echo "BASH-3.2 INCOMPATIBILITY in: $desc"
+                  printf "%s\n" "$out"
+                  fail=1
+                elif ! printf "%s" "$out" | grep -qF "$REACH_MARKER"; then
+                  echo "VACUOUS PASS in: $desc -- no bash-3.2 failure signature seen, but the smoke never reached past bootstrap.shs dependency loop either. Cannot conclude the vulnerable code path (line 80) actually ran."
+                  printf "%s\n" "$out"
+                  fail=1
+                else
+                  echo "ok: $desc (confirmed: execution reached bootstrap.sh:126, past the line-80 expansion)"
+                fi
+              }
+              check_smoke "orch up --name X" ./orch up --name ci-bash32-smoke
+              check_smoke "orch up (bare)"   ./orch up
+
+              exit "$fail"
+            '
