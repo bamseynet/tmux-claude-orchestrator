@@ -154,6 +154,12 @@ _fake_tmux_check_flags() {
   local a
   for a in "$@"; do
     case "$a" in
+      -)
+        # A bare "-" is a positional argument (stdin placeholder, e.g.
+        # `load-buffer -b <name> -`), not a flag -- real tmux and every
+        # other branch here only treat a "-"-prefixed token as a flag when
+        # something follows the dash.
+        ;;
       -*)
         case "$allowed" in
           *" $a "*) ;;
@@ -283,7 +289,8 @@ _fake_tmux_new_session() {
     case "$1" in
       -s) name="$2"; shift 2 ;;
       -n) win="$2"; shift 2 ;;
-      -d|-c) shift 2 2>/dev/null || shift ;;
+      -c) shift 2 2>/dev/null || shift ;;
+      -d) shift ;;   # boolean: detached, takes no argument
       *) shift ;;
     esac
   done
@@ -299,7 +306,8 @@ _fake_tmux_new_window() {
     case "$1" in
       -t) target="$2"; shift 2 ;;
       -n) win="$2"; shift 2 ;;
-      -a|-c) shift 2 2>/dev/null || shift ;;
+      -c) shift 2 2>/dev/null || shift ;;
+      -a) shift ;;   # boolean: insert after target window, takes no argument
       *) shift ;;
     esac
   done
