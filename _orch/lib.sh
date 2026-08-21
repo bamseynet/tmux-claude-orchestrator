@@ -177,19 +177,29 @@ log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 # grows; jq is also the slowest thing in this toolkit's startup path. The env
 # check stays live (a bare case statement, no subprocess) so
 # ORCH_TIMESTAMPS/ORCH_TIMESTAMP_FORMAT still override even when set after
-# lib.sh is sourced. A running process never sees a later edit to
-# config.json anyway (nothing in this toolkit hot-reloads it), so resolving
-# the config half once per process is not a behavior change.
-_ORCH_CFG_TIMESTAMPS_DEFAULT="on"
-[ "$(jq -r 'if .output.timestamps == false then "off" else "on" end' "$CONFIG" 2>/dev/null || echo on)" = "off" ] \
-  && _ORCH_CFG_TIMESTAMPS_DEFAULT="off"
-# `|| echo iso` matters, not just cosmetic: a bare `x="$(jq ... )"` is a single
-# simple command, so under `set -e` (every caller sources this) jq failing
-# outright — e.g. CONFIG doesn't exist yet, a fresh install/partial test
-# scaffold — would abort the WHOLE sourcing script, not just fall back to the
-# default. Folding the fallback inside the substitution keeps the assignment
-# itself always successful.
-_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT="$(jq -r '.output.timestamp_format // "iso"' "$CONFIG" 2>/dev/null || echo iso)"
+# lib.sh is sourced.
+#
+# This is the SAME once-per-process model already used elsewhere, not a new
+# behavior: heartbeat.sh reads intervals.*/heartbeat.* from $CONFIG once at
+# heartbeat_main() startup, before its `while` loop, not on every tick.
+# There IS a real asymmetry worth knowing, though: `orch` CLI commands are
+# short-lived (a fresh process, hence a fresh config read, on every
+# invocation), while heartbeat.sh/watchdog.sh are long-lived background
+# loops — once one of those is running, an operator's mid-session
+# config.json edit (including output.timestamps/output.timestamp_format)
+# will not reach it until it's restarted. That was already true for
+# intervals/thresholds before this change; say() now follows the same rule.
+# One jq call for both keys, not two — the `|| printf 'on\tiso\n'` fallback
+# matters beyond cost: a bare `x="$(jq ...)"` is a single simple command, so
+# under `set -e` (every caller sources this) jq failing outright — e.g.
+# CONFIG doesn't exist yet, a fresh install/partial test scaffold — would
+# abort the WHOLE sourcing script, not just fall back to the defaults.
+# Folding the fallback inside the substitution keeps the assignment itself
+# always successful.
+_orch_output_cfg="$(jq -r '[(if .output.timestamps == false then "off" else "on" end), (.output.timestamp_format // "iso")] | @tsv' "$CONFIG" 2>/dev/null || printf 'on\tiso\n')"
+_ORCH_CFG_TIMESTAMPS_DEFAULT="${_orch_output_cfg%%$'\t'*}"
+_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT="${_orch_output_cfg#*$'\t'}"
+unset _orch_output_cfg
 
 orch_timestamps_enabled() {
   case "${ORCH_TIMESTAMPS:-}" in
@@ -202,29 +212,23 @@ orch_timestamps_enabled() {
 # Format precedence: $ORCH_TIMESTAMP_FORMAT > output.timestamp_format in
 # config.json > default "iso". "iso" matches orch.log's %FT%TZ UTC stamp exactly
 # (best for correlating a terminal line against the log); "short" is a local
-# HH:MM:SS clock (best for reading a live-attached session at a glance).
+# HH:MM:SS clock (best for reading a live-attached session at a glance). This
+# is the ONLY place that precedence is decided — say() below calls it rather
+# than re-deriving the same rule, so the two can never drift apart.
 orch_timestamp_format() {
   local fmt="${ORCH_TIMESTAMP_FORMAT:-}"
   [ -n "$fmt" ] || fmt="$_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT"
   printf '%s' "$fmt"
 }
 
-orch_timestamp() {
-  if [ "$(orch_timestamp_format)" = "short" ]; then
-    date +%T
-  else
-    date -u +%FT%TZ
-  fi
-}
-
 # say <text...> — a human-facing line, timestamp-prefixed unless disabled.
 # Always writes to stdout; redirect the call itself for stderr (e.g. `say "..." >&2`),
-# same as the bare echo/printf calls it replaces. One subprocess per call (date) —
-# orch_timestamps_enabled() and the format check below are pure shell, no forks.
+# same as the bare echo/printf calls it replaces. Two cheap subshell forks per
+# call (orch_timestamp_format(), `date`) — no jq, no external processes beyond
+# `date` itself; orch_timestamps_enabled() is pure shell, no fork at all.
 say() {
   if orch_timestamps_enabled; then
-    local fmt="${ORCH_TIMESTAMP_FORMAT:-$_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT}"
-    if [ "$fmt" = "short" ]; then
+    if [ "$(orch_timestamp_format)" = "short" ]; then
       printf '%s %s\n' "$(date +%T)" "$*"
     else
       printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"

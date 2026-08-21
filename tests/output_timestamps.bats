@@ -292,16 +292,46 @@ EOF
   [[ "$output" != [0-9][0-9][0-9][0-9]-* ]]
 }
 
+@test "orch: standalone fallback is defined even with a same-named 'say' BINARY on PATH (macOS /usr/bin/say shape)" {
+  # Review finding: the real bug this guard fixes is not a bash-version quirk
+  # of `command -v` on shell functions — macOS ships a REAL BINARY at
+  # /usr/bin/say (text-to-speech). In standalone mode (no lib.sh, so say is
+  # never defined as a function), `command -v say` finds that binary and
+  # reports success, so the OLD `command -v say || say() {...}` guard would
+  # wrongly conclude say is "already defined" and skip the fallback — leaving
+  # every call site invoking the speech command instead of printing.
+  # Reproduce the exact shape (a same-named executable on PATH, no function
+  # defined) with a stub, standing in for /usr/bin/say, and prove the
+  # fallback still gets defined and used instead of that binary.
+  WORK="$BATS_TEST_TMPDIR/standalone_binary_say"
+  mkdir -p "$WORK/_orch/state"
+  cp "$BATS_TEST_DIRNAME/../orch" "$WORK/orch"
+  chmod +x "$WORK/orch"
+
+  STUBBIN="$BATS_TEST_TMPDIR/say-bin"
+  mkdir -p "$STUBBIN"
+  MARKER="$BATS_TEST_TMPDIR/say-binary-was-invoked"
+  cat > "$STUBBIN/say" <<EOF
+#!/usr/bin/env bash
+touch "$MARKER"
+EOF
+  chmod +x "$STUBBIN/say"
+
+  run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ROOT="$WORK" PATH="$STUBBIN:$PATH" \
+    "$WORK/orch" --repo "$WORK" logs heartbeat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no heartbeat log yet"* ]]
+  # The critical assertion: the stub binary must NEVER have run. With the old
+  # `command -v say` guard it would have (this is exactly what test would
+  # catch a regression back to that guard).
+  [ ! -e "$MARKER" ]
+}
+
 @test "orch: the declare -F guard never shadows lib.sh's real say() when lib.sh IS present" {
-  # Review finding: 'command -v say' can misreport a shell FUNCTION named say
-  # on macOS bash 3.2, which would silently replace the real, config/env-aware
-  # say() with the bare fallback even though lib.sh is loaded. Assert the
-  # guard's condition directly: once lib.sh defines say as a function,
-  # `declare -F say` must report it defined (guard does not re-fire), so a
-  # normal (lib.sh-present) run keeps getting timestamped output.
+  # Companion check for the normal (lib.sh-present) path: once lib.sh defines
+  # say as a function, the guard must not re-fire and replace it.
   orch_e2e_setup
   run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ALLOW_UNRELATED_REPO=1 "$ORCH" status
   [ "$status" -eq 0 ]
   [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z ]]
-  grep -q '^declare -F say >/dev/null 2>&1 || say()' "$ORCH"
 }

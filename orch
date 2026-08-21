@@ -37,14 +37,15 @@ fi
 # so the logs/events/help commands standalone mode supports keep working
 # without lib.sh.
 #
-# `declare -F`, not `command -v`: on macOS's bash 3.2 (the system /bin/bash),
-# `command -v` on a shell FUNCTION named say does not reliably report success
-# the way it does on bash 4+/Linux, so `command -v say` can wrongly conclude
-# say is undefined even when lib.sh (sourced above) already defined it as a
-# function — silently REPLACING the real, config/env-aware say() with this
-# bare fallback and printing unstamped output even when lib.sh is present.
-# `declare -F say` checks specifically for a function named say and behaves
-# consistently across bash 3.2 and 4+.
+# `declare -F`, not `command -v`: macOS ships a REAL BINARY at /usr/bin/say
+# (the text-to-speech command). In standalone mode (lib.sh absent, the
+# function below never defined), `command -v say` finds that binary and
+# reports success — so the guard would conclude say is "already defined" and
+# skip defining this fallback, leaving every call site below invoking the
+# speech command with human-facing text as its argument instead of printing
+# anything. `declare -F say` checks specifically for a shell FUNCTION named
+# say, so it is unaffected by any same-named binary on PATH, on macOS or
+# anywhere else.
 declare -F say >/dev/null 2>&1 || say() { printf '%s\n' "$*"; }
 
 # --- target-repo resolution (issue #35) ---------------------------------------
