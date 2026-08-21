@@ -22,10 +22,30 @@ if [ -f "$here/_orch/lib.sh" ]; then
   check_deps tmux jq perl
 fi
 # say() (issue #90, from lib.sh) is what every human-facing print below goes
-# through. Fall back to a bare, unstamped echo when lib.sh wasn't sourced above,
-# so the logs/events/help commands a standalone copy of this file still supports
-# keep working without it.
-command -v say >/dev/null 2>&1 || say() { printf '%s\n' "$*"; }
+# through. Genuinely reachable, not dead code: this is the SAME "standalone
+# copy of just this file" mode documented above (the `if [ -f "$here/_orch/
+# lib.sh" ]` guard at line 19) and already exercised by e.g.
+# tests/orchlogs_cli.bats, which runs a copy of `orch` with no _orch/lib.sh
+# beside it at all -- that test's assertions on the "no <name> log yet"
+# messages (e.g. `orch logs watchdog` before any log exists) are what actually
+# exercise this fallback; do not delete it thinking it's unreachable. That is
+# an intentionally-supported partial deployment, not a broken checkout to
+# mask — contrast _orch/send-remote-control.sh, which ships INSIDE the
+# toolkit and always expects lib.sh right beside it; lib.sh missing there IS a
+# broken checkout, and PR #89 removed that script's equivalent silent-degrade
+# fallback for exactly that reason. Fall back to a bare, unstamped echo here
+# so the logs/events/help commands standalone mode supports keep working
+# without lib.sh.
+#
+# `declare -F`, not `command -v`: on macOS's bash 3.2 (the system /bin/bash),
+# `command -v` on a shell FUNCTION named say does not reliably report success
+# the way it does on bash 4+/Linux, so `command -v say` can wrongly conclude
+# say is undefined even when lib.sh (sourced above) already defined it as a
+# function — silently REPLACING the real, config/env-aware say() with this
+# bare fallback and printing unstamped output even when lib.sh is present.
+# `declare -F say` checks specifically for a function named say and behaves
+# consistently across bash 3.2 and 4+.
+declare -F say >/dev/null 2>&1 || say() { printf '%s\n' "$*"; }
 
 # --- target-repo resolution (issue #35) ---------------------------------------
 # The toolkit's own directory ($ORCH_ROOT) is NOT necessarily the repo workers

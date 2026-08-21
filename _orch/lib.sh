@@ -161,14 +161,42 @@ log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 #
 # Precedence (highest first), mirroring the env-beats-config convention used for
 # target-repo resolution above: $ORCH_TIMESTAMPS > output.timestamps in
-# config.json > default on. Recognized truthy/falsy env values follow the same
-# small vocabulary as everywhere else a boolean flag is read from the environment.
+# config.json > default on. Deliberately WIDER than the rest of this repo's env
+# booleans (ORCH_ALLOW_SKIP_PERMISSIONS/ORCH_ALLOW_UNRELATED_REPO check a
+# strict "1") — this one is a display toggle a human is expected to type by
+# hand, so 0/false/off/no and 1/true/on/yes are all accepted. An unrecognized
+# value (e.g. "FALSE", "n") is deliberately NOT an error: it falls through to
+# config.json's value, same as an unset var — never silently coerced to a
+# guess in either direction.
+#
+# The config.json half of that (a jq invocation) is resolved ONCE here, at
+# source time — same pattern as SESSION_NAME/ORCH_HASH above — into
+# _ORCH_CFG_TIMESTAMPS_DEFAULT/_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT, not
+# re-read on every call. say() is meant to sit behind every human-facing
+# print in the toolkit, so a per-line jq fork would compound as adoption
+# grows; jq is also the slowest thing in this toolkit's startup path. The env
+# check stays live (a bare case statement, no subprocess) so
+# ORCH_TIMESTAMPS/ORCH_TIMESTAMP_FORMAT still override even when set after
+# lib.sh is sourced. A running process never sees a later edit to
+# config.json anyway (nothing in this toolkit hot-reloads it), so resolving
+# the config half once per process is not a behavior change.
+_ORCH_CFG_TIMESTAMPS_DEFAULT="on"
+[ "$(jq -r 'if .output.timestamps == false then "off" else "on" end' "$CONFIG" 2>/dev/null || echo on)" = "off" ] \
+  && _ORCH_CFG_TIMESTAMPS_DEFAULT="off"
+# `|| echo iso` matters, not just cosmetic: a bare `x="$(jq ... )"` is a single
+# simple command, so under `set -e` (every caller sources this) jq failing
+# outright — e.g. CONFIG doesn't exist yet, a fresh install/partial test
+# scaffold — would abort the WHOLE sourcing script, not just fall back to the
+# default. Folding the fallback inside the substitution keeps the assignment
+# itself always successful.
+_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT="$(jq -r '.output.timestamp_format // "iso"' "$CONFIG" 2>/dev/null || echo iso)"
+
 orch_timestamps_enabled() {
   case "${ORCH_TIMESTAMPS:-}" in
     0 | false | off | no) return 1 ;;
     1 | true | on | yes) return 0 ;;
   esac
-  [ "$(jq -r 'if .output.timestamps == false then "off" else "on" end' "$CONFIG" 2>/dev/null)" != "off" ]
+  [ "$_ORCH_CFG_TIMESTAMPS_DEFAULT" != "off" ]
 }
 
 # Format precedence: $ORCH_TIMESTAMP_FORMAT > output.timestamp_format in
@@ -177,23 +205,30 @@ orch_timestamps_enabled() {
 # HH:MM:SS clock (best for reading a live-attached session at a glance).
 orch_timestamp_format() {
   local fmt="${ORCH_TIMESTAMP_FORMAT:-}"
-  [ -n "$fmt" ] || fmt="$(jq -r '.output.timestamp_format // "iso"' "$CONFIG" 2>/dev/null)"
+  [ -n "$fmt" ] || fmt="$_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT"
   printf '%s' "$fmt"
 }
 
 orch_timestamp() {
-  case "$(orch_timestamp_format)" in
-    short) date +%T ;;
-    *) date -u +%FT%TZ ;;
-  esac
+  if [ "$(orch_timestamp_format)" = "short" ]; then
+    date +%T
+  else
+    date -u +%FT%TZ
+  fi
 }
 
 # say <text...> — a human-facing line, timestamp-prefixed unless disabled.
 # Always writes to stdout; redirect the call itself for stderr (e.g. `say "..." >&2`),
-# same as the bare echo/printf calls it replaces.
+# same as the bare echo/printf calls it replaces. One subprocess per call (date) —
+# orch_timestamps_enabled() and the format check below are pure shell, no forks.
 say() {
   if orch_timestamps_enabled; then
-    printf '%s %s\n' "$(orch_timestamp)" "$*"
+    local fmt="${ORCH_TIMESTAMP_FORMAT:-$_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT}"
+    if [ "$fmt" = "short" ]; then
+      printf '%s %s\n' "$(date +%T)" "$*"
+    else
+      printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"
+    fi
   else
     printf '%s\n' "$*"
   fi
@@ -359,7 +394,7 @@ send_prompt() { # <target> <text...>
 check_deps() { # <dep>...  -> 0 if all present; prints one line per missing dep otherwise
   local dep missing=0
   for dep in "$@"; do
-    command -v "$dep" >/dev/null 2>&1 || { echo "missing dependency: $dep" >&2; missing=1; }
+    command -v "$dep" >/dev/null 2>&1 || { say "missing dependency: $dep" >&2; missing=1; }
   done
   return "$missing"
 }
@@ -404,9 +439,9 @@ with_lock() { # <lock_path>
   local lock="$1"
 
   if command -v flock >/dev/null 2>&1; then
-    exec 200>"$lock" || { echo "with_lock: cannot open lock file $lock" >&2; return 1; }
+    exec 200>"$lock" || { say "with_lock: cannot open lock file $lock" >&2; return 1; }
     if ! flock -x -w "$ORCH_LOCK_TIMEOUT" 200; then
-      echo "with_lock: timed out waiting for lock $lock (flock)" >&2
+      say "with_lock: timed out waiting for lock $lock (flock)" >&2
       return 1
     fi
     return 0
@@ -433,7 +468,7 @@ with_lock() { # <lock_path>
       continue
     fi
     if [ $(( $(date +%s) - start_ts )) -ge "$ORCH_LOCK_TIMEOUT" ]; then
-      echo "with_lock: timed out waiting for lock $lock (mkdir)" >&2
+      say "with_lock: timed out waiting for lock $lock (mkdir)" >&2
       return 1
     fi
     sleep 0.1
