@@ -6,16 +6,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-# tmux target resolution allows an UNAMBIGUOUS PREFIX to match a session name
-# (e.g. `-t bill` hits a live session named "billing") -- confirmed against
-# tmux 3.4. A plain `tmux has-session -t <name>` is therefore not safe to use
-# for "does a session with exactly this name exist": it can silently report
-# success against a completely different, longer-named session, which is
-# exactly the --name hijack trap issue #92 warns about. List sessions and
-# match the name literally instead.
-session_exists() { # <name> -> 0 if a session with that EXACT name exists
-  tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$1"
-}
+# session_exists() lives in lib.sh (issue #96) -- every has-session call in the
+# toolkit had the same prefix-match hazard this one was originally fixed for
+# (issue #92), so it was promoted out of this file to be shared.
 
 # --- PID-identity guard (issue #15) --------------------------------------------
 # A bare `kill -0 "$pid"` only proves SOME process currently holds that PID — not

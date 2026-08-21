@@ -33,6 +33,10 @@ case "\$1" in
     [ "\$3" = "$SESSION" ] && exit 0
     exit 1
     ;;
+  list-sessions)
+    echo "$SESSION"
+    exit 0
+    ;;
   list-windows)
     echo "$SESSION:$WINDOW"
     exit 0
@@ -103,6 +107,7 @@ bufdir="$BATS_TEST_TMPDIR/bufs"
 mkdir -p "\$bufdir"
 case "\$1" in
   has-session) [ "\$3" = "$expected_hash" ] && exit 0; exit 1 ;;
+  list-sessions) echo "$expected_hash" ;;
   list-windows) echo "$expected_hash:orchestrator" ;;
   display-message) exit 1 ;;
   capture-pane) cat "$PANE_TEXT_FILE" ;;
@@ -131,6 +136,7 @@ bufdir="$BATS_TEST_TMPDIR/bufs"
 mkdir -p "\$bufdir"
 case "\$1" in
   has-session) [ "\$3" = "other" ] && exit 0; exit 1 ;;
+  list-sessions) echo "other" ;;
   list-windows) echo "other:otherwin" ;;
   display-message) exit 1 ;;
   capture-pane) cat "$PANE_TEXT_FILE" ;;
@@ -180,6 +186,47 @@ EOF
   [[ "$output" == *"no such tmux session"* ]]
 }
 
+@test "refuses to drive a DIFFERENT live session whose name is a prefix of the target (issue #96)" {
+  # Real tmux's `has-session -t <name>` matches an unambiguous PREFIX, not just
+  # an exact name (confirmed against tmux 3.4) -- fake that here so this stub
+  # is never stricter than real tmux, same convention as
+  # hygiene_session_namespace.bats / issue92_named_persistent_sessions.bats.
+  # Only "billing" is actually live; "bill" is not. A bare
+  # `tmux has-session -t bill` would still exit 0 (prefix match) and this
+  # script would go on to drive billing's pane -- session_exists() must
+  # refuse instead.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+bufdir="$BATS_TEST_TMPDIR/bufs"
+mkdir -p "\$bufdir"
+case "\$1" in
+  has-session)
+    [ "\$3" = "billing" ] && exit 0
+    [[ "billing" == "\$3"* ]] && exit 0
+    exit 1
+    ;;
+  list-sessions) echo "billing" ;;
+  list-windows) echo "billing:orchestrator" ;;
+  display-message) exit 1 ;;
+  capture-pane) cat "$PANE_TEXT_FILE" ;;
+  load-buffer) name="\$3"; cat > "\$bufdir/\$name" ;;
+  paste-buffer)
+    name=""; prev=""
+    for a in "\$@"; do [ "\$prev" = "-b" ] && name="\$a"; prev="\$a"; done
+    rm -f "\$bufdir/\$name" ;;
+  show-buffer) name="\$3"; [ -f "\$bufdir/\$name" ] || exit 1; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  run run_script "bill:orchestrator"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux session: bill"* ]]
+  ! grep -q '^paste-buffer' "$CALLS"
+}
+
 @test "fails loudly (non-zero) on a window that does not exist in a real session" {
   run run_script "orch-testhash:no-such-window"
   [ "$status" -ne 0 ]
@@ -215,6 +262,7 @@ bufdir="$BATS_TEST_TMPDIR/bufs"
 mkdir -p "\$bufdir"
 case "\$1" in
   has-session) [ "\$3" = "orch-testhash" ] && exit 0; exit 1 ;;
+  list-sessions) echo "orch-testhash" ;;
   list-windows) echo "orch-testhash:v1Xorchestrator" ;;   # NOT "v1.orchestrator"
   display-message) exit 1 ;;
   capture-pane) cat "$PANE_TEXT_FILE" ;;

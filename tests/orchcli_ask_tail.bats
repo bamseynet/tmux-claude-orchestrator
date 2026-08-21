@@ -24,6 +24,7 @@ stub_tmux_no_window() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) echo "orchestrator" ;;
 esac
 exit 0
@@ -39,6 +40,7 @@ stub_tmux_with_window() {
   cat > "$STUBBIN/tmux" <<EOF
 #!/usr/bin/env bash
 case "\${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) printf '%s\n' orchestrator w1 ;;
   capture-pane) cat "$PANE_TEXT_FILE" ;;
 esac

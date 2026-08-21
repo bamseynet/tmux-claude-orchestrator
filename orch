@@ -183,6 +183,13 @@ case "$cmd" in
     command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
     id="${1:?usage: orch tail <id> [lines]}"; shift || true
     lines="${1:-15}"
+    # session_exists() (issue #96): `tmux -t "$SESSION_NAME"` alone matches by
+    # UNAMBIGUOUS PREFIX, so a bare list-windows here could silently read a
+    # DIFFERENT, longer-named live session's windows instead of failing.
+    if ! command -v session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+      say "no such tmux session: $SESSION_NAME" >&2
+      exit 1
+    fi
     if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
       say "no worker window '$id' in session '$SESSION_NAME'" >&2
       exit 1
@@ -191,6 +198,12 @@ case "$cmd" in
     ;;
   attach)
     command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
+    # session_exists() (issue #96): same prefix-match hazard as `tail` above --
+    # must not silently attach a human operator to a DIFFERENT live session.
+    if ! command -v session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+      say "no such tmux session: $SESSION_NAME" >&2
+      exit 1
+    fi
     if [ -n "${1:-}" ]; then
       id="$1"
       if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then

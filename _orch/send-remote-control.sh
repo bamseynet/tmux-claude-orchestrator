@@ -62,7 +62,10 @@ fi
 target="${target:-${ORCH_TARGET:-${SESSION_NAME}:${ORCH_WINDOW}}}"
 
 command -v tmux >/dev/null 2>&1 || { say "tmux not found" >&2; exit 1; }
-tmux has-session -t "${target%%:*}" 2>/dev/null || {
+# session_exists() (issue #96), not a bare has-session -- has-session matches by
+# UNAMBIGUOUS PREFIX, so a target whose session is a prefix of a different, live
+# session would otherwise silently drive that other session instead of failing.
+session_exists "${target%%:*}" || {
   say "no such tmux session: ${target%%:*}" >&2; exit 1; }
 tmux list-windows -t "${target%%:*}" -F '#S:#W' 2>/dev/null | grep -qxF -- "$target" \
   || tmux display-message -t "$target" -p '' >/dev/null 2>&1 \

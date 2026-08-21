@@ -64,6 +64,10 @@ EOF
 #!/usr/bin/env bash
 case "${1:-}" in
   has-session) exit "${TMUX_SESSION_UP:-1}" ;;
+  list-sessions)
+    [ "${TMUX_SESSION_UP:-1}" = "0" ] && echo "${SESSION_NAME:-orch-test}"
+    exit 0
+    ;;
 esac
 exit 0
 EOF

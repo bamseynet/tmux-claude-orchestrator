@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # _orch/lib.sh — shared helpers. Source this; do not execute directly.
-# Provides: paths, log(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
+# Provides: paths, log(), session_exists(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject(),
 #           pane_has_draft() (master draft guard, issue #38),
@@ -135,6 +135,19 @@ require_valid_session_name() { # call before interpolating $SESSION_NAME into a 
     echo "$SESSION_NAME_ERROR" >&2
     exit 1
   fi
+}
+
+# --- Exact session-existence check (issue #96) ----------------------------------
+# tmux target resolution allows an UNAMBIGUOUS PREFIX to match a session name
+# (e.g. `-t bill` hits a live session named "billing" -- confirmed against tmux
+# 3.4). A plain `tmux has-session -t <name>` is therefore not safe to use for
+# "does a session with exactly this name exist": it can silently report success
+# against a completely different, longer-named session, which is exactly the
+# --name hijack trap issue #92 warns about. List sessions and match the name
+# literally instead. (Promoted from bootstrap.sh, where issue #92 originally
+# added it -- every other has-session call in the toolkit had the same hazard.)
+session_exists() { # <name> -> 0 if a session with that EXACT name exists
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$1"
 }
 export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 : "${ORCH_WINDOW:=orchestrator}"  # master window name
