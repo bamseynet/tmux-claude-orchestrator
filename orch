@@ -41,7 +41,36 @@ if [ -n "${ORCH_ROOT:-}" ]; then
       esac
     done
   fi
-  if [ "$resolved_orch_root" != "$here" ] && [ "$orch_root_isolated" -ne 1 ] \
+  # Same install, not just the same PHYSICAL PATH: comparing $resolved_orch_root
+  # to $here byte-for-byte over-refuses on symlinks (orch invoked via a symlink
+  # whose dirname differs from the real toolkit dir), /tmp vs /private/tmp-style
+  # aliasing, and -- the case that actually broke this project's own worker
+  # workflow -- two git worktrees of the SAME toolkit repo (this repo's workers
+  # each run from their own `../wt/<hash>/<id>` worktree, per worktree_owner()
+  # below, while often inheriting ORCH_ROOT pointing at the orchestrator's main
+  # checkout). Fall back to repo-identity comparison, mirroring
+  # ensure_related_repo()'s same-toplevel / shared-git-common-dir checks in
+  # lib.sh (deliberately NOT its looser remote-URL/shared-history fallbacks --
+  # those decide whether a TARGET project is "related enough" to a toolkit, a
+  # weaker question than whether two paths ARE the same toolkit install).
+  orch_root_same_install=0
+  if [ "$resolved_orch_root" = "$here" ]; then
+    orch_root_same_install=1
+  elif [ -n "$resolved_orch_root" ] && command -v git >/dev/null 2>&1; then
+    orch_here_top="$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)" || orch_here_top=""
+    orch_given_top="$(git -C "$resolved_orch_root" rev-parse --show-toplevel 2>/dev/null)" || orch_given_top=""
+    if [ -n "$orch_here_top" ] && [ -n "$orch_given_top" ]; then
+      if [ "$orch_here_top" = "$orch_given_top" ]; then
+        orch_root_same_install=1
+      else
+        orch_here_common="$(git -C "$orch_here_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || orch_here_common=""
+        orch_given_common="$(git -C "$orch_given_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || orch_given_common=""
+        [ -n "$orch_here_common" ] && [ "$orch_here_common" = "$orch_given_common" ] && orch_root_same_install=1
+      fi
+    fi
+    unset orch_here_top orch_given_top orch_here_common orch_given_common
+  fi
+  if [ "$orch_root_same_install" -ne 1 ] && [ "$orch_root_isolated" -ne 1 ] \
       && [ "${ORCH_ALLOW_ROOT_MISMATCH:-0}" != "1" ]; then
     printf 'orch: inherited ORCH_ROOT (%s) does not match this script'"'"'s own location (%s).\n' \
       "$ORCH_ROOT" "$here" >&2
@@ -49,7 +78,7 @@ if [ -n "${ORCH_ROOT:-}" ]; then
     printf 'or set ORCH_ALLOW_ROOT_MISMATCH=1 to override deliberately.\n' >&2
     exit 1
   fi
-  unset resolved_orch_root orch_root_isolated orch_bats_root
+  unset resolved_orch_root orch_root_isolated orch_bats_root orch_root_same_install
 fi
 export ORCH_ROOT="${ORCH_ROOT:-$here}"
 

@@ -115,7 +115,14 @@ drain_queue_if_room() {
 # instead of silently requeuing — heartbeat has no other channel once the master
 # itself is the thing that's dead.
 master_window_alive() { # <session:window> -> 0 if that tmux window exists
-  tmux capture-pane -t "$1" -p >/dev/null 2>&1
+  # issue #107: a bare `-t "$1"` matches by unambiguous PREFIX, so if $S's
+  # session is gone but a longer-named live session happens to start with the
+  # same prefix and has a window of the same name, capture-pane would silently
+  # hit that OTHER session instead of failing -- and every caller below
+  # (master_dead_alert/clear, then send_prompt) would act on it. Require the
+  # exact session first, same guard require_session_exists() enforces for the
+  # other write paths (send.sh/spawn.sh/ask.sh).
+  session_exists "${1%%:*}" && tmux capture-pane -t "$1" -p >/dev/null 2>&1
 }
 
 # $STATE_DIR/.master-dead holds "<first-seen-ts>\n<last-alert-ts>" so the alert
