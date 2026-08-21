@@ -569,8 +569,14 @@ _pane_scan_lines() {
           my $c2 = $i + 1 < $len ? substr($raw_line, $i + 1, 1) : "";
           if ($c2 eq "[") {
             my $j = $i + 2;
-            while ($j < $len && substr($raw_line, $j, 1) !~ /[A-Za-z]/) { $j++; }
-            if ($j < $len) {
+            my $csi_ok = 1;
+            while ($j < $len) {
+              my $cj = substr($raw_line, $j, 1);
+              last if $cj =~ /[A-Za-z]/;
+              if ($cj !~ /[0-9;:?<=>]/) { $csi_ok = 0; last; }
+              $j++;
+            }
+            if ($csi_ok && $j < $len) {
               my $final = substr($raw_line, $j, 1);
               if ($final eq "m") {
                 my $params = substr($raw_line, $i + 2, $j - ($i + 2));
