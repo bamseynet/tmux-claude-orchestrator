@@ -28,6 +28,7 @@ EOF
   source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
 
   ESC="$(printf '\x1b')"
+  BEL="$(printf '\x07')"
 }
 
 set_pane() { printf '%s\n' "$1" > "$PANE_TEXT_FILE"; }
@@ -172,4 +173,64 @@ EOF
 
   run pane_has_draft "orch:master"
   [ "$status" -ne 0 ]
+}
+
+# --- issue #111: strip_ansi() and the dim check must agree byte-for-byte -----
+# strip_ansi() and the (former) separate dim-offset walker were two independent
+# implementations of "which bytes are visible", and OSC-8 hyperlinks (which tmux
+# 3.4 emits verbatim in `-e` captures) exposed their divergence: one deleted the
+# whole OSC sequence, the other only consumed the ESC byte alone. X4 below is the
+# dangerous direction -- a real bright draft misread as no-draft, which would let
+# the heartbeat paste over unsent operator input. X2 is the safe direction (ghost
+# text over-detected as a draft) but still proves the same misalignment.
+
+@test "pane_has_draft is true (X4): dim run + OSC-8 both before a BRIGHT draft must not misalign the offset (issue #111)" {
+  set_pane "${ESC}[2m${ESC}]8;;http://example.com/a/fairly/long/url${BEL}${ESC}[22m❯ ${ESC}[38;5;231mreal operator text"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is false (X2): an OSC-8 hyperlink before dim ghost text must not misalign the offset (issue #111)" {
+  set_pane "${ESC}]8;;http://example.com/a/fairly/long/url${BEL}❯ ${ESC}[2mFile the follow-up issue.${ESC}[0m"
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
+
+# strip_ansi() (a general-purpose stream filter, also used by pane_tail()) and
+# _pane_scan_lines() (pane_has_draft()'s specialized parser, which also tracks
+# dim state) are two separate implementations of "which raw bytes are
+# visible" -- kept deliberately separate because pane_tail() has no use for a
+# dim mask and a merged implementation would change pane_tail()'s streaming/
+# no-trailing-newline behavior. Since they are not literally the same code,
+# nothing stops them drifting apart the way #111 found; pin their stripped-text
+# output to stay byte-identical across every escape shape either one claims to
+# handle, so any future edit to one without the other fails a test instead of
+# shipping silently.
+@test "strip_ansi() and _pane_scan_lines()'s stripped text agree byte-for-byte across escape shapes" {
+  local -a cases=(
+    $'plain text, no escapes at all'
+    "${ESC}[31mred${ESC}[0m"
+    "${ESC}[38;5;231mtruecolor-ish 256${ESC}[0m"
+    "${ESC}[38;2;255;128;0mtruecolor${ESC}[0m"
+    "${ESC}[2mdim${ESC}[22mnot dim"
+    "${ESC}]8;;http://example.com/a/b${BEL}link text${ESC}]8;;${BEL}"
+    "${ESC}]8;;http://example.com/a/b${ESC}\\\\link text via ST${ESC}]8;;${ESC}\\\\"
+    "${ESC}(B${ESC})0charset selects"
+    "$(printf '\x0eSO\x0fSI')"
+    "${ESC}[1 mmalformed CSI (space intermediate) stays literal"
+    "${ESC}[unterminated CSI at end of line"
+    "${ESC}[38;5;231m${ESC}]8;;http://example.com/x${BEL}mixed${ESC}[0m${ESC}]8;;${BEL}"
+  )
+  local input stripped_old stripped_new
+  for input in "${cases[@]}"; do
+    stripped_old="$(printf '%s' "$input" | strip_ansi)"
+    stripped_new="$(printf '%s\n' "$input" | _pane_scan_lines)"
+    stripped_new="${stripped_new%%$'\x01'*}"
+    [ "$stripped_old" = "$stripped_new" ] || {
+      echo "MISMATCH for input: $input" >&2
+      echo "  strip_ansi:        $stripped_old" >&2
+      echo "  _pane_scan_lines:  $stripped_new" >&2
+      return 1
+    }
+  done
 }

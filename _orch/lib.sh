@@ -456,19 +456,35 @@ confirm_inject() { # <target> [timeout_s]
 # placeholder pattern can match it, so #52's guard alone reported it as a real
 # draft. The one reliable discriminator is color: the ghost suggestion renders
 # dim (ESC[2m); real operator input renders bright (38;5;231 on 48;5;237).
-# strip_ansi()/pane_tail() discard escapes before the text check above, so this
-# needs a SEPARATE raw capture (`capture-pane -e`) to inspect them, taken from
-# the SAME pane read so the two never observe different pane states. The raw and
-# de-ANSI'd captures stay line-for-line aligned (strip_ansi is a per-line s///,
-# never adds/removes a line), so the same line index found above is reused to
-# pull the corresponding raw (escaped) line and test it for the dim attribute.
+#
+# Issue #111: the first #101 fix used TWO independent notions of "which bytes
+# are visible" -- strip_ansi() (regex substitution) to find the input line and
+# compute $rest, and a separate byte-walking parser to locate the dim state at
+# that offset. They agreed on CSI sequences but not on OSC (`ESC ] ... BEL`,
+# which tmux emits verbatim for OSC-8 hyperlinks on 3.4+), charset selects, or
+# SO/SI: strip_ansi() deletes the whole sequence, the old walker consumed only
+# the leading ESC byte and counted the rest as visible text. That let the
+# visible-byte counter run ahead of the true offset and read the dim state at
+# the wrong position -- concretely, a real bright draft preceded by a dim run
+# and an OSC-8 hyperlink could misreport NO DRAFT, the dangerous direction
+# (the heartbeat would then paste over the operator's unsent input). Adding
+# another escape class to the old walker would only have deferred the next
+# drift; the durable fix is ONE pass that produces both the stripped line and
+# the SGR state at every offset in it, so "visible byte" has exactly one
+# definition inside this guard. _pane_scan_lines() below is that one pass, and
+# strip_ansi() is not consulted here at all any more.
+#
+# Issue #112: the prior version cost ~7 forks per call on the draft path --
+# strip_ansi() (perl), grep|tail|cut to find the input line, two sed -n calls
+# to extract it, then a second perl fork for the dim walk. _pane_scan_lines()
+# folds all of that into a single perl invocation.
 #
 # rv101 review (kept here because it's load-bearing, not just history):
 #  1. A substring match for the literal bytes "2m" also matches truecolor's
 #     EXTENDED-COLOUR INTRODUCER (ESC[38;2;R;G;Bm) -- the "2" there means "the
 #     next 3 params are an RGB triple", not dim, and a real bright draft on a
 #     truecolor terminal would have been misread as ghost text and force-
-#     delivered over. _pane_draft_dim_at_rest() below properly tokenizes SGR
+#     delivered over. _pane_scan_lines() below properly tokenizes SGR
 #     parameters and skips the trailing args 38/48 consume (5;n or 2;r;g;b)
 #     instead of treating every token as a standalone attribute.
 #  2. "dim ANYWHERE on the row" is not "the operator's own text is dim": a
@@ -495,88 +511,163 @@ confirm_inject() { # <target> [timeout_s]
 # from over-detecting a ghost suggestion, and that's exactly the failure mode
 # this guard already tolerated before #101 existed.
 pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
-  local raw stripped idx line rest raw_line
+  local LC_ALL=C   # byte-count ${#...} below, not locale-dependent char counts
+  local raw scanned sep out_line line mask found=0 last_line="" last_mask=""
+
   raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n 15)"
   if [ -z "$raw" ]; then
-    stripped="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n 15)"
-    [ -n "$stripped" ] || return 1
-    raw=""   # no color info available; degrade to the #52-only checks below
-  else
-    stripped="$(printf '%s\n' "$raw" | strip_ansi)"
+    raw="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n 15)"
+    [ -n "$raw" ] || return 1
   fi
-  idx="$(printf '%s\n' "$stripped" | grep -vn '^[[:space:]]*$' | tail -n 1 | cut -d: -f1)"
-  [ -n "$idx" ] || return 1
-  line="$(printf '%s\n' "$stripped" | sed -n "${idx}p")"
-  [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
-  rest="${BASH_REMATCH[2]}"
+
+  scanned="$(printf '%s\n' "$raw" | _pane_scan_lines)"
+  [ -n "$scanned" ] || return 1
+
+  sep="$(printf '\x01')"
+  while IFS= read -r out_line; do
+    line="${out_line%%"$sep"*}"
+    mask="${out_line#*"$sep"}"
+    if [[ -n "${line//[[:space:]]/}" ]]; then
+      last_line="$line"
+      last_mask="$mask"
+      found=1
+    fi
+  done <<SCANEOF
+$scanned
+SCANEOF
+  [ "$found" -eq 1 ] || return 1
+
+  [[ "$last_line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
+  local rest="${BASH_REMATCH[2]}"
   [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
   [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
-  if [ -n "$raw" ]; then
-    raw_line="$(printf '%s\n' "$raw" | sed -n "${idx}p")"
-    _pane_draft_dim_at_rest "$raw_line" "$line" "$rest" && return 1
-  fi
+
+  local off=$(( ${#last_line} - ${#rest} ))
+  [ "${last_mask:$off:1}" = "1" ] && return 1
   return 0
 }
 
-# Is the SGR "dim/faint" attribute (ECMA-48 code 2 -- a decades-old terminal
-# standard, not a Claude Code TUI detail, so unlike the config-driven
-# TUI_*_REGEX patterns above this is not expected to need per-install tuning)
-# active at the exact byte offset in <raw_line> where <rest> begins within
-# <stripped_line>? Byte offsets, not bash's locale-dependent character counts,
-# are what line up 1:1 with <raw_line> (strip_ansi never adds/removes a
-# non-escape byte) -- perl computes the offset itself from the byte lengths of
-# $line/$rest so callers never need to fork `wc -c`. Parses SGR parameters
-# properly (048/48 consume their trailing 5;n or 2;r;g;b arguments rather than
-# being read as standalone attribute codes) so truecolor's extended-colour
-# introducer (38;2;R;G;Bm) is never mistaken for dim (issue #101 rv101 finding
-# 1), and stops at the target byte rather than scanning the whole line, so a
-# dim run elsewhere on the row (a trailing affordance, or ghost text
-# continuing inline after real typed text) never suppresses a real draft
-# (rv101 finding 2).
-_pane_draft_dim_at_rest() { # <raw_line> <stripped_line> <stripped_rest>  -> 0 if dim
+# The one pass issues #111/#112 ask for: reads the multi-line raw (possibly
+# -e/color) capture on stdin and, per line, emits the stripped (visible-only)
+# text and a same-length mask of '1'/'0' marking whether the SGR dim/faint
+# attribute (ECMA-48 code 2) is active at each visible byte -- separated by a
+# literal \x01 byte (any \x01 that shows up in the visible text itself is
+# sanitized to a space so it can never collide with the separator). This is
+# the ONLY
+# place that decides which raw bytes are "visible": there is no second,
+# independently-maintained notion (like strip_ansi()'s regexes) for
+# pane_has_draft() to drift out of sync with, which is what issue #111 was
+# about. Recognizes exactly the four escape classes strip_ansi() does -- CSI
+# (`ESC [ ... final-byte`), OSC (`ESC ] ... BEL` or `ESC ] ... ESC \`), charset
+# selects (`ESC ( X` / `ESC ) X`), and SO/SI (`\x0e`/`\x0f`) -- as zero-width,
+# and everything else (including an escape byte that doesn't complete one of
+# those four shapes before end of line) as literal visible text, matching
+# strip_ansi()'s "no match, no deletion" behavior. SGR ("m"-terminated CSI)
+# parameters are parsed properly so 38/48's trailing 5;n or 2;r;g;b arguments
+# are consumed rather than misread as standalone attribute codes (rv101
+# finding 1), and %active resets at the start of every line, same as the
+# per-line walker this replaces (rv101 finding 2's per-row scoping still
+# holds: dim state is whatever it is exactly at each visible byte, not
+# smeared across the row).
+_pane_scan_lines() {
   perl -e '
-    my ($raw, $line, $rest) = @ARGV;
-    my $target = length($line) - length($rest);
-    my %active;
-    my $i = 0;
-    my $len = length($raw);
-    my $visible = 0;
-    while ($i < $len) {
-      if (substr($raw, $i, 1) eq "\x1b") {
-        if (substr($raw, $i + 1, 1) eq "[") {
-          my $j = $i + 2;
-          while ($j < $len && substr($raw, $j, 1) !~ /[A-Za-z]/) { $j++; }
-          if (substr($raw, $j, 1) eq "m") {
-            my $params = substr($raw, $i + 2, $j - ($i + 2));
-            my @toks = length($params) ? split(/;/, $params, -1) : ("0");
-            my $k = 0;
-            while ($k <= $#toks) {
-              my $p = $toks[$k];
-              $p = "0" if $p eq "";
-              if ($p eq "0") { %active = (); }
-              elsif ($p eq "22") { delete $active{2}; }
-              elsif ($p eq "38" || $p eq "48") {
-                my $mode = defined($toks[$k + 1]) ? $toks[$k + 1] : "";
-                if ($mode eq "5") { $k += 2; }
-                elsif ($mode eq "2") { $k += 4; }
-              } else {
-                $active{$p} = 1;
-              }
-              $k++;
+    local $/;
+    my $raw = <STDIN>;
+    $raw = "" unless defined $raw;
+    for my $raw_line (split(/\n/, $raw, -1)) {
+      my %active;
+      my $stripped = "";
+      my $mask = "";
+      my $i = 0;
+      my $len = length($raw_line);
+      while ($i < $len) {
+        my $c = substr($raw_line, $i, 1);
+        if ($c eq "\x1b") {
+          my $c2 = $i + 1 < $len ? substr($raw_line, $i + 1, 1) : "";
+          if ($c2 eq "[") {
+            my $j = $i + 2;
+            my $csi_ok = 1;
+            while ($j < $len) {
+              my $cj = substr($raw_line, $j, 1);
+              last if $cj =~ /[A-Za-z]/;
+              if ($cj !~ /[0-9;:?<=>]/) { $csi_ok = 0; last; }
+              $j++;
             }
+            if ($csi_ok && $j < $len) {
+              my $final = substr($raw_line, $j, 1);
+              if ($final eq "m") {
+                my $params = substr($raw_line, $i + 2, $j - ($i + 2));
+                my @toks = length($params) ? split(/;/, $params, -1) : ("0");
+                my $k = 0;
+                while ($k <= $#toks) {
+                  my $p = $toks[$k];
+                  $p = "0" if $p eq "";
+                  if ($p eq "0") { %active = (); }
+                  elsif ($p eq "22") { delete $active{2}; }
+                  elsif ($p eq "38" || $p eq "48") {
+                    my $mode = defined($toks[$k + 1]) ? $toks[$k + 1] : "";
+                    if ($mode eq "5") { $k += 2; }
+                    elsif ($mode eq "2") { $k += 4; }
+                  } else {
+                    $active{$p} = 1;
+                  }
+                  $k++;
+                }
+              }
+              $i = $j + 1;
+              next;
+            }
+            $stripped .= $c;
+            $mask .= (exists $active{2} ? "1" : "0");
+            $i++;
+            next;
           }
-          $i = $j + 1;
+          if ($c2 eq "]") {
+            my $j = $i + 2;
+            my $term_end = -1;
+            while ($j < $len) {
+              my $cj = substr($raw_line, $j, 1);
+              if ($cj eq "\x07") { $term_end = $j + 1; last; }
+              if ($cj eq "\x1b") {
+                if ($j + 1 < $len && substr($raw_line, $j + 1, 1) eq "\\") { $term_end = $j + 2; }
+                last;
+              }
+              $j++;
+            }
+            if ($term_end >= 0) {
+              $i = $term_end;
+              next;
+            }
+            $stripped .= $c;
+            $mask .= (exists $active{2} ? "1" : "0");
+            $i++;
+            next;
+          }
+          if ($c2 eq "(" || $c2 eq ")") {
+            my $c3 = $i + 2 < $len ? substr($raw_line, $i + 2, 1) : "";
+            if ($c3 ne "" && $c3 =~ /[0-9A-Za-z]/) {
+              $i += 3;
+              next;
+            }
+            $stripped .= $c;
+            $mask .= (exists $active{2} ? "1" : "0");
+            $i++;
+            next;
+          }
+          $stripped .= $c;
+          $mask .= (exists $active{2} ? "1" : "0");
+          $i++;
           next;
         }
-        $i++;  # lone/non-CSI escape byte; not an SGR sequence, skip it alone
-        next;
+        if ($c eq "\x0e" || $c eq "\x0f") { $i++; next; }
+        $stripped .= $c;
+        $mask .= (exists $active{2} ? "1" : "0");
+        $i++;
       }
-      if ($visible >= $target) { exit(exists $active{2} ? 0 : 1); }
-      $visible++;
-      $i++;
+      $stripped =~ s/\x01/ /g;  # never let literal pane text collide with our \x01 separator
+      print $stripped, "\x01", $mask, "\n";
     }
-    exit 1;
-  ' "$1" "$2" "$3"
+  '
 }
 
 # Deliver text into a pane reliably:
