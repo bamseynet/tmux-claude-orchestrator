@@ -16,15 +16,17 @@ setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
 
-  # tmux stub: report no windows at all by default (every worker looks reapable
-  # from the "still-windowed" guard's point of view unless a test overrides this).
-  cat > "$STUBBIN/tmux" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list-windows) : ;;
-esac
-exit 0
-EOF
+  # tmux fixture: no session is ever created, so list-windows (from clean.sh,
+  # called by reap_terminal_workers) fails exactly as real tmux would against
+  # a nonexistent session -- every worker looks reapable from the
+  # "still-windowed" guard's point of view unless a test passes its own
+  # <live_windows> string directly (reap_terminal_workers takes that as an
+  # arg here, not from tmux, so this only affects clean.sh's own kill-window
+  # skip-check, which is harmless against an absent session).
+  export FAKE_TMUX_STATE="$BATS_TEST_TMPDIR/fake-tmux-state"
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/helpers/fake-tmux.bash"
+  fake_tmux_install_stub "$STUBBIN"
 
   # git stub: worktree remove deletes the target dir like real git; everything
   # else (branch show-ref/-D, worktree prune) is a graceful no-op.
