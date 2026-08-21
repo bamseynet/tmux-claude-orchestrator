@@ -57,6 +57,22 @@ worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
   return 0
 }
 
+# Prints the live window list for session $S, or FAILS (returns 1, prints
+# nothing) if the session itself does not exist (issue #114). A plain
+# `tmux list-windows -t "$S" 2>/dev/null` cannot be trusted for this: on a gone
+# session/server it fails, but that failure was previously swallowed into an
+# empty string -- indistinguishable from "the session is up but happens to
+# have zero windows" -- which is exactly the case that made dead_sweep treat
+# every active worker as simultaneously dead when the operator killed/exited
+# the whole tmux session (the loops keep running, reparented, per #114).
+# Checking session_exists() first (exact-match, not tmux's ambiguous-prefix
+# has-session) lets a caller skip the sweep entirely for the tick instead of
+# handing dead_sweep a windows list it cannot trust.
+live_windows() { # -> prints newline-separated window names; returns 1 if $S is gone
+  session_exists "$S" || return 1
+  tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null
+}
+
 # Pure predicate (no tmux, no fs): does this pane text show a rate-limit error?
 # Broadened beyond "rate limit"/429/overloaded to also catch phrasing like
 # "usage limit reached" that providers use instead of a literal "rate limit".
@@ -356,7 +372,17 @@ log "watchdog start (interval=${interval}s cooldown=${cooldown}s stall=${stall}s
 
 while [ ! -f "$STATE_DIR/.stop" ]; do
   # Capture the live window names once per tick; reused by both sweeps below.
-  windows="$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)"
+  # If the session itself is gone (issue #114 -- e.g. this loop was orphaned
+  # by a `tmux kill-session`/exit and reparented to systemd), skip the WHOLE
+  # tick rather than sweeping against a windows list we can't trust: an empty
+  # list here could mean "every window died" (real) or "the session is gone"
+  # (not a worker failure at all -- would wrongly mark every active worker
+  # dead and prune every worktree/branch in one debounce window).
+  if ! windows="$(live_windows)"; then
+    log "watchdog: session '$S' not found this tick -- skipping sweep (orphaned loop or session not up yet)"
+    sleep "$interval"
+    continue
+  fi
   while IFS= read -r w; do
     [ -n "$w" ] || continue
     sweep_window "$w" "$cooldown"
