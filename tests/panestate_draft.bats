@@ -195,3 +195,42 @@ EOF
   run pane_has_draft "orch:master"
   [ "$status" -ne 0 ]
 }
+
+# strip_ansi() (a general-purpose stream filter, also used by pane_tail()) and
+# _pane_scan_lines() (pane_has_draft()'s specialized parser, which also tracks
+# dim state) are two separate implementations of "which raw bytes are
+# visible" -- kept deliberately separate because pane_tail() has no use for a
+# dim mask and a merged implementation would change pane_tail()'s streaming/
+# no-trailing-newline behavior. Since they are not literally the same code,
+# nothing stops them drifting apart the way #111 found; pin their stripped-text
+# output to stay byte-identical across every escape shape either one claims to
+# handle, so any future edit to one without the other fails a test instead of
+# shipping silently.
+@test "strip_ansi() and _pane_scan_lines()'s stripped text agree byte-for-byte across escape shapes" {
+  local -a cases=(
+    $'plain text, no escapes at all'
+    "${ESC}[31mred${ESC}[0m"
+    "${ESC}[38;5;231mtruecolor-ish 256${ESC}[0m"
+    "${ESC}[38;2;255;128;0mtruecolor${ESC}[0m"
+    "${ESC}[2mdim${ESC}[22mnot dim"
+    "${ESC}]8;;http://example.com/a/b${BEL}link text${ESC}]8;;${BEL}"
+    "${ESC}]8;;http://example.com/a/b${ESC}\\\\link text via ST${ESC}]8;;${ESC}\\\\"
+    "${ESC}(B${ESC})0charset selects"
+    "$(printf '\x0eSO\x0fSI')"
+    "${ESC}[1 mmalformed CSI (space intermediate) stays literal"
+    "${ESC}[unterminated CSI at end of line"
+    "${ESC}[38;5;231m${ESC}]8;;http://example.com/x${BEL}mixed${ESC}[0m${ESC}]8;;${BEL}"
+  )
+  local input stripped_old stripped_new
+  for input in "${cases[@]}"; do
+    stripped_old="$(printf '%s' "$input" | strip_ansi)"
+    stripped_new="$(printf '%s\n' "$input" | _pane_scan_lines)"
+    stripped_new="${stripped_new%%$'\x01'*}"
+    [ "$stripped_old" = "$stripped_new" ] || {
+      echo "MISMATCH for input: $input" >&2
+      echo "  strip_ansi:        $stripped_old" >&2
+      echo "  _pane_scan_lines:  $stripped_new" >&2
+      return 1
+    }
+  done
+}
