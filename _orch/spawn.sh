@@ -38,9 +38,9 @@ resolve_role() {
   if [ -z "$m" ]; then
     defined="$(jq -r '(.models.roles // {}) | keys | join(", ")' "$CONFIG" 2>/dev/null)"
     if [ -n "$defined" ]; then
-      echo "spawn: unknown role '$name' (expected one of: $defined)" >&2
+      say "spawn: unknown role '$name' (expected one of: $defined)" >&2
     else
-      echo "spawn: unknown role '$name' (models.roles is not defined in $CONFIG)" >&2
+      say "spawn: unknown role '$name' (models.roles is not defined in $CONFIG)" >&2
     fi
     exit 1
   fi
@@ -71,7 +71,7 @@ if [ "${2:-}" = "--preset" ]; then
       task="Update documentation (README, comments, docstrings) to match the current code. Do not change behavior."
       preset_allow="Bash(git diff:*)"
       ;;
-    *) echo "spawn: unknown preset '$preset' (expected review|test|docs)" >&2; exit 1 ;;
+    *) say "spawn: unknown preset '$preset' (expected review|test|docs)" >&2; exit 1 ;;
   esac
   # models.roles refinement (issue #74): when the preset's mapped role IS defined
   # in config, let the matrix be authoritative instead of the hardcoded model
@@ -100,7 +100,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --after)        i=$((i+1)); after_id="${args[$i]:?--after needs a worker <id>}" ;;
     --role)         i=$((i+1)); role="${args[$i]:?--role needs a role name}" ;;
     --skip-permissions|--yolo) skip_perms=1 ;;
-    *) echo "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
+    *) say "spawn: unknown flag '${args[$i]}'" >&2; exit 1 ;;
   esac
   i=$((i+1))
 done
@@ -114,7 +114,7 @@ if [ -z "$explicit_model" ] && [ -n "$role" ]; then
 fi
 if [ -z "$model" ]; then
   model="$(jq -r '.models.default_worker // empty' "$CONFIG" 2>/dev/null)"
-  [ -n "$model" ] || { echo "spawn: model required (or set models.default_worker in $CONFIG)" >&2; exit 1; }
+  [ -n "$model" ] || { say "spawn: model required (or set models.default_worker in $CONFIG)" >&2; exit 1; }
 fi
 
 # Opt-in worker sandbox bypass (issue #69): mirrors how bootstrap.sh launches the
@@ -122,9 +122,9 @@ fi
 # the default stays gated. A second env acknowledgement is required so this can
 # never be enabled by accident (e.g. a stray flag in a copy-pasted command).
 if [ -n "$skip_perms" ] && [ "${ORCH_ALLOW_SKIP_PERMISSIONS:-}" != "1" ]; then
-  echo "spawn: --skip-permissions/--yolo requires ORCH_ALLOW_SKIP_PERMISSIONS=1 in the environment." >&2
-  echo "This bypasses ALL permission checks for worker '$id' — trusted tasks in isolated worktrees only." >&2
-  echo "Set ORCH_ALLOW_SKIP_PERMISSIONS=1 to acknowledge and re-run." >&2
+  say "spawn: --skip-permissions/--yolo requires ORCH_ALLOW_SKIP_PERMISSIONS=1 in the environment." >&2
+  say "This bypasses ALL permission checks for worker '$id' — trusted tasks in isolated worktrees only." >&2
+  say "Set ORCH_ALLOW_SKIP_PERMISSIONS=1 to acknowledge and re-run." >&2
   exit 1
 fi
 
@@ -167,7 +167,7 @@ _resolve_target_repo() {
 
 proj="$(_resolve_target_repo)"
 proj="$(cd "$proj" 2>/dev/null && pwd)" || {
-  echo "spawn: target repo path does not exist: $proj" >&2
+  say "spawn: target repo path does not exist: $proj" >&2
   exit 1
 }
 
@@ -175,15 +175,15 @@ proj="$(cd "$proj" 2>/dev/null && pwd)" || {
 # before we create anything against $proj — see ensure_related_repo() in lib.sh.
 if ! ensure_related_repo "$ORCH_ROOT" "$proj"; then
   log "spawn refused for $id: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated"
-  echo "orch: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated (no shared git history or remote)." >&2
-  echo "Set _orch/config.json's target_repo, ORCH_TARGET_REPO, or --repo explicitly if this is intentional," >&2
-  echo "or set ORCH_ALLOW_UNRELATED_REPO=1 to override." >&2
+  say "orch: toolkit dir ($ORCH_ROOT) and target repo ($proj) look unrelated (no shared git history or remote)." >&2
+  say "Set _orch/config.json's target_repo, ORCH_TARGET_REPO, or --repo explicitly if this is intentional," >&2
+  say "or set ORCH_ALLOW_UNRELATED_REPO=1 to override." >&2
   exit 1
 fi
 
 # refuse duplicate window
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
-  echo "worker '$id' already exists in session '$S'"; exit 1
+  say "worker '$id' already exists in session '$S'"; exit 1
 fi
 
 # Task dependencies (issue #22): --after <id> holds this spawn in the pending
@@ -204,7 +204,7 @@ if [ -n "$after_id" ]; then
   write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" --arg a "$after_id" \
     '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u, after:$a}'
   log "spawn queued for $id: waiting for dependency $after_id to reach done"
-  echo "spawn queued: $id ($model) waiting on '$after_id' to reach done"
+  say "spawn queued: $id ($model) waiting on '$after_id' to reach done"
   exit 0
 fi
 
@@ -222,7 +222,7 @@ if ! check_spawn_gate; then
   write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
     '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u}'
   log "spawn refused for $id: $GATE_REASON; queued"
-  echo "spawn queued: $id ($model) refused — $GATE_REASON"
+  say "spawn queued: $id ($model) refused — $GATE_REASON"
   exit 0
 fi
 
@@ -248,8 +248,8 @@ else
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
-      echo "spawn-failed $id: $wdir is owned by a different orch install ($owner), not this one ($ORCH_ROOT)." >&2
-      echo "Use a different id, or clean it up from that install." >&2
+      say "spawn-failed $id: $wdir is owned by a different orch install ($owner), not this one ($ORCH_ROOT)." >&2
+      say "Use a different id, or clean it up from that install." >&2
       exit 1
     elif worktree_matches_expected "$proj" "$wdir" "$branch"; then
       log "worktree add: $wdir already a clean worktree of $proj on $branch; reusing"
@@ -260,8 +260,8 @@ else
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
-      echo "spawn-failed $id: $wdir exists and is not a valid worktree for this repo/branch." >&2
-      echo "Run 'orch clean $id' to remove it, or use a different id." >&2
+      say "spawn-failed $id: $wdir exists and is not a valid worktree for this repo/branch." >&2
+      say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
   elif ! git -C "$proj" worktree add -B "$branch" "$wdir" >/dev/null 2>&1; then
@@ -270,7 +270,7 @@ else
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
     printf '%s\n' "$sf_line" >> "$INBOX"
     printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
-    echo "spawn-failed $id: git worktree add failed for $wdir" >&2
+    say "spawn-failed $id: git worktree add failed for $wdir" >&2
     exit 1
   else
     stamp_worktree_owner "$wdir" || true
@@ -397,7 +397,7 @@ if [ "$spawn_ok" -eq 1 ]; then
   update_worker_status "$id" '.status="working"'
   record_spend
   log "spawned $id ($model) in $wdir"
-  echo "spawned $id ($model)  ->  window $S:$id   dir $wdir"
+  say "spawned $id ($model)  ->  window $S:$id   dir $wdir"
 else
   # Never-started worker: record it and tell the master so the spawn is not lost.
   update_worker_status "$id" '.status="spawn-failed"'
@@ -405,5 +405,5 @@ else
   printf '%s\n' "$sf_line" >> "$INBOX"
   printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
   log "worker $id: spawn-failed (task injection unconfirmed after retry)"
-  echo "spawn-failed $id ($model)  ->  window $S:$id   dir $wdir" >&2
+  say "spawn-failed $id ($model)  ->  window $S:$id   dir $wdir" >&2
 fi

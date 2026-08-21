@@ -150,6 +150,55 @@ worktree_owned_by_other() { # <wdir> -> 0 if marked with a DIFFERENT ORCH_ROOT
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 
+# --- Timestamped terminal output (issue #90) -----------------------------------
+# orch.log (log(), above) is already timestamped on every line; the interactive
+# surface (orch status/spawn/clean, queue/refusal/error messages) was not, making
+# it impossible to tell how old a scrollback line is in an unattended session, or
+# to line a terminal line up against the matching orch.log entry for the same
+# event. say() is the one helper every human-facing print goes through. It must
+# NEVER be used for machine-readable payloads (orch status --json, collect's JSON,
+# a worker's pane-tail reply) — those stay byte-identical, unprefixed.
+#
+# Precedence (highest first), mirroring the env-beats-config convention used for
+# target-repo resolution above: $ORCH_TIMESTAMPS > output.timestamps in
+# config.json > default on. Recognized truthy/falsy env values follow the same
+# small vocabulary as everywhere else a boolean flag is read from the environment.
+orch_timestamps_enabled() {
+  case "${ORCH_TIMESTAMPS:-}" in
+    0 | false | off | no) return 1 ;;
+    1 | true | on | yes) return 0 ;;
+  esac
+  [ "$(jq -r 'if .output.timestamps == false then "off" else "on" end' "$CONFIG" 2>/dev/null)" != "off" ]
+}
+
+# Format precedence: $ORCH_TIMESTAMP_FORMAT > output.timestamp_format in
+# config.json > default "iso". "iso" matches orch.log's %FT%TZ UTC stamp exactly
+# (best for correlating a terminal line against the log); "short" is a local
+# HH:MM:SS clock (best for reading a live-attached session at a glance).
+orch_timestamp_format() {
+  local fmt="${ORCH_TIMESTAMP_FORMAT:-}"
+  [ -n "$fmt" ] || fmt="$(jq -r '.output.timestamp_format // "iso"' "$CONFIG" 2>/dev/null)"
+  printf '%s' "$fmt"
+}
+
+orch_timestamp() {
+  case "$(orch_timestamp_format)" in
+    short) date +%T ;;
+    *) date -u +%FT%TZ ;;
+  esac
+}
+
+# say <text...> — a human-facing line, timestamp-prefixed unless disabled.
+# Always writes to stdout; redirect the call itself for stderr (e.g. `say "..." >&2`),
+# same as the bare echo/printf calls it replaces.
+say() {
+  if orch_timestamps_enabled; then
+    printf '%s %s\n' "$(orch_timestamp)" "$*"
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
 # Strip ANSI/OSC/charset escapes. Uses perl (present on macOS by default) because
 # BSD sed does not handle \x1b hex escapes reliably.
 strip_ansi() {

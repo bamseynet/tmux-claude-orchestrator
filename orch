@@ -21,6 +21,11 @@ if [ -f "$here/_orch/lib.sh" ]; then
   source "$here/_orch/lib.sh"
   check_deps tmux jq perl
 fi
+# say() (issue #90, from lib.sh) is what every human-facing print below goes
+# through. Fall back to a bare, unstamped echo when lib.sh wasn't sourced above,
+# so the logs/events/help commands a standalone copy of this file still supports
+# keep working without it.
+command -v say >/dev/null 2>&1 || say() { printf '%s\n' "$*"; }
 
 # --- target-repo resolution (issue #35) ---------------------------------------
 # The toolkit's own directory ($ORCH_ROOT) is NOT necessarily the repo workers
@@ -56,7 +61,7 @@ else
 fi
 
 target_repo="$(cd "$target_repo" 2>/dev/null && pwd)" || {
-  echo "orch: target repo path does not exist: $target_repo" >&2
+  say "orch: target repo path does not exist: $target_repo" >&2
   exit 1
 }
 export PROJECT_ROOT="$target_repo"
@@ -97,6 +102,12 @@ case "$cmd" in
       printf '%s\n' "$out"
       exit 0
     fi
+
+    # issue #90: the human table is many rows describing one snapshot in time,
+    # not a log — stamping every row would be noise. Stamp the invocation once
+    # instead (only when timestamps are enabled at all), so a scrollback paste
+    # still shows when this `status` was run.
+    if orch_timestamps_enabled; then say "orch status"; fi
 
     if [ "${#files[@]}" = 0 ]; then
       echo "no workers yet"
@@ -151,7 +162,7 @@ case "$cmd" in
     id="${1:?usage: orch tail <id> [lines]}"; shift || true
     lines="${1:-15}"
     if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
-      echo "no worker window '$id' in session '$SESSION_NAME'" >&2
+      say "no worker window '$id' in session '$SESSION_NAME'" >&2
       exit 1
     fi
     pane_tail "$SESSION_NAME:$id" "$lines"
@@ -160,7 +171,7 @@ case "$cmd" in
     if [ -n "${1:-}" ]; then
       id="$1"
       if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
-        echo "no worker window '$id' in session '$SESSION_NAME'" >&2
+        say "no worker window '$id' in session '$SESSION_NAME'" >&2
         exit 1
       fi
       # issue #70: taking manual control marks the worker human-managed BEFORE
@@ -181,7 +192,7 @@ case "$cmd" in
     ev_line="$(jq -nc --arg id "$id" --arg ts "$(date -u +%FT%TZ)" '{id:$id, event:"detached", ts:$ts}')"
     printf '%s\n' "$ev_line" >> "$state_dir/inbox.jsonl"
     printf '%s\n' "$ev_line" >> "$state_dir/events.jsonl"
-    echo "detached $id (handed back to the orchestrator)"
+    say "detached $id (handed back to the orchestrator)"
     ;;
   down|stop)    exec "$here/_orch/stop.sh" "$@" ;;
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
@@ -197,12 +208,12 @@ case "$cmd" in
       orch)      log_file="$state_dir/orch.log" ;;
       events)    log_file="$state_dir/events.jsonl" ;;
       *)
-        echo "orch logs: choose one of heartbeat|watchdog|orch|events" >&2
+        say "orch logs: choose one of heartbeat|watchdog|orch|events" >&2
         exit 1
         ;;
     esac
     if [ ! -f "$log_file" ]; then
-      echo "no $log_name log yet ($log_file)"
+      say "no $log_name log yet ($log_file)"
       exit 0
     fi
     if [ "${1:-}" = "-f" ]; then
@@ -325,6 +336,15 @@ Env overrides: SESSION_NAME (default: orch-<hash of this toolkit's resolved root
 so two installs in different directories never collide on one tmux session —
 issue #81; set explicitly to pin a memorable name or to intentionally share a
 session), PROJECT_ROOT (default: cwd)
+
+Terminal output timestamps (issue #90): every human-facing message this CLI and
+its background loops print is prefixed with a timestamp by default (never
+machine-readable output like status --json or collect's JSON). Disable with
+ORCH_TIMESTAMPS=0 or output.timestamps=false in _orch/config.json (env wins);
+pick the stamp format with ORCH_TIMESTAMP_FORMAT=iso|short or
+output.timestamp_format in config.json (default: iso, matching orch.log's UTC
+stamp — best for correlating a terminal line with its orch.log entry; short is
+a local HH:MM:SS clock, best for reading a live-attached session at a glance).
 
 Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGET_REPO
 > .target_repo in _orch/config.json > cwd. Workers' worktrees are always created

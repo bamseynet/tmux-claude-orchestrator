@@ -55,18 +55,18 @@ source "$here/lib.sh"   # provides SESSION_NAME, ORCH_WINDOW, send_prompt(), pan
 # Resolve the target: explicit arg > $ORCH_TARGET > the orchestrator window.
 target="${target:-${ORCH_TARGET:-${SESSION_NAME}:${ORCH_WINDOW}}}"
 
-command -v tmux >/dev/null 2>&1 || { echo "tmux not found" >&2; exit 1; }
+command -v tmux >/dev/null 2>&1 || { say "tmux not found" >&2; exit 1; }
 tmux has-session -t "${target%%:*}" 2>/dev/null || {
-  echo "no such tmux session: ${target%%:*}" >&2; exit 1; }
+  say "no such tmux session: ${target%%:*}" >&2; exit 1; }
 tmux list-windows -t "${target%%:*}" -F '#S:#W' 2>/dev/null | grep -qxF -- "$target" \
   || tmux display-message -t "$target" -p '' >/dev/null 2>&1 \
-  || { echo "no such tmux window: $target" >&2; exit 1; }
+  || { say "no such tmux window: $target" >&2; exit 1; }
 
 # Draft guard: never clobber an unsent operator draft in the orchestrator pane
 # (issue #38/#52). If the pane's true last input line holds a draft, skip this
 # tick — a keepalive can safely wait for the next one. --force overrides.
 if [ "$force" -eq 0 ] && pane_has_draft "$target"; then
-  echo "skip: '$target' has an unsent draft; not sending (use --force to override)"
+  say "skip: '$target' has an unsent draft; not sending (use --force to override)"
   exit 0
 fi
 
@@ -74,4 +74,4 @@ fi
 # + Enter gated on the paste landing).
 send_prompt "$target" "$CMD"
 
-echo "sent '$CMD' to $target"
+say "sent '$CMD' to $target"
