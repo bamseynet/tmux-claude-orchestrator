@@ -149,6 +149,21 @@ require_valid_session_name() { # call before interpolating $SESSION_NAME into a 
 session_exists() { # <name> -> 0 if a session with that EXACT name exists
   tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$1"
 }
+
+# require_session_exists() (issue #107): the shared "fail before any tmux write"
+# guard for the hard-error call sites (send.sh, spawn.sh, ask.sh) -- a bare
+# `-t "$S"` target matches by UNAMBIGUOUS PREFIX, so a caller skipping this check
+# could silently type/spawn into a DIFFERENT, longer-named live session instead
+# of failing. One shared helper next to session_exists() itself, so a future
+# write-path call site can't reintroduce the hazard by forgetting to duplicate it.
+# clean.sh/watchdog.sh intentionally do NOT use this: their idempotent-teardown
+# semantics need a no-op-if-missing check, not an error exit.
+require_session_exists() { # <name> -> exits 1 with a standard message if it doesn't
+  if ! session_exists "$1"; then
+    say "no such tmux session: $1" >&2
+    exit 1
+  fi
+}
 export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 : "${ORCH_WINDOW:=orchestrator}"  # master window name
 

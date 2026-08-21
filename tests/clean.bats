@@ -56,6 +56,7 @@ setup() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) echo "w1" ;;   # matches the id we clean below
 esac
 exit 0
@@ -111,4 +112,36 @@ EOF
 @test "clean.sh requires an id argument" {
   run "$ORCH_DIR/clean.sh"
   [ "$status" -ne 0 ]
+}
+
+# --- prefix-hijack regression (issue #107) ----------------------------------
+# Real tmux's target resolution matches an unambiguous PREFIX (confirmed
+# against tmux 3.4), not just an exact name. clean.sh's kill-window is the
+# highest-stakes write path in the whole toolkit: it runs UNATTENDED from
+# `orch prune` and the watchdog's dead-worker sweep, with no operator in the
+# loop, so a bare `-t "$S"`/`-t "$S:$id"` here could silently KILL a window in
+# a DIFFERENT, longer-named live session instead of correctly no-op'ing
+# (clean.sh is documented as idempotent: a missing session is a no-op, not an
+# error). Only "billing" is actually live and holds window "w1"; this
+# install's own session ("bill") is NOT running. Assert the real hijack
+# signal -- no kill-window call ever reaches "billing" -- not a status-code
+# proxy for it, and that clean.sh still exits 0 (idempotent no-op) rather than
+# erroring.
+@test "clean.sh refuses to kill a window in a DIFFERENT live session whose name is a prefix of the target (issue #107)" {
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "billing" ;;
+  list-windows) echo "w1" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  SESSION_NAME="bill" run "$ORCH_DIR/clean.sh" w1
+  [ "$status" -eq 0 ]
+  ! grep -q '^kill-window' "$CALLS"
 }

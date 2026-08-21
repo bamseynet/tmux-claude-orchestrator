@@ -68,6 +68,17 @@ worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
 # Checking session_exists() first (exact-match, not tmux's ambiguous-prefix
 # has-session) lets a caller skip the sweep entirely for the tick instead of
 # handing dead_sweep a windows list it cannot trust.
+# session_exists() (issue #107): the same exact-match check also closes a
+# write-path hazard here -- a bare `-t "$S"` target matches by UNAMBIGUOUS
+# PREFIX, so list-windows below could otherwise silently list a DIFFERENT,
+# longer-named live session's windows, and sweep_window's send_prompt /
+# clean.sh's kill-window (called from reap_terminal_workers, which this
+# feeds) would then mutate THAT session instead of treating a missing "$S"
+# as "no live windows" (issue #96 fixed the read-only existence checks; this
+# closes the write path -- clean.sh runs here unattended from prune and the
+# dead-worker reap sweep, with no operator in the loop). Re-checked on every
+# call, since the main loop calls this once per tick and the session can
+# appear or disappear underneath it over the toolkit's lifetime.
 live_windows() { # -> prints newline-separated window names; returns 1 if $S is gone
   session_exists "$S" || return 1
   tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null
@@ -337,7 +348,11 @@ worker_is_reapable() { # <status> <updated_epoch> <now> <retention_seconds> -> 0
 # is skipped even if its status is terminal — belt-and-braces alongside
 # worker_is_reapable, since a window should never outlive a terminal status but a
 # stale/racing status file is exactly the kind of thing this sweep must not trust
-# blindly. <now> defaults to the real clock; tests pass it explicitly.
+# blindly. <now> defaults to the real clock; tests pass it explicitly. Its
+# <live_windows> arg comes from the shared live_windows() above (issue #107's
+# session_exists() guard closes the same write-path hazard for clean.sh's
+# kill-window here, since this is what `prune` and the dead-worker reap sweep
+# call it unattended, with no operator in the loop).
 reap_terminal_workers() { # <retention_seconds> <live_windows> [now]
   local retention="$1" windows="$2" now="${3:-$(date -u +%s)}"
   local f id status ts epoch
@@ -363,7 +378,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   # One-shot `orch prune`: reap every terminal worker right now, ignoring
   # retention, then exit — no loop, no sleep.
   if [ "${1:-}" = "prune" ]; then
-    windows="$(tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null)"
+    windows="$(live_windows)"
     reap_terminal_workers 0 "$windows"
     exit 0
   fi

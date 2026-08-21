@@ -15,6 +15,7 @@ setup() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows)  exit 0 ;;                       # no existing window with this id
   capture-pane)  echo '> ready for shortcuts' ;;  # always looks idle/ready
 esac

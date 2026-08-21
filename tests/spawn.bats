@@ -26,6 +26,7 @@ setup() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows)  exit 0 ;;                       # no existing window with this id
   capture-pane)  echo '> ready for shortcuts' ;;  # always looks idle/ready
 esac
@@ -201,6 +202,7 @@ JSON
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) echo "w6" ;;
 esac
 exit 0
@@ -208,6 +210,35 @@ EOF
   run "$SPAWN" w6 sonnet "do the thing" --no-worktree
   [ "$status" -eq 1 ]
   [[ "$output" == *"already exists"* ]]
+}
+
+# --- prefix-hijack regression (issue #107) ----------------------------------
+# Real tmux's target resolution matches an unambiguous PREFIX (confirmed
+# against tmux 3.4), not just an exact name. spawn.sh's new-window/send-keys/
+# paste-buffer could otherwise silently create and drive a window in a
+# DIFFERENT, longer-named live session instead of failing. Only "billing" is
+# actually live; this install's own session ("bill") is NOT running. Assert
+# the real hijack signal -- no new-window/send-keys/paste-buffer call ever
+# reaches "billing" -- not a status-code proxy for it.
+@test "spawn.sh refuses to drive a DIFFERENT live session whose name is a prefix of the target (issue #107)" {
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "billing" ;;
+  list-windows) exit 0 ;;
+  capture-pane) echo "> ready for shortcuts" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  SESSION_NAME="bill" run "$SPAWN" w8 sonnet "do the thing" --no-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux session: bill"* ]]
+  ! grep -q '^new-window\|^send-keys\|^paste-buffer' "$CALLS"
 }
 
 @test "smoke: spawn.sh end-to-end with mocked tmux/git/claude marks the worker working" {

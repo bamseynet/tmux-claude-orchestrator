@@ -37,6 +37,7 @@ JSON
 #!/usr/bin/env bash
 echo "\$@" >> "$CALLS"
 case "\${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) exit 0 ;;
   capture-pane)
     n="\$(cat "$ENTER_COUNT_FILE")"

@@ -42,6 +42,7 @@ setup() {
   cat > "$WORK/bin/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "$SESSION_NAME" ;;
   list-windows)  exit 0 ;;
   capture-pane)  echo '> ready for shortcuts' ;;
 esac

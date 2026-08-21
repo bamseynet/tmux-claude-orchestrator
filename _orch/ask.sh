@@ -14,12 +14,11 @@ msg="$*"
 require_valid_session_name
 S="$SESSION_NAME"
 
-# session_exists() (issue #96): a bare `-t "$S"` target matches by UNAMBIGUOUS
-# PREFIX, so this could otherwise silently read/drive a DIFFERENT, longer-named
-# live session's window instead of failing.
-if ! session_exists "$S"; then
-  say "no such tmux session: $S"; exit 1
-fi
+# require_session_exists() (issue #96): a bare `-t "$S"` target matches by
+# UNAMBIGUOUS PREFIX, so this could otherwise silently read/drive a DIFFERENT,
+# longer-named live session's window instead of failing. Shared helper in
+# lib.sh (issue #107) so this guard can't drift/be forgotten per-file.
+require_session_exists "$S"
 
 if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   say "no worker window '$id' in session '$S'"; exit 1
