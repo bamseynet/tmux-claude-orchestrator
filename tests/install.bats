@@ -71,6 +71,23 @@ setup() {
   [ "$output" = "99" ]
 }
 
+@test "install.sh re-run (update) preserves a persisted session name (issue #92 rv92 finding 4)" {
+  # install.sh wipes _orch/state wholesale on every run (see "never copies
+  # runtime state" above) -- the persisted session name (issue #92) must be
+  # explicitly backed up and restored across that wipe, the same way
+  # config.json already is, or an `orch up --name billing` gets silently
+  # reverted to the hash default by the next re-install/upgrade.
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  mkdir -p "$TARGET/_orch/state"
+  printf 'billing\n' > "$TARGET/_orch/state/session-name"
+
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"preserved existing session name"* ]]
+  [ "$(cat "$TARGET/_orch/state/session-name")" = "billing" ]
+}
+
 @test "install.sh re-run still refreshes the toolkit scripts themselves" {
   run "$INSTALL" "$TARGET"
   [ "$status" -eq 0 ]

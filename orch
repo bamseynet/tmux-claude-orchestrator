@@ -180,6 +180,7 @@ case "$cmd" in
   merge)        exec "$here/_orch/merge.sh" "$@" ;;
   ask)          exec "$here/_orch/ask.sh" "$@" ;;
   tail)
+    command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
     id="${1:?usage: orch tail <id> [lines]}"; shift || true
     lines="${1:-15}"
     if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
@@ -189,6 +190,7 @@ case "$cmd" in
     pane_tail "$SESSION_NAME:$id" "$lines"
     ;;
   attach)
+    command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
     if [ -n "${1:-}" ]; then
       id="$1"
       if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
@@ -263,8 +265,11 @@ orch — tmux + Claude Code orchestrator
                                      independent of where this toolkit lives. See
                                      "Target repo" below.
 
-  ./orch up                          start session + master + heartbeat + watchdog
-                                     (alias: bootstrap)
+  ./orch up [--name <name>]          start session + master + heartbeat + watchdog
+                                     (alias: bootstrap). --name sets AND PERSISTS
+                                     this install's session name (issue #92) --
+                                     see precedence below. Letters/digits/_/- only
+                                     (tmux uses ':'/'.' as target separators).
   ./orch spawn <id> <model> "task" [--no-worktree] [perm]
                                      spawn a worker (own worktree + window)
                                      model: opus | sonnet | haiku
@@ -353,10 +358,15 @@ orch — tmux + Claude Code orchestrator
                                      \$SESSION_NAME:\$ORCH_WINDOW; skips a pane with
                                      an unsent draft unless --force.
 
-Env overrides: SESSION_NAME (default: orch-<hash of this toolkit's resolved root>,
-so two installs in different directories never collide on one tmux session —
-issue #81; set explicitly to pin a memorable name or to intentionally share a
-session), PROJECT_ROOT (default: cwd)
+Session name precedence (issue #92): --name flag (orch up, persists to
+_orch/state/session-name) > \$SESSION_NAME env (this invocation only, does not
+persist) > persisted name from a prior --name > orch-<hash of this toolkit's
+resolved root> default (issue #81, so two installs in different directories
+never collide on one tmux session). Renaming via --name while the OLD
+persisted session is still running is refused, not silently orphaned — stop
+it first or finish up under the old name.
+
+Env overrides: SESSION_NAME (see precedence above), PROJECT_ROOT (default: cwd)
 
 Terminal output timestamps (issue #90): every human-facing message this CLI and
 its background loops print is prefixed with a timestamp by default (never

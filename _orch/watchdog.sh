@@ -343,6 +343,7 @@ reap_terminal_workers() { # <retention_seconds> <live_windows> [now]
 # Only run the long-lived loop when executed as a script; when sourced (e.g. by the
 # hermetic bats tests) the helpers above are exposed without starting the loop.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  require_valid_session_name
   # One-shot `orch prune`: reap every terminal worker right now, ignoring
   # retention, then exit — no loop, no sleep.
   if [ "${1:-}" = "prune" ]; then

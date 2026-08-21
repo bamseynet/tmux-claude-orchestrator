@@ -134,7 +134,16 @@ stop_loop watchdog  watchdog.sh  || failed="$failed watchdog"
 if [ -z "${failed// /}" ]; then
   log "stopped background loops"
   say "stopped heartbeat + watchdog."
-  say "session '$SESSION_NAME' still running — kill it with:  tmux kill-session -t $SESSION_NAME"
+  # Never print a "kill it with: tmux kill-session -t <name>" recovery command
+  # for an INVALID session name (issue #92 rv92 finding): tmux target
+  # resolution prefix-matches, so a corrupt SESSION_NAME pasted into that
+  # command could resolve to and kill a completely unrelated live session —
+  # the same hazard family as the --name hijack this issue already fixed.
+  if [ -n "$SESSION_NAME_ERROR" ]; then
+    say "session name is invalid ($SESSION_NAME) -- skipping the tmux kill-session hint (see the error above/in 'orch help')."
+  else
+    say "session '$SESSION_NAME' still running — kill it with:  tmux kill-session -t $SESSION_NAME"
+  fi
   exit 0
 fi
 
