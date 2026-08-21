@@ -536,7 +536,9 @@ SCANEOF
 # -e/color) capture on stdin and, per line, emits the stripped (visible-only)
 # text and a same-length mask of '1'/'0' marking whether the SGR dim/faint
 # attribute (ECMA-48 code 2) is active at each visible byte -- separated by a
-# literal \x01 byte, which real pane text cannot contain. This is the ONLY
+# literal \x01 byte (any \x01 that shows up in the visible text itself is
+# sanitized to a space so it can never collide with the separator). This is
+# the ONLY
 # place that decides which raw bytes are "visible": there is no second,
 # independently-maintained notion (like strip_ansi()'s regexes) for
 # pane_has_draft() to drift out of sync with, which is what issue #111 was
@@ -647,6 +649,7 @@ _pane_scan_lines() {
         $mask .= (exists $active{2} ? "1" : "0");
         $i++;
       }
+      $stripped =~ s/\x01/ /g;  # never let literal pane text collide with our \x01 separator
       print $stripped, "\x01", $mask, "\n";
     }
   '
