@@ -5,7 +5,10 @@
 # Targets the master/orchestrator window ($SESSION_NAME:$ORCH_WINDOW, default
 # orch-<hash of this toolkit's root>:orchestrator — see lib.sh) — NOT a worker
 # session the orchestrator drives. Override with an explicit "<session:window>"
-# arg or the $ORCH_TARGET env var if needed.
+# arg or the $ORCH_TARGET env var if needed. The session name must be EXACT
+# (issue #96): an abbreviated prefix that tmux itself would happily resolve is
+# refused rather than silently driving a different, live session whose name
+# happens to start with it.
 #
 # Usage (normally invoked via the `./orch remote-control` subcommand; can
 # also be run directly, e.g. from cron):
@@ -26,6 +29,7 @@ while [ $# -gt 0 ]; do
     -h|--help)
       echo "Usage: $0 [--force] [<session:window>]" >&2
       echo "  Types '$CMD' into \$SESSION_NAME:\$ORCH_WINDOW (or the given target) and submits it." >&2
+      echo "  The session name must be EXACT -- an abbreviated prefix is refused, not resolved." >&2
       echo "  --force  send even if the pane holds an unsent draft." >&2
       exit 0
       ;;

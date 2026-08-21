@@ -391,7 +391,12 @@ orch — tmux + Claude Code orchestrator
                                      own pane and submit it (keepalive/reconnect
                                      nudge, e.g. from cron). Defaults to
                                      \$SESSION_NAME:\$ORCH_WINDOW; skips a pane with
-                                     an unsent draft unless --force.
+                                     an unsent draft unless --force. The session
+                                     name in <session:window> must be EXACT
+                                     (issue #96) -- an abbreviated prefix that tmux
+                                     would resolve on your behalf is refused rather
+                                     than silently driving a different, live
+                                     session.
 
 Session name precedence (issue #92): --name flag (orch up, persists to
 _orch/state/session-name) > \$SESSION_NAME env (this invocation only, does not
