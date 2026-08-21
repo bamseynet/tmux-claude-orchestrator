@@ -156,11 +156,43 @@ heartbeat_main() {
   max_draft_ticks="$(jq -r '.heartbeat.max_draft_requeue_ticks // 10' "$CONFIG")"
   max_draft_secs="$(jq -r '.heartbeat.max_draft_requeue_seconds // 300' "$CONFIG")"
 
+  # Issue #91: read the self-update knobs ONCE here (like normal/idle above),
+  # not per-tick — the loop below only needs a cheap mtime check, not a fresh
+  # config read every 20s. `enabled` reads the raw value because jq's
+  # `// default` treats literal `false` as absent (same trap update.sh's own
+  # _cfg avoids); a config that can't be parsed at all fails closed (disabled).
+  local upd_enabled=0 upd_interval_min=1440 upd_state _upd_e _upd_h
+  if _upd_e="$(jq -r '.update.enabled' "$CONFIG" 2>/dev/null)"; then
+    [ "$_upd_e" = "false" ] || upd_enabled=1
+    _upd_h="$(jq -r '.update.interval_hours' "$CONFIG" 2>/dev/null)"
+    case "$_upd_h" in ''|null|*[!0-9]*) ;; *) upd_interval_min=$(( _upd_h * 60 )) ;; esac
+  fi
+
   : > "$INBOX"
   log "heartbeat start (session=$S)"
 
   while [ ! -f "$STATE_DIR/.stop" ]; do
     drain_queue_if_room
+
+    # Issue #91: throttled (>=24h apart, see update.* in config.json), notify-only
+    # self-update check. The default tick is 20s (~4,300/day), so most ticks
+    # must cost NEXT TO NOTHING: `upd_enabled` is read once above (not here),
+    # and when due, "due" itself is a single cheap `find -mmin` mtime check —
+    # only when that says the window has actually elapsed do we pay for
+    # forking the full update.sh (source lib.sh, config reads, network).
+    # update.sh re-checks the throttle itself too (its own tests call
+    # --daily-check directly, not through this loop, and must stay correct
+    # standalone) — this is purely a cheap pre-filter, not a second source of
+    # truth. Skipped under bats (same $BATS_TEST_FILENAME convention as
+    # lib.sh's isolation guard): any test that sources/runs heartbeat_main
+    # with a config carrying update.enabled=true (e.g. a fixture copied from
+    # the real config.json) must never make a real network call.
+    if [ "$upd_enabled" = 1 ] && [ -z "${BATS_TEST_FILENAME:-}" ]; then
+      upd_state="$STATE_DIR/update-check.json"
+      if [ ! -f "$upd_state" ] || [ -z "$(find "$upd_state" -mmin -"$upd_interval_min" 2>/dev/null)" ]; then
+        "$here/update.sh" --daily-check >/dev/null 2>&1 || true
+      fi
+    fi
 
     if master_window_alive "$S:$ORCH_WINDOW"; then
       master_dead_clear

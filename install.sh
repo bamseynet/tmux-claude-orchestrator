@@ -31,36 +31,75 @@ if [ ! -d "$target/.git" ]; then
   echo "    Run this from your project root, or pass the path: ./install.sh /path/to/repo"
 fi
 
-mkdir -p "$target/.claude"
+mkdir -p "$target/.claude" "$target/_orch" "$target/tmux"
 
-# Idempotent update: preserve the target's own config.json (thresholds/budget the
-# user has already tuned) across a re-install, instead of overwriting it with the
-# source defaults every time.
-cfg_backup=""
-[ -f "$target/_orch/config.json" ] && cfg_backup="$(cat "$target/_orch/config.json")"
+# --- Atomic, state-preserving copy --------------------------------------------
+# A plain `cp -R` overwrites each destination file IN PLACE, reusing its
+# existing inode. bash (and any other running script) re-reads an executing
+# script by byte offset from that same inode, so a script this install.sh
+# rewrites while it (or another _orch/*.sh) is still running mid-execution can
+# resume at a shifted offset into different content, or crash, or run an
+# arbitrary fragment — a real failure mode reproduced against a vendored
+# install, not theoretical. Fix: build the ENTIRE new tree in a scratch
+# staging dir first — a failure while staging (e.g. a future upstream
+# missing a directory this version expects) never touches the target at all,
+# so a partial/broken checkout never happens — then swap files into place one
+# at a time via `mv` on the SAME filesystem, which is an atomic rename: the
+# target path gets a NEW inode while anything already reading the OLD file
+# keeps its own open handle to the old inode's original, untouched bytes
+# until it closes it. `trap ... EXIT` guarantees the staging dir never leaks,
+# on either success or failure.
+#
+# The swap set is exactly $src's tree (_orch/*, tmux/*, orch) MINUS
+# _orch/config.json and MINUS _orch/state entirely:
+#   - config.json: swapped in only when the target has none yet (fresh
+#     install). An EXISTING target config.json is never staged, never
+#     touched, by either phase — so the user's tuned thresholds/budget
+#     survive even a totally failed update, not just a successful one (the
+#     previous copy-defaults-then-restore-backup approach had a window,
+#     between overwriting config.json with defaults and restoring the saved
+#     copy over it, where any failure left the defaults clobbering the
+#     user's tuning with no state file even naming what happened).
+#   - _orch/state: never part of $src's shipped tree and never referenced by
+#     this copy at all (no `rm -rf` of it, unlike before) — so an update
+#     never destroys events.jsonl (the durable event history), spend.json
+#     (the budget guard), queue.jsonl (queued-not-dropped spawns),
+#     master-notes.md, the session-owner marker, or heartbeat/watchdog pids.
+#     A fresh install still gets a clean target because nothing pre-exists
+#     under _orch/state to preserve or destroy either way.
+stage="$(mktemp -d "$target/.orch-install-stage.XXXXXX")"
+trap 'rm -rf "$stage"' EXIT
 
-# The persisted session name (issue #92) is per-install identity, not
-# throwaway runtime state -- an operator's `--name` pin must survive an
-# upgrade the same way config.json already does, or a re-install silently
-# reverts a named session back to the orch-<hash> default underneath it.
-name_backup=""
-[ -f "$target/_orch/state/session-name" ] && name_backup="$(cat "$target/_orch/state/session-name")"
+mkdir -p "$stage/_orch" "$stage/tmux"
+cp -R "$src/_orch/." "$stage/_orch/"
+cp -R "$src/tmux/." "$stage/tmux/"
+cp "$src/orch" "$stage/orch"
+rm -rf "$stage/_orch/state"   # defensive: never stage runtime state either
+have_cfg=0
+[ -f "$target/_orch/config.json" ] && have_cfg=1
+[ "$have_cfg" = 1 ] && rm -f "$stage/_orch/config.json"
+chmod +x "$stage/orch" "$stage/_orch/"*.sh
 
-cp -R "$src/_orch" "$target/"
-cp -R "$src/tmux" "$target/"
-cp "$src/orch" "$target/"
-chmod +x "$target/orch" "$target/_orch/"*.sh
-rm -rf "$target/_orch/state"   # never copy runtime state
+while IFS= read -r -d '' f; do
+  rel="${f#"$stage"/}"
+  destf="$target/$rel"
+  mkdir -p "$(dirname "$destf")"
+  mv -f "$f" "$destf"
+done < <(find "$stage" -type f -print0)
 
-if [ -n "$cfg_backup" ]; then
-  printf '%s' "$cfg_backup" > "$target/_orch/config.json"
+if [ "$have_cfg" = 1 ]; then
   echo "  . preserved existing $target/_orch/config.json"
 fi
 
-if [ -n "$name_backup" ]; then
-  mkdir -p "$target/_orch/state"
-  printf '%s' "$name_backup" > "$target/_orch/state/session-name"
-  echo "  . preserved existing session name ($name_backup)"
+# The persisted session name (issue #92) is per-install identity, not
+# throwaway runtime state -- an operator's `--name` pin must survive an
+# upgrade the same way config.json does. Unlike config.json this needs no
+# backup/restore dance: _orch/state is never part of the swap set above (see
+# the block comment on the staged copy), so an existing session-name file is
+# simply never touched in the first place. Still surface the same
+# "preserved" signal nm's install.sh change relied on, for consistency.
+if [ -f "$target/_orch/state/session-name" ]; then
+  echo "  . preserved existing session name ($(cat "$target/_orch/state/session-name"))"
 fi
 
 echo "$version" > "$target/.orch-version"

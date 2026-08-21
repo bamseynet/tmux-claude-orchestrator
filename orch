@@ -221,6 +221,7 @@ case "$cmd" in
   clean|kill)   exec "$here/_orch/clean.sh" "$@" ;;
   prune)        exec "$here/_orch/watchdog.sh" prune "$@" ;;
   remote-control) exec "$here/_orch/send-remote-control.sh" "$@" ;;
+  update)       exec "$here/_orch/update.sh" "$@" ;;
   hud)          exec "$here/_orch/hud.sh" ;;
   logs)
     state_dir="$ORCH_ROOT/_orch/state"
@@ -351,6 +352,22 @@ orch — tmux + Claude Code orchestrator
   ./orch events                      formatted view of the durable event history
                                      (every done/needs-input/stalled/spawn-failed
                                      event, surviving the inbox's destructive drain)
+  ./orch update [--check] [--force]  self-update this vendored copy from upstream
+                                     (issue #91). Compares .orch-version/VERSION
+                                     against upstream's VERSION file and applies
+                                     via install.sh (preserves your _orch/config.json).
+                                     --check reports what would change without
+                                     applying. Refuses to apply (rewriting
+                                     _orch/*.sh out from under a live heartbeat/
+                                     watchdog loop or live workers is unsafe)
+                                     while any worker is live or the tmux session
+                                     is up, unless --force — restart the loops
+                                     yourself afterward (\`./orch down && ./orch up\`).
+                                     A throttled daily background check (at most
+                                     one network call per 24h, see update.* in
+                                     _orch/config.json) runs from the heartbeat
+                                     and only notifies ("update available: X -> Y,
+                                     run \`orch update\`") — it never auto-applies.
   ./orch remote-control [--force] [<session:window>]
                                      type /remote-control into the ORCHESTRATOR's
                                      own pane and submit it (keepalive/reconnect
@@ -382,9 +399,8 @@ Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGE
 against the resolved target repo, never inferred from where this toolkit lives.
 If the toolkit dir and the resolved target repo share no git history or remote,
 spawn refuses to run (set ORCH_ALLOW_UNRELATED_REPO=1 to override intentionally).
-To update a vendored copy of this toolkit, pull _orch/*.sh + orch from upstream
-(subtree/submodule, or a manual diff-and-copy of files you have not customized) —
-do not \`git pull\` inside the target repo expecting toolkit changes; by design its
+To update a vendored copy of this toolkit, run \`./orch update\` (see above) — do
+not \`git pull\` inside the target repo expecting toolkit changes; by design its
 history is unrelated to the toolkit's own.
 
 Spawns are refused-and-queued (not dropped) when at capacity: concurrency

@@ -100,12 +100,13 @@ setup() {
 }
 
 @test "install.sh warns about missing dependencies without failing" {
-  # A PATH with the core utils install.sh itself needs (bash, coreutils, grep) but
-  # none of the checked deps (tmux/jq/claude/perl/git), so the warning path is hit
-  # without install.sh's own execution breaking.
+  # A PATH with the core utils install.sh itself needs (bash, coreutils, grep,
+  # plus mktemp/find/mv for the atomic staged-copy) but none of the checked
+  # deps (tmux/jq/claude/perl/git), so the warning path is hit without
+  # install.sh's own execution breaking.
   STUBBIN="$BATS_TEST_TMPDIR/nodeps"
   mkdir -p "$STUBBIN"
-  for bin in bash sh env cat mkdir rm cp chmod echo grep touch dirname basename; do
+  for bin in bash sh env cat mkdir rm cp chmod echo grep touch dirname basename mktemp find mv; do
     p="$(command -v "$bin")" && ln -s "$p" "$STUBBIN/$bin"
   done
   run env PATH="$STUBBIN" "$INSTALL" "$TARGET"
@@ -130,4 +131,71 @@ setup() {
   run "$INSTALL"
   [ "$status" -eq 0 ]
   [ -d "$TARGET/_orch" ]
+}
+
+# --- Atomic replace / state-preservation (issue #91 review findings) ---------
+
+@test "install.sh replaces a file via atomic rename (new inode), never overwrites in place" {
+  # A process (heartbeat.sh, orch update itself) already reading the OLD file
+  # by inode when a re-install/update rewrites it must keep reading the
+  # ORIGINAL bytes to completion, never a half-overwritten file at a shifted
+  # offset. Simulate that "already reading" process with a bare file
+  # descriptor opened before the second install.sh run.
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  f="$TARGET/_orch/report.sh"
+  before_inode="$(stat -c %i "$f")"
+  before_content="$(cat "$f")"
+  exec 9< "$f"
+
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+
+  after_inode="$(stat -c %i "$f")"
+  [ "$before_inode" != "$after_inode" ]
+
+  via_old_fd="$(cat <&9)"
+  exec 9<&-
+  [ "$via_old_fd" = "$before_content" ]
+}
+
+@test "install.sh never touches _orch/state on an update — runtime state survives" {
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  mkdir -p "$TARGET/_orch/state"
+  echo '{"event":"done"}' > "$TARGET/_orch/state/events.jsonl"
+  echo '{"spawns":3}' > "$TARGET/_orch/state/spend.json"
+  echo '[]' > "$TARGET/_orch/state/queue.jsonl"
+  echo "notes" > "$TARGET/_orch/state/master-notes.md"
+
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+
+  [ "$(cat "$TARGET/_orch/state/events.jsonl")" = '{"event":"done"}' ]
+  [ "$(cat "$TARGET/_orch/state/spend.json")" = '{"spawns":3}' ]
+  [ -f "$TARGET/_orch/state/queue.jsonl" ]
+  [ "$(cat "$TARGET/_orch/state/master-notes.md")" = "notes" ]
+}
+
+@test "install.sh: a failure mid-copy never clobbers the target's tuned config.json" {
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  jq '.thresholds.max_workers = 99' "$TARGET/_orch/config.json" > "$TARGET/_orch/config.json.tmp"
+  mv "$TARGET/_orch/config.json.tmp" "$TARGET/_orch/config.json"
+  before_version="$(cat "$TARGET/.orch-version")"
+
+  # A broken/incomplete "upstream" (missing tmux/ entirely) — install.sh must
+  # fail loudly staging it, before ever touching the target.
+  BROKEN="$BATS_TEST_TMPDIR/brokensrc"
+  mkdir -p "$BROKEN"
+  cp -R "$SRC/_orch" "$BROKEN/"
+  cp "$SRC/install.sh" "$BROKEN/"
+  cp "$SRC/VERSION" "$BROKEN/"
+
+  run "$BROKEN/install.sh" "$TARGET"
+  [ "$status" -ne 0 ]
+
+  run jq -r '.thresholds.max_workers' "$TARGET/_orch/config.json"
+  [ "$output" = "99" ]
+  [ "$(cat "$TARGET/.orch-version")" = "$before_version" ]
 }
