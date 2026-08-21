@@ -14,6 +14,18 @@
 
 SRC="$BATS_TEST_DIRNAME/.."
 
+# Portable inode lookup (GNU stat: -c %i; BSD/macOS stat: -f %i also gives the
+# inode number). Same defensive shape as lib.sh's _lock_mtime: gate on each
+# attempt's own exit status rather than a bare `||`, since a failing GNU stat
+# invocation on a BSD box would otherwise still print unrelated garbage before
+# the fallback runs.
+_inode() { # <path> -> inode number, or empty/failure
+  local out
+  out="$(stat -c %i "$1" 2>/dev/null)" && { printf '%s\n' "$out"; return 0; }
+  out="$(stat -f %i "$1" 2>/dev/null)" && { printf '%s\n' "$out"; return 0; }
+  return 1
+}
+
 setup() {
   # This worker's own launch env sets ORCH_ROOT to ITS orchestrator's real
   # toolkit (the tmux-claude-orchestrator instance driving this very worker)
@@ -67,6 +79,14 @@ setup() {
   cp "$SRC/install.sh" "$UPSTREAM/"
   printf '%s\n' "$UPSTREAM_VERSION" > "$UPSTREAM/VERSION"
   printf '\n# %s\n' "$MARKER" >> "$UPSTREAM/_orch/update.sh"
+  # install.sh stages via `cp -R`, which preserves the SOURCE's mode -- so if
+  # UPSTREAM's scripts were already executable (as this fixture builds them,
+  # copied straight from $SRC), install.sh's own `chmod +x` step (install.sh
+  # ~line 81) could be missing entirely and the target would STILL end up
+  # executable purely by inheritance, silently defeating the `-x` assertion
+  # below. Strip the bit here so that assertion actually exercises install.sh
+  # setting it, not merely preserving what was already there.
+  chmod -x "$UPSTREAM/orch" "$UPSTREAM/_orch/"*.sh
   export UPSTREAM
 
   # --- 3. Stubs. gh reports the bumped version; git clone hands back the
@@ -144,31 +164,89 @@ EOF
   # The core hazard (issue #91/#97): a bash process reading _orch/update.sh by
   # byte offset from ITS OWN inode, while install.sh -- invoked BY that same
   # process, mid-script, via _apply_update -- rewrites the file underneath it.
-  # `run` forks a real child process to exec ./orch, so we cannot literally
-  # inspect update.sh's own in-flight read position from here. What we CAN
-  # assert, deterministically, is the invariant install.sh's atomic-rename
-  # design exists to guarantee: any reader already holding the OLD file open
-  # (by inode, at the moment the swap happens) must keep seeing the complete,
-  # untouched original bytes, and the path must resolve to a NEW inode
-  # afterward. Hold an fd open on the target's update.sh -- standing in for
-  # "the process currently executing it" -- across the run, exactly as
-  # install.bats's "replaces a file via atomic rename" test does for
-  # report.sh. A regression to plain `cp` (same inode, truncate + overwrite
-  # in place) flips both checks: the fd sees the NEW content, not the old,
-  # and the inode never changes.
+  # OBSERVE this live rather than inferring it from a bystander fd: bash keeps
+  # the currently-executing script's own file open for the ENTIRE run (verified
+  # by hand: `ls -la /proc/$$/fd` inside a running `bash script.sh` shows fd
+  # 255 -> script.sh throughout, including while a child process runs) -- that
+  # IS the exact fd this hazard is about. Slow the version-fetch step (well
+  # BEFORE install.sh ever runs) so this test can reliably catch the live
+  # process's fd 255 both before AND after the on-disk path gets swapped out
+  # from under it, without a fixed-offset sleep racing the swap itself.
   update_path="$TARGET/_orch/update.sh"
-  before_update_inode="$(stat -c %i "$update_path")"
-  before_update_content="$(cat "$update_path")"
-  exec 9< "$update_path"
+  before_update_inode="$(_inode "$update_path")"
+
+  cat > "$STUBBIN/gh" <<GHEOF
+#!/usr/bin/env bash
+echo "gh \$*" >> "$GH_LOG"
+if [ "\$1" = "api" ]; then
+  sleep 0.4
+  printf '%s' "$UPSTREAM_VERSION"
+  exit 0
+fi
+exit 0
+GHEOF
+  chmod +x "$STUBBIN/gh"
 
   cd "$TARGET"
-  PATH="$STUBBIN:$PATH" run ./orch update
+  run_out="$BATS_TEST_TMPDIR/run.out"
+  : > "$run_out"
+  # `exec` as the subshell's ONLY/last statement lets bash's tail-exec
+  # optimization replace the subshell process itself with ./orch (and then,
+  # via orch's own `exec _orch/update.sh`, with update.sh) -- so $! below is
+  # genuinely update.sh's own PID, not a wrapper's. Adding any trailing
+  # command here (e.g. `; echo $? >file`) defeats that optimization and
+  # silently makes the fd-255 checks below observe the wrong process --
+  # confirmed by hand: with a trailing command, this test's fd/inode
+  # assertion never fires because bg_pid is a subshell wrapper's own PID.
+  ( PATH="$STUBBIN:$PATH" exec ./orch update ) > "$run_out" 2>&1 &
+  bg_pid=$!
 
-  after_update_inode="$(stat -c %i "$update_path")"
-  via_old_fd="$(cat <&9)"
-  exec 9<&-
-  [ "$before_update_inode" != "$after_update_inode" ]
-  [ "$via_old_fd" = "$before_update_content" ]
+  has_procfs=0
+  [ -d /proc/self/fd ] && has_procfs=1
+
+  observed_live_process_holding_old_inode_after_path_swapped=0
+  if [ "$has_procfs" -eq 1 ]; then
+    # No sleep in the loop body: the post-swap window (mv-loop finishes ->
+    # process exit) is short, and under load a 1-2ms sleep can overshoot it
+    # entirely. A tight busy-poll (stat/kill overhead alone paces it, sub-ms
+    # per iteration) maximizes the chance of landing inside that window; the
+    # 0.4s gh sleep above gives plenty of headroom before it even opens.
+    # Capped by wall-clock, not just iteration count, so this can't hang.
+    deadline=$(($(date +%s%N) + 3000000000))
+    while [ "$(date +%s%N)" -lt "$deadline" ]; do
+      kill -0 "$bg_pid" 2>/dev/null || break
+      fd_target="/proc/$bg_pid/fd/255"
+      if [ -r "$fd_target" ]; then
+        fd_inode="$(stat -L -c %i "$fd_target" 2>/dev/null || true)"
+        cur_path_inode="$(_inode "$update_path" || true)"
+        if [ "$fd_inode" = "$before_update_inode" ] && [ -n "$cur_path_inode" ] \
+           && [ "$cur_path_inode" != "$before_update_inode" ]; then
+          observed_live_process_holding_old_inode_after_path_swapped=1
+          break
+        fi
+      fi
+    done
+  fi
+
+  wait "$bg_pid"
+  status=$?
+  output="$(cat "$run_out")"
+
+  # /proc is Linux-only; CI is ubuntu-only (this repo's other GNU-only stat
+  # sites, e.g. install.bats, rely on the same fact) but a contributor running
+  # bats on macOS should get a skip here, not a false failure, since there is
+  # no portable equivalent to inspecting another live process's fd table.
+  if [ "$has_procfs" -eq 1 ]; then
+    # THE ACTUAL OBSERVATION, not a proxy for it: the SAME live process (its
+    # own fd 255, not an fd the test opened) was still reading update.sh's
+    # ORIGINAL inode at a moment when the on-disk PATH already resolved to a
+    # DIFFERENT (new) inode. That is "a running script kept reading its
+    # original inode while the on-disk path changed" -- caught live, mid-run,
+    # not inferred from the final state afterward.
+    [ "$observed_live_process_holding_old_inode_after_path_swapped" -eq 1 ]
+  else
+    skip "no /proc on this platform -- cannot observe another process's live fd table"
+  fi
 
   # Correct exit status: a successful update must not report failure.
   [ "$status" -eq 0 ]
@@ -179,6 +257,17 @@ EOF
   grep -q "$MARKER" "$TARGET/_orch/update.sh"
   diff -q "$UPSTREAM/_orch/update.sh" "$TARGET/_orch/update.sh"
   diff -q "$UPSTREAM/orch" "$TARGET/orch"
+  diff -r "$UPSTREAM/tmux" "$TARGET/tmux"
+
+  # The swapped-in scripts must actually be executable, not just byte-for-byte
+  # correct -- cp preserves the source file's mode, so a dropped `chmod +x` in
+  # install.sh's staging step (install.sh:81) would leave install.bats's own
+  # `[ -x ... ]` check passing too (its SOURCE tree already has the bit set)
+  # while a real update out of a git clone (which does not preserve +x through
+  # this staging path the same way) bricks the install. Assert it here, on the
+  # end-to-end path, explicitly.
+  [ -x "$TARGET/orch" ]
+  [ -x "$TARGET/_orch/update.sh" ]
 
   # _orch/state/ survived.
   [ "$(cat "$TARGET/_orch/state/events.jsonl")" = '{"event":"done"}' ]
