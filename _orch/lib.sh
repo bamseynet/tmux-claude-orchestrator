@@ -197,6 +197,15 @@ log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG"; }
 # Folding the fallback inside the substitution keeps the assignment itself
 # always successful.
 _orch_output_cfg="$(jq -r '[(if .output.timestamps == false then "off" else "on" end), (.output.timestamp_format // "iso")] | @tsv' "$CONFIG" 2>/dev/null || printf 'on\tiso\n')"
+# A zero-byte config.json (truncated file, `> config.json` typo, etc.) makes
+# jq exit 0 with EMPTY output rather than erroring, so the `||` fallback
+# above never fires and _orch_output_cfg is "" instead of "on<TAB>iso". The
+# split below would then leave both defaults as empty strings — behavior
+# still happens to come out right today (orch_timestamps_enabled checks
+# != "off" and the format check is = "short", so "" reads as "on"/default),
+# but that's an accident of those specific comparisons, not the documented
+# on/iso invariant. Pin it explicitly instead of relying on it.
+[ -n "$_orch_output_cfg" ] || _orch_output_cfg=$'on\tiso'
 _ORCH_CFG_TIMESTAMPS_DEFAULT="${_orch_output_cfg%%$'\t'*}"
 _ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT="${_orch_output_cfg#*$'\t'}"
 unset _orch_output_cfg

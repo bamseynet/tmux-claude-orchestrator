@@ -86,6 +86,40 @@ set_cfg() { # <jq filter> — edits config.json then re-sources lib.sh so the
   [ "$status" -eq 0 ]
 }
 
+@test "config.json missing entirely: format default is pinned to iso, not empty" {
+  rm -f "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  run orch_timestamp_format
+  [ "$output" = "iso" ]
+}
+
+@test "config.json is malformed JSON: falls back to on/iso, not empty" {
+  printf '{ not valid json' > "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  run orch_timestamps_enabled
+  [ "$status" -eq 0 ]
+  run orch_timestamp_format
+  [ "$output" = "iso" ]
+}
+
+@test "config.json is zero bytes: falls back to on/iso, not empty (review finding)" {
+  # jq exits 0 with EMPTY output on a zero-byte file (unlike a missing file or
+  # malformed JSON, both of which make jq fail nonzero and trip the `||`
+  # fallback) — a distinct failure mode that must still land on the
+  # documented on/iso defaults, not on two empty strings.
+  : > "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  [ "$_ORCH_CFG_TIMESTAMPS_DEFAULT" = "on" ]
+  [ "$_ORCH_CFG_TIMESTAMP_FORMAT_DEFAULT" = "iso" ]
+  run orch_timestamps_enabled
+  [ "$status" -eq 0 ]
+  run orch_timestamp_format
+  [ "$output" = "iso" ]
+}
+
 # --- disabled via config ----------------------------------------------------------
 
 @test "output.timestamps=false in config.json disables the prefix" {
