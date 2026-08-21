@@ -71,8 +71,16 @@ command -v tmux >/dev/null 2>&1 || { say "tmux not found" >&2; exit 1; }
 # session would otherwise silently drive that other session instead of failing.
 session_exists "${target%%:*}" || {
   say "no such tmux session: ${target%%:*}" >&2; exit 1; }
+# grep -qxF above matches the window by NAME, exactly (issue #109): tmux's own
+# display-message resolves the window part by unambiguous PREFIX, same as it
+# does the session part, so it can't be used as an existence check without
+# reintroducing that bug. The one case grep -qxF can't express is a target
+# whose window part is a bare INDEX (e.g. "orch:0") rather than a name --
+# handle that explicitly instead of falling back to a prefix-matching check.
+window="${target#*:}"
 tmux list-windows -t "${target%%:*}" -F '#S:#W' 2>/dev/null | grep -qxF -- "$target" \
-  || tmux display-message -t "$target" -p '' >/dev/null 2>&1 \
+  || { [[ "$window" =~ ^[0-9]+$ ]] \
+       && tmux list-windows -t "${target%%:*}" -F '#{window_index}' 2>/dev/null | grep -qxF -- "$window"; } \
   || { say "no such tmux window: $target" >&2; exit 1; }
 
 # Draft guard: never clobber an unsent operator draft in the orchestrator pane

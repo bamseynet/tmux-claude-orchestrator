@@ -233,6 +233,83 @@ EOF
   [[ "$output" == *"no such tmux window"* ]]
 }
 
+@test "does not prefix-match the window part via a display-message fallback (issue #109)" {
+  # Real tmux resolves the window part of a session:window target by
+  # UNAMBIGUOUS PREFIX, same as the session part -- `tmux display-message -t
+  # "$target"` would happily succeed for a target of "orchestrator" against a
+  # real window named "orchestrator-extra". Model that here so a fallback
+  # built on display-message cannot pass this test by accident. "orchestrator"
+  # is not listed by `list-windows -F '#S:#W'` as an exact match (only
+  # "orchestrator-extra" is), so the fix must not fall back to a prefix match.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+bufdir="$BATS_TEST_TMPDIR/bufs"
+mkdir -p "\$bufdir"
+case "\$1" in
+  has-session) [ "\$3" = "orch-testhash" ] && exit 0; exit 1 ;;
+  list-sessions) echo "orch-testhash" ;;
+  list-windows)
+    if [ "\$5" = "#{window_index}" ]; then
+      echo "0"
+    else
+      echo "orch-testhash:orchestrator-extra"
+    fi
+    ;;
+  display-message)
+    win="\${3#*:}"
+    case "orchestrator-extra" in
+      "\$win"*) exit 0 ;;
+    esac
+    exit 1
+    ;;
+  capture-pane) cat "$PANE_TEXT_FILE" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  run run_script "orch-testhash:orchestrator"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux window"* ]]
+  ! grep -q '^display-message' "$CALLS"
+}
+
+@test "an explicit window INDEX target (e.g. orch:0) still resolves" {
+  # grep -qxF against '#S:#W' cannot express a bare numeric index like
+  # "orch-testhash:1" (that format never appears in the #S:#W listing) -- the
+  # index case must be handled explicitly, not via a prefix-matching fallback.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+bufdir="$BATS_TEST_TMPDIR/bufs"
+mkdir -p "\$bufdir"
+case "\$1" in
+  has-session) [ "\$3" = "orch-testhash" ] && exit 0; exit 1 ;;
+  list-sessions) echo "orch-testhash" ;;
+  list-windows)
+    if [ "\$5" = "#{window_index}" ]; then
+      printf '0\n1\n2\n'
+    else
+      echo "orch-testhash:orchestrator"
+    fi
+    ;;
+  display-message) exit 1 ;;
+  capture-pane) cat "$PANE_TEXT_FILE" ;;
+  load-buffer) name="\$3"; cat > "\$bufdir/\$name" ;;
+  paste-buffer)
+    name=""; prev=""
+    for a in "\$@"; do [ "\$prev" = "-b" ] && name="\$a"; prev="\$a"; done
+    rm -f "\$bufdir/\$name" ;;
+  show-buffer) name="\$3"; [ -f "\$bufdir/\$name" ] || exit 1; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  run run_script "orch-testhash:1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sent '/remote-control' to orch-testhash:1"* ]]
+}
+
 @test "fails loudly when _orch/lib.sh is missing, instead of guessing a session name" {
   rm "$ORCH_ROOT/_orch/lib.sh"
   run run_script
