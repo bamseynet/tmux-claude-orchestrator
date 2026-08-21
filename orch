@@ -53,11 +53,30 @@ if [ -n "${ORCH_ROOT:-}" ]; then
   # lib.sh (deliberately NOT its looser remote-URL/shared-history fallbacks --
   # those decide whether a TARGET project is "related enough" to a toolkit, a
   # weaker question than whether two paths ARE the same toolkit install).
+  #
+  # $here itself is `dirname "${BASH_SOURCE[0]}"`, which is NOT symlink-resolved
+  # (bash's `cd` stays logical) -- so the actual symlink case above (orch
+  # invoked as e.g. ~/bin/orch -> a real checkout) does not even reach $here
+  # being "wrong", it reaches git-toplevel lookup FAILING outright, because
+  # $here (~/bin) is often not inside any git repo at all. Resolve the
+  # SCRIPT'S OWN symlink chain (not just its dirname) before the git-identity
+  # fallback so that case is actually covered, not just documented as if it
+  # were.
+  orch_here_resolved="${BASH_SOURCE[0]}"
+  while [ -L "$orch_here_resolved" ]; do
+    orch_link_target="$(readlink "$orch_here_resolved")"
+    case "$orch_link_target" in
+      /*) orch_here_resolved="$orch_link_target" ;;
+      *) orch_here_resolved="$(dirname "$orch_here_resolved")/$orch_link_target" ;;
+    esac
+  done
+  orch_here_resolved="$(cd "$(dirname "$orch_here_resolved")" && pwd)"
+  unset orch_link_target
   orch_root_same_install=0
-  if [ "$resolved_orch_root" = "$here" ]; then
+  if [ "$resolved_orch_root" = "$here" ] || [ "$resolved_orch_root" = "$orch_here_resolved" ]; then
     orch_root_same_install=1
   elif [ -n "$resolved_orch_root" ] && command -v git >/dev/null 2>&1; then
-    orch_here_top="$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)" || orch_here_top=""
+    orch_here_top="$(git -C "$orch_here_resolved" rev-parse --show-toplevel 2>/dev/null)" || orch_here_top=""
     orch_given_top="$(git -C "$resolved_orch_root" rev-parse --show-toplevel 2>/dev/null)" || orch_given_top=""
     if [ -n "$orch_here_top" ] && [ -n "$orch_given_top" ]; then
       if [ "$orch_here_top" = "$orch_given_top" ]; then
@@ -78,7 +97,7 @@ if [ -n "${ORCH_ROOT:-}" ]; then
     printf 'or set ORCH_ALLOW_ROOT_MISMATCH=1 to override deliberately.\n' >&2
     exit 1
   fi
-  unset resolved_orch_root orch_root_isolated orch_bats_root orch_root_same_install
+  unset resolved_orch_root orch_root_isolated orch_bats_root orch_root_same_install orch_here_resolved
 fi
 export ORCH_ROOT="${ORCH_ROOT:-$here}"
 
