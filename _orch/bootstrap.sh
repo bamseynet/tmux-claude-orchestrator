@@ -77,7 +77,7 @@ while [ $# -gt 0 ]; do
     *) bootstrap_args+=("$1"); shift ;;
   esac
 done
-set -- "${bootstrap_args[@]}"
+set -- ${bootstrap_args[@]+"${bootstrap_args[@]}"}
 
 if [ -n "$name_flag" ]; then
   if ! valid_session_name "$name_flag"; then

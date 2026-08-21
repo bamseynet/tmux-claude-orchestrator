@@ -54,7 +54,12 @@ if [ "$auto" -eq 0 ] && [ "$cfg_auto" = "true" ]; then auto=1; fi
 
 poll_interval="$(jq -r '.merge.poll_interval_seconds // 15' "$CONFIG" 2>/dev/null || echo 15)"
 timeout_seconds="$(jq -r '.merge.timeout_seconds // 1800' "$CONFIG" 2>/dev/null || echo 1800)"
-mapfile -t required_checks < <(jq -r '.merge.required_checks // [] | .[]' "$CONFIG" 2>/dev/null || true)
+# mapfile/readarray is bash-4+; this toolkit supports bash 3.2 (macOS /bin/bash,
+# issue #98), so build the array with a portable read loop instead.
+required_checks=()
+while IFS= read -r _rc_line; do
+  [ -n "$_rc_line" ] && required_checks+=("$_rc_line")
+done < <(jq -r '.merge.required_checks // [] | .[]' "$CONFIG" 2>/dev/null || true)
 
 _emit_event() { # <event> <reason>
   local ev="$1" reason="${2:-}" ts; ts="$(date -u +%FT%TZ)"
