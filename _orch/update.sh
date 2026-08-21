@@ -210,7 +210,11 @@ _update_would_disrupt_live_session() {
   # invalid session name rather than silently targeting the wrong pane.
   command -v tmux >/dev/null 2>&1 || return 1
   require_valid_session_name
-  tmux has-session -t "$SESSION_NAME" 2>/dev/null && return 0
+  # session_exists() (issue #96), not a bare has-session -- has-session matches
+  # by UNAMBIGUOUS PREFIX, which could make an update wrongly refuse (or, for a
+  # SESSION_NAME that's a prefix of another live session, wrongly proceed)
+  # based on a session that isn't actually this install's.
+  session_exists "$SESSION_NAME" && return 0
   return 1
 }
 

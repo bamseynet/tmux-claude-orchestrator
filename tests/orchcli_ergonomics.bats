@@ -23,6 +23,7 @@ stub_tmux_with_window() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) printf '%s\n' orchestrator w1 ;;
   attach) echo "ATTACHED:$*" ;;
 esac
@@ -50,6 +51,42 @@ EOF
   PATH="$STUBBIN:$PATH" run "$ORCH" attach nope
   [ "$status" -eq 1 ]
   [[ "$output" == *"no worker window 'nope' in session 'orch'"* ]]
+}
+
+@test "orch attach refuses to attach into a DIFFERENT live session whose name is a prefix of the target (issue #96)" {
+  # Real tmux's `has-session -t <name>` matches an unambiguous PREFIX (confirmed
+  # against tmux 3.4), not just an exact name. Model that here (never stricter
+  # than real tmux, same convention as hygiene_session_namespace.bats /
+  # issue92_named_persistent_sessions.bats / send_remote_control.bats): only
+  # "billing" is actually live and holds window "w1"; this install's own
+  # session ("bill") is NOT running. A bare `has-session`/`list-windows -t
+  # "$S"` would still resolve against "billing" and hand a human operator's
+  # terminal to a stranger's live pane. session_exists() must refuse instead --
+  # the assertion checks the actual hijack signal (tmux's "attach" subcommand
+  # never runs), not a status-code proxy for it.
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+case "\${1:-}" in
+  has-session)
+    [ "\${3:-}" = "billing" ] && exit 0
+    [[ "billing" == "\${3:-}"* ]] && exit 0
+    exit 1
+    ;;
+  list-sessions) echo "billing" ;;
+  list-windows) printf '%s\n' orchestrator w1 ;;
+  attach) echo "ATTACHED:\$*" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  SESSION_NAME="bill" PATH="$STUBBIN:$PATH" run "$ORCH" attach w1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such tmux session: bill"* ]]
+  ! grep -q '^attach' "$CALLS"
 }
 
 @test "help text lists the real verb set, including previously-omitted verbs" {

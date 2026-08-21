@@ -34,6 +34,7 @@ stub_tmux_with_window() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows) printf '%s\n' orchestrator w1 ;;
   attach) echo "ATTACHED:$*" ;;
 esac

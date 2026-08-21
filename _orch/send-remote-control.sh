@@ -5,7 +5,10 @@
 # Targets the master/orchestrator window ($SESSION_NAME:$ORCH_WINDOW, default
 # orch-<hash of this toolkit's root>:orchestrator — see lib.sh) — NOT a worker
 # session the orchestrator drives. Override with an explicit "<session:window>"
-# arg or the $ORCH_TARGET env var if needed.
+# arg or the $ORCH_TARGET env var if needed. The session name must be EXACT
+# (issue #96): an abbreviated prefix that tmux itself would happily resolve is
+# refused rather than silently driving a different, live session whose name
+# happens to start with it.
 #
 # Usage (normally invoked via the `./orch remote-control` subcommand; can
 # also be run directly, e.g. from cron):
@@ -26,6 +29,7 @@ while [ $# -gt 0 ]; do
     -h|--help)
       echo "Usage: $0 [--force] [<session:window>]" >&2
       echo "  Types '$CMD' into \$SESSION_NAME:\$ORCH_WINDOW (or the given target) and submits it." >&2
+      echo "  The session name must be EXACT -- an abbreviated prefix is refused, not resolved." >&2
       echo "  --force  send even if the pane holds an unsent draft." >&2
       exit 0
       ;;
@@ -62,7 +66,10 @@ fi
 target="${target:-${ORCH_TARGET:-${SESSION_NAME}:${ORCH_WINDOW}}}"
 
 command -v tmux >/dev/null 2>&1 || { say "tmux not found" >&2; exit 1; }
-tmux has-session -t "${target%%:*}" 2>/dev/null || {
+# session_exists() (issue #96), not a bare has-session -- has-session matches by
+# UNAMBIGUOUS PREFIX, so a target whose session is a prefix of a different, live
+# session would otherwise silently drive that other session instead of failing.
+session_exists "${target%%:*}" || {
   say "no such tmux session: ${target%%:*}" >&2; exit 1; }
 tmux list-windows -t "${target%%:*}" -F '#S:#W' 2>/dev/null | grep -qxF -- "$target" \
   || tmux display-message -t "$target" -p '' >/dev/null 2>&1 \

@@ -183,6 +183,17 @@ case "$cmd" in
     command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
     id="${1:?usage: orch tail <id> [lines]}"; shift || true
     lines="${1:-15}"
+    # session_exists() (issue #96): `tmux -t "$SESSION_NAME"` alone matches by
+    # UNAMBIGUOUS PREFIX, so a bare list-windows here could silently read a
+    # DIFFERENT, longer-named live session's windows instead of failing.
+    # `declare -F`, not `command -v` (issue #98/#99): command -v also matches a
+    # same-named BINARY on PATH, which would make this guard wrongly conclude
+    # session_exists is defined. Same standalone-mode guard style as
+    # require_valid_session_name just above.
+    if ! declare -F session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+      say "no such tmux session: $SESSION_NAME" >&2
+      exit 1
+    fi
     if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
       say "no worker window '$id' in session '$SESSION_NAME'" >&2
       exit 1
@@ -191,6 +202,13 @@ case "$cmd" in
     ;;
   attach)
     command -v require_valid_session_name >/dev/null 2>&1 && require_valid_session_name
+    # session_exists() (issue #96): same prefix-match hazard as `tail` above --
+    # must not silently attach a human operator to a DIFFERENT live session.
+    # `declare -F`, not `command -v` (issue #98/#99) -- see `tail` above.
+    if ! declare -F session_exists >/dev/null 2>&1 || ! session_exists "$SESSION_NAME"; then
+      say "no such tmux session: $SESSION_NAME" >&2
+      exit 1
+    fi
     if [ -n "${1:-}" ]; then
       id="$1"
       if ! tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
@@ -373,7 +391,12 @@ orch — tmux + Claude Code orchestrator
                                      own pane and submit it (keepalive/reconnect
                                      nudge, e.g. from cron). Defaults to
                                      \$SESSION_NAME:\$ORCH_WINDOW; skips a pane with
-                                     an unsent draft unless --force.
+                                     an unsent draft unless --force. The session
+                                     name in <session:window> must be EXACT
+                                     (issue #96) -- an abbreviated prefix that tmux
+                                     would resolve on your behalf is refused rather
+                                     than silently driving a different, live
+                                     session.
 
 Session name precedence (issue #92): --name flag (orch up, persists to
 _orch/state/session-name) > \$SESSION_NAME env (this invocation only, does not
