@@ -101,3 +101,75 @@ set_pane() { printf '%s\n' "$1" > "$PANE_TEXT_FILE"; }
   run pane_has_draft "orch:master"
   [ "$status" -eq 0 ]
 }
+
+# --- rv101 review findings on the first #101 attempt -------------------------
+# Three blocking gaps found by an independent reviewer: a naive substring match
+# for "2m" also matched truecolor's extended-colour introducer; checking "dim
+# ANYWHERE on the row" instead of "dim at the point the operator's own text
+# begins" mis-suppressed real drafts sharing a row with unrelated dim content;
+# and an empty `-e` capture was read as "no draft" instead of "retry without
+# -e", which would have silently lost the pre-#101 protection on any tmux old
+# enough to reject -e. All three are exercised below.
+
+@test "pane_has_draft is true for a real draft rendered with TRUECOLOR SGR (issue #101 rv101 finding 1)" {
+  # 38;2;R;G;Bm is the truecolor EXTENDED-COLOUR INTRODUCER -- the "2" there
+  # means "the next 3 params are an RGB triple", not the dim attribute. A
+  # naive substring/regex match for "2m" mistakes this for dim and would
+  # force-deliver over a real draft on any truecolor terminal.
+  set_pane "❯ ${ESC}[38;2;255;255;255mcan you also check the"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is true for a real draft with a trailing DIM affordance on the same row (issue #101 rv101 finding 2, probe B)" {
+  # A bright real draft followed later on the same row by an unrelated dim
+  # right-aligned hint (e.g. a dim "send" affordance) must not be suppressed --
+  # only the SGR state at the START of the operator's own text (right after
+  # the glyph) determines dim-ness, not "is there dim anywhere on this row".
+  set_pane "❯ ${ESC}[38;5;231mreal draft text${ESC}[0m  ${ESC}[2m⏎ send${ESC}[0m"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is true for a partially-typed real draft with an inline dim ghost COMPLETION on the same row (issue #101 rv101 finding 2, probe C)" {
+  # The worst case: the operator is genuinely mid-typing (the exact state this
+  # guard exists to protect) and Claude Code's ghost completion renders dim,
+  # continuing the sentence inline with no separator. The real bright prefix
+  # must still count as a draft even though the row also contains dim text.
+  set_pane "❯ ${ESC}[38;5;231mcan you check the${ESC}[2m tests too${ESC}[0m"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft still reports a draft via a plain-capture fallback when -e itself is rejected (issue #101 rv101 finding 3)" {
+  # Models an ancient tmux (older than 1.8) that rejects the -e flag outright
+  # (nonzero exit, no stdout) rather than merely omitting color -- distinct
+  # from "supported but nothing to show". A real draft is present and must
+  # still be reported via the plain-capture retry, not silently dropped.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = "-e" ] && exit 1; done
+case "\${1:-}" in
+  capture-pane) cat "$PANE_TEXT_FILE" ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  PATH="$STUBBIN:$PATH"
+
+  set_pane '❯ can you also check the'
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft reports no draft when BOTH the -e and plain captures come back empty (issue #101 rv101 finding 3)" {
+  cat > "$STUBBIN/tmux" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  PATH="$STUBBIN:$PATH"
+
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
