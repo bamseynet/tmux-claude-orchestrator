@@ -183,6 +183,8 @@ multi-session work.
 | `models.orchestrator` | `opus` | model for the master session |
 | `models.default_worker` | `sonnet` | model when `spawn` gets no explicit model/`--role` |
 | `models.roles` | *(unset)* | optional `{role: model}` matrix for `spawn --role <name>` (see [Model roles](#model-roles)) |
+| `output.timestamps` | true | timestamp-prefix human-facing terminal output (`ORCH_TIMESTAMPS` env overrides; see `./orch help`) |
+| `output.timestamp_format` | `iso` | `iso` (UTC, matches `orch.log`) or `short` (local `HH:MM:SS`); `ORCH_TIMESTAMP_FORMAT` env overrides |
 
 If a Claude Code TUI update changes the spinner or input box, adjust `is_busy`/`is_ready` in
 `_orch/lib.sh` — everything keys off those two functions.

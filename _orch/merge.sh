@@ -27,11 +27,11 @@ while [ $# -gt 0 ]; do
     --auto) auto=1; shift ;;
     --base) base="${2:?--base needs a branch name}"; shift 2 ;;
     *)
-      if [ -z "$id" ]; then id="$1"; shift; else echo "merge: unexpected arg: $1" >&2; exit 1; fi
+      if [ -z "$id" ]; then id="$1"; shift; else say "merge: unexpected arg: $1" >&2; exit 1; fi
       ;;
   esac
 done
-[ -n "$id" ] || { echo "usage: merge.sh <id> [--auto] [--base <branch>]" >&2; exit 1; }
+[ -n "$id" ] || { say "usage: merge.sh <id> [--auto] [--base <branch>]" >&2; exit 1; }
 
 proj="${PROJECT_ROOT:-$(pwd)}"
 branch="$(worker_branch "$id")"
@@ -72,17 +72,17 @@ _block() { # <reason>
     '.status=$s | .updated=$t' || true
   _emit_event "merge-blocked" "$reason"
   log "merge $id: blocked — $reason"
-  echo "merge $id: blocked — $reason" >&2
+  say "merge $id: blocked — $reason" >&2
 }
 
 if ! git -C "$proj" show-ref --verify --quiet "refs/heads/$branch"; then
-  echo "merge: branch $branch does not exist" >&2
+  say "merge: branch $branch does not exist" >&2
   exit 1
 fi
 
 log "merge $id: pushing $branch"
 if ! git -C "$proj" push -u origin "$branch" 2>&1 | tee -a "$LOG"; then
-  echo "merge: push failed for $branch" >&2
+  say "merge: push failed for $branch" >&2
   exit 1
 fi
 
@@ -91,7 +91,7 @@ if [ -z "$pr_url" ]; then
   log "merge $id: opening PR for $branch -> $base"
   if ! pr_url="$(cd "$proj" && gh pr create --base "$base" --head "$branch" \
       --title "$id" --body "Automated PR for worker '$id' (orch merge)." 2>&1)"; then
-    echo "merge: failed to open PR for $branch: $pr_url" >&2
+    say "merge: failed to open PR for $branch: $pr_url" >&2
     exit 1
   fi
 else
@@ -99,7 +99,7 @@ else
 fi
 
 pr_json="$(cd "$proj" && gh pr view "$branch" --json number,url,state,mergeable,mergeStateStatus 2>&1)" || {
-  echo "merge: failed to inspect PR for $branch: $pr_json" >&2
+  say "merge: failed to inspect PR for $branch: $pr_json" >&2
   exit 1
 }
 mergeable="$(jq -r '.mergeable // "UNKNOWN"' <<< "$pr_json")"
@@ -162,7 +162,7 @@ case "$outcome" in
         '.status=$s | .updated=$t' || true
       _emit_event "merged" ""
       log "merge $id: merged and branch deleted"
-      echo "merge $id: merged"
+      say "merge $id: merged"
       exit 0
     else
       _block "gh pr merge failed: $merge_out"

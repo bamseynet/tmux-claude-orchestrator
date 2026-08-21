@@ -48,6 +48,10 @@
       "synthesis": "opus"
     }
   },
+  "output": {
+    "timestamps": true,
+    "timestamp_format": "iso"
+  },
   "tui_patterns": {
     "busy_regex": "esc to interrupt|Running…|Compacting",
     "active_glyph_regex": "✻|✽|✳|✶",

@@ -121,7 +121,7 @@ stop_loop() { # <name> <script_basename>
   fi
 
   log "stop $name: FAILED to stop, surviving pids:$survivors"
-  echo "$name: FAILED to stop — still running, pid(s):$survivors" >&2
+  say "$name: FAILED to stop — still running, pid(s):$survivors" >&2
   return 1
 }
 
@@ -133,10 +133,10 @@ stop_loop watchdog  watchdog.sh  || failed="$failed watchdog"
 
 if [ -z "${failed// /}" ]; then
   log "stopped background loops"
-  echo "stopped heartbeat + watchdog."
-  echo "session '$SESSION_NAME' still running — kill it with:  tmux kill-session -t $SESSION_NAME"
+  say "stopped heartbeat + watchdog."
+  say "session '$SESSION_NAME' still running — kill it with:  tmux kill-session -t $SESSION_NAME"
   exit 0
 fi
 
-echo "down FAILED to fully stop:$failed — see the surviving pid(s) above; loops are still running." >&2
+say "down FAILED to fully stop:$failed — see the surviving pid(s) above; loops are still running." >&2
 exit 1

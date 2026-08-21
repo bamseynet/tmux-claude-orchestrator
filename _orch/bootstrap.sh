@@ -10,7 +10,7 @@ S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
 
 for dep in tmux jq claude perl git; do
-  command -v "$dep" >/dev/null || { echo "missing dependency: $dep"; exit 1; }
+  command -v "$dep" >/dev/null || { say "missing dependency: $dep"; exit 1; }
 done
 
 rm -f "$STATE_DIR/.stop"
@@ -79,13 +79,13 @@ if ! tmux has-session -t "$S" 2>/dev/null; then
 else
   owner="$(cat "$owner_file" 2>/dev/null || true)"
   if [ -n "$owner" ] && [ "$owner" != "$ORCH_ROOT" ]; then
-    echo "WARNING: session '$S' already exists but was created by a DIFFERENT toolkit root:" >&2
-    echo "  this install:  $ORCH_ROOT" >&2
-    echo "  session owner: $owner" >&2
-    echo "Two installs are sharing one session name -- set SESSION_NAME to give each its own." >&2
+    say "WARNING: session '$S' already exists but was created by a DIFFERENT toolkit root:" >&2
+    say "  this install:  $ORCH_ROOT" >&2
+    say "  session owner: $owner" >&2
+    say "Two installs are sharing one session name -- set SESSION_NAME to give each its own." >&2
     log "session $S owner mismatch: this=$ORCH_ROOT owner=$owner"
   else
-    echo "session '$S' already exists; reusing"
+    say "session '$S' already exists; reusing"
     [ -n "$owner" ] || printf '%s\n' "$ORCH_ROOT" > "$owner_file"
   fi
   # Restart/reattach case (issue #41): the master's transcript may be gone (crash,
@@ -116,4 +116,4 @@ if jq -e '.watchdog.enabled // true' "$here/config.json" >/dev/null 2>&1; then
   fi
 fi
 
-echo "orchestrator up. attach with:  tmux attach -t $S"
+say "orchestrator up. attach with:  tmux attach -t $S"

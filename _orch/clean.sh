@@ -33,11 +33,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --sweep-legacy) sweep_legacy=1; shift ;;
     *)
-      if [ -z "$id" ]; then id="$1"; shift; else echo "clean: unexpected arg: $1" >&2; exit 1; fi
+      if [ -z "$id" ]; then id="$1"; shift; else say "clean: unexpected arg: $1" >&2; exit 1; fi
       ;;
   esac
 done
-[ -n "$id" ] || { echo "usage: clean.sh <id> [--sweep-legacy]" >&2; exit 1; }
+[ -n "$id" ] || { say "usage: clean.sh <id> [--sweep-legacy]" >&2; exit 1; }
 
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
@@ -51,7 +51,7 @@ legacy_branch="$(legacy_worker_branch "$id")"
 # no-op (all-or-nothing) rather than leaving the tmux window already killed
 # while the worktree/branch/status file survive in a half-torn-down state.
 if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
-  echo "clean $id: refusing to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))" >&2
+  say "clean $id: refusing to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))" >&2
   log "clean $id: refused to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))"
   exit 1
 fi
@@ -80,7 +80,7 @@ if [ -d "$legacy_wdir" ]; then
     git -C "$proj" worktree remove --force "$legacy_wdir" >/dev/null 2>&1 || rm -rf "$legacy_wdir"
     log "clean $id: removed legacy worktree $legacy_wdir (--sweep-legacy)"
   else
-    echo "clean $id: leaving pre-#86 legacy worktree $legacy_wdir in place (pass --sweep-legacy to remove it, once you're sure no other un-upgraded orch install owns it)" >&2
+    say "clean $id: leaving pre-#86 legacy worktree $legacy_wdir in place (pass --sweep-legacy to remove it, once you're sure no other un-upgraded orch install owns it)" >&2
     log "clean $id: found legacy worktree $legacy_wdir, not removed (no --sweep-legacy)"
   fi
 fi
@@ -138,8 +138,8 @@ if [ -s "$QUEUE" ]; then
     fi
   done < "$QUEUE"
   mv "$tmp" "$QUEUE"
-  [ "$dropped" -gt 0 ] && echo "dropped $dropped queued spawn(s) depending on '$id'"
+  [ "$dropped" -gt 0 ] && say "dropped $dropped queued spawn(s) depending on '$id'"
 fi
 
 log "clean $id: done"
-echo "cleaned $id"
+say "cleaned $id"

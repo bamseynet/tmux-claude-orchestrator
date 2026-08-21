@@ -336,7 +336,7 @@ reap_terminal_workers() { # <retention_seconds> <live_windows> [now]
     worker_is_reapable "$status" "$epoch" "$now" "$retention" || continue
     "$here/clean.sh" "$id" >/dev/null 2>&1 || true
     log "watchdog: reaped terminal worker '$id' (status=$status, retention=${retention}s)"
-    echo "reaped $id"
+    say "reaped $id"
   done
 }
 

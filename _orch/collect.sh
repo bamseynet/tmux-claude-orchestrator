@@ -14,11 +14,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --base) base="${2:?--base needs a branch name}"; shift 2 ;;
     *)
-      if [ -z "$id" ]; then id="$1"; shift; else echo "collect: unexpected arg: $1" >&2; exit 1; fi
+      if [ -z "$id" ]; then id="$1"; shift; else say "collect: unexpected arg: $1" >&2; exit 1; fi
       ;;
   esac
 done
-[ -n "$id" ] || { echo "usage: collect.sh <id> [--base <branch>]" >&2; exit 1; }
+[ -n "$id" ] || { say "usage: collect.sh <id> [--base <branch>]" >&2; exit 1; }
 
 proj="${PROJECT_ROOT:-$(pwd)}"
 branch="$(worker_branch "$id")"
@@ -66,7 +66,7 @@ jq -n \
    + (if ($error | length) > 0 then {error: $error} else {} end)'
 
 if [ "$branch_exists" = false ]; then
-  echo "collect: branch $branch does not exist" >&2
+  say "collect: branch $branch does not exist" >&2
   exit 1
 fi
 [ -z "$diff_error" ] || exit 1
