@@ -310,6 +310,44 @@ EOF
   [[ "$output" == *"sent '/remote-control' to orch-testhash:1"* ]]
 }
 
+@test "a zero-padded window INDEX target (e.g. orch:01) still resolves" {
+  # Real tmux accepts zero-padded numeric window specs and resolves them the
+  # same as their unpadded form (e.g. "orch:01" == "orch:1"), but
+  # `tmux list-windows -F '#{window_index}'` always prints the unpadded form.
+  # A literal grep -qxF of "01" against that unpadded listing would never
+  # match -- the comparison must normalize the digit string first.
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$CALLS"
+bufdir="$BATS_TEST_TMPDIR/bufs"
+mkdir -p "\$bufdir"
+case "\$1" in
+  has-session) [ "\$3" = "orch-testhash" ] && exit 0; exit 1 ;;
+  list-sessions) echo "orch-testhash" ;;
+  list-windows)
+    if [ "\$5" = "#{window_index}" ]; then
+      printf '0\n1\n2\n'
+    else
+      echo "orch-testhash:orchestrator"
+    fi
+    ;;
+  display-message) exit 1 ;;
+  capture-pane) cat "$PANE_TEXT_FILE" ;;
+  load-buffer) name="\$3"; cat > "\$bufdir/\$name" ;;
+  paste-buffer)
+    name=""; prev=""
+    for a in "\$@"; do [ "\$prev" = "-b" ] && name="\$a"; prev="\$a"; done
+    rm -f "\$bufdir/\$name" ;;
+  show-buffer) name="\$3"; [ -f "\$bufdir/\$name" ] || exit 1; exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+  run run_script "orch-testhash:01"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sent '/remote-control' to orch-testhash:01"* ]]
+}
+
 @test "fails loudly when _orch/lib.sh is missing, instead of guessing a session name" {
   rm "$ORCH_ROOT/_orch/lib.sh"
   run run_script

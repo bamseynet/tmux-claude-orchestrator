@@ -80,7 +80,8 @@ session_exists "${target%%:*}" || {
 window="${target#*:}"
 tmux list-windows -t "${target%%:*}" -F '#S:#W' 2>/dev/null | grep -qxF -- "$target" \
   || { [[ "$window" =~ ^[0-9]+$ ]] \
-       && tmux list-windows -t "${target%%:*}" -F '#{window_index}' 2>/dev/null | grep -qxF -- "$window"; } \
+       && tmux list-windows -t "${target%%:*}" -F '#{window_index}' 2>/dev/null \
+          | grep -qxF -- "$((10#$window))"; } \
   || { say "no such tmux window: $target" >&2; exit 1; }
 
 # Draft guard: never clobber an unsent operator draft in the orchestrator pane
