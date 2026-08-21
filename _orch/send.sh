@@ -10,6 +10,14 @@ msg="$*"
 require_valid_session_name
 S="$SESSION_NAME"
 
+# session_exists() (issue #107): a bare `-t "$S"` target matches by UNAMBIGUOUS
+# PREFIX, so list-windows/paste-buffer/send-keys below could otherwise silently
+# type into a DIFFERENT, longer-named live session's window instead of failing
+# (issue #96 fixed the read-only existence checks; this closes the write paths).
+if ! session_exists "$S"; then
+  say "no such tmux session: $S"; exit 1
+fi
+
 if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   say "no worker window '$id' in session '$S'"; exit 1
 fi

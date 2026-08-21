@@ -58,7 +58,13 @@ if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
 fi
 
 # 1) tmux window (only if the session exists and holds a window with this name)
-if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
+# session_exists() (issue #107): a bare `-t "$S"` target matches by UNAMBIGUOUS
+# PREFIX, so list-windows/kill-window below could otherwise silently list or
+# KILL a window in a DIFFERENT, longer-named live session instead of treating a
+# missing "$S" as the no-op this idempotent teardown documents it as (issue #96
+# fixed the read-only existence checks; this closes the write path — the one
+# that matters most, since clean.sh runs unattended from prune/the watchdog).
+if session_exists "$S" && tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   tmux kill-window -t "$S:$id" 2>/dev/null || true
   log "clean $id: killed tmux window"
 fi
