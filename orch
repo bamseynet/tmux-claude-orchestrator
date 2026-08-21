@@ -2,6 +2,55 @@
 # orch — single entrypoint for the tmux + Claude Code orchestrator.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- inherited-ORCH_ROOT mismatch guard (issue #105) ------------------------------
+# `orch` exports ORCH_ROOT, so every nested invocation (an _orch/*.sh script
+# sourcing lib.sh, a worker's launch env, a test fixture's subshell) inherits
+# it -- that inheritance is normal and must keep working. What is NOT normal is
+# an ORCH_ROOT that was set by something OTHER than this same script's own
+# $here on the way in: a leftover shell export, a worker's ambient launch env,
+# `ORCH_ROOT=/tmp/D ./orch update` typed from install T. That already
+# corrupted the live toolkit's .orch-version (stamped 9.9.9, which would have
+# made `orch update` report "already up to date" forever), hijacked a
+# self-referential fixture during #97, and nearly buried a real data-loss bug
+# during #114 behind a false "cannot reproduce". Fail loudly on disagreement
+# rather than silently acting on the wrong install, mirroring
+# ensure_related_repo()'s ORCH_ALLOW_UNRELATED_REPO precedent in lib.sh.
+#
+# One legitimate case must not trip this: a hermetic bats test that
+# deliberately points ORCH_ROOT at a throwaway scratch dir (same idiom as
+# lib.sh's own issue #68 leak guard below) while running the real `orch`
+# script, precisely so no state or file write can land in the real toolkit.
+# That is the opposite of the danger here, so it is not a mismatch worth
+# refusing over: detect it the same way #68 does, by checking whether
+# ORCH_ROOT resolves under one of bats' own tmp roots. All three real
+# incidents above were the other shape even when they happened during a bats
+# run -- an AMBIENT ORCH_ROOT nobody deliberately isolated, pointing at a
+# real, non-scratch toolkit -- so that shape still refuses under bats too.
+if [ -n "${ORCH_ROOT:-}" ]; then
+  # ORCH_ROOT need not exist yet (e.g. `orch help` never touches it) -- cd
+  # canonicalizes when possible, and falls back to a plain trailing-slash
+  # strip so a not-yet-created dir isn't treated as an automatic mismatch.
+  resolved_orch_root="$(cd "$ORCH_ROOT" 2>/dev/null && pwd)" || resolved_orch_root="${ORCH_ROOT%/}"
+  orch_root_isolated=0
+  if [ -n "${BATS_TEST_FILENAME:-}" ] && [ -n "$resolved_orch_root" ]; then
+    for orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}" "${BATS_TMPDIR:-}"; do
+      [ -n "$orch_bats_root" ] || continue
+      case "$resolved_orch_root" in
+        "$orch_bats_root"*) orch_root_isolated=1; break ;;
+      esac
+    done
+  fi
+  if [ "$resolved_orch_root" != "$here" ] && [ "$orch_root_isolated" -ne 1 ] \
+      && [ "${ORCH_ALLOW_ROOT_MISMATCH:-0}" != "1" ]; then
+    printf 'orch: inherited ORCH_ROOT (%s) does not match this script'"'"'s own location (%s).\n' \
+      "$ORCH_ROOT" "$here" >&2
+    printf 'orch: refusing to act on a different install than the one you ran -- unset ORCH_ROOT,\n' >&2
+    printf 'or set ORCH_ALLOW_ROOT_MISMATCH=1 to override deliberately.\n' >&2
+    exit 1
+  fi
+  unset resolved_orch_root orch_root_isolated orch_bats_root
+fi
 export ORCH_ROOT="${ORCH_ROOT:-$here}"
 
 # --- dependency check (issue #20) -----------------------------------------------
