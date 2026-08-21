@@ -37,7 +37,7 @@ if [ -n "${ORCH_ROOT:-}" ]; then
     for orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}" "${BATS_TMPDIR:-}"; do
       [ -n "$orch_bats_root" ] || continue
       case "$resolved_orch_root" in
-        "$orch_bats_root"*) orch_root_isolated=1; break ;;
+        "$orch_bats_root"|"$orch_bats_root"/*) orch_root_isolated=1; break ;;
       esac
     done
   fi
@@ -63,15 +63,23 @@ if [ -n "${ORCH_ROOT:-}" ]; then
   # fallback so that case is actually covered, not just documented as if it
   # were.
   orch_here_resolved="${BASH_SOURCE[0]}"
+  orch_symlink_hops=0
   while [ -L "$orch_here_resolved" ]; do
+    orch_symlink_hops=$((orch_symlink_hops + 1))
+    # Bound the walk: a circular symlink chain (A -> B -> A) would otherwise
+    # spin forever instead of falling back to whatever we've resolved so far.
+    [ "$orch_symlink_hops" -le 40 ] || break
     orch_link_target="$(readlink "$orch_here_resolved")"
     case "$orch_link_target" in
       /*) orch_here_resolved="$orch_link_target" ;;
       *) orch_here_resolved="$(dirname "$orch_here_resolved")/$orch_link_target" ;;
     esac
   done
-  orch_here_resolved="$(cd "$(dirname "$orch_here_resolved")" && pwd)"
-  unset orch_link_target
+  # Fall back to the unresolved dirname (mirrors $resolved_orch_root's own
+  # fallback above) rather than letting a dangling symlink's missing
+  # directory abort the whole script via set -e with a bare `cd` error.
+  orch_here_resolved="$(cd "$(dirname "$orch_here_resolved")" 2>/dev/null && pwd)" || orch_here_resolved="$(dirname "$orch_here_resolved")"
+  unset orch_link_target orch_symlink_hops
   orch_root_same_install=0
   if [ "$resolved_orch_root" = "$here" ] || [ "$resolved_orch_root" = "$orch_here_resolved" ]; then
     orch_root_same_install=1
