@@ -417,7 +417,7 @@ confirm_inject() { # <target> [timeout_s]
   return 1
 }
 
-# --- Master draft guard (issue #38, hardened by #52) --------------------------------
+# --- Master draft guard (issue #38, hardened by #52 and #101) -----------------------
 # An idle input box with an unsent operator draft looks identical to an empty idle
 # input box to is_ready() — both are "not busy, prompt glyph visible". Heartbeat
 # injection must not paste over (and Enter away) a draft the operator is mid-typing.
@@ -435,15 +435,133 @@ confirm_inject() { # <target> [timeout_s]
 # line, a placeholder/hint, or an empty pane — is treated as "no draft", the safe
 # default, and lets the placeholder allow-list broaden via config instead of code
 # changes (issue #52 config knob).
+#
+# Issue #101: Claude Code's own suggested-next-prompt ghost text renders on this
+# same input row once a turn ends, and it's model-generated prose -- no static
+# placeholder pattern can match it, so #52's guard alone reported it as a real
+# draft. The one reliable discriminator is color: the ghost suggestion renders
+# dim (ESC[2m); real operator input renders bright (38;5;231 on 48;5;237).
+# strip_ansi()/pane_tail() discard escapes before the text check above, so this
+# needs a SEPARATE raw capture (`capture-pane -e`) to inspect them, taken from
+# the SAME pane read so the two never observe different pane states. The raw and
+# de-ANSI'd captures stay line-for-line aligned (strip_ansi is a per-line s///,
+# never adds/removes a line), so the same line index found above is reused to
+# pull the corresponding raw (escaped) line and test it for the dim attribute.
+#
+# rv101 review (kept here because it's load-bearing, not just history):
+#  1. A substring match for the literal bytes "2m" also matches truecolor's
+#     EXTENDED-COLOUR INTRODUCER (ESC[38;2;R;G;Bm) -- the "2" there means "the
+#     next 3 params are an RGB triple", not dim, and a real bright draft on a
+#     truecolor terminal would have been misread as ghost text and force-
+#     delivered over. _pane_draft_dim_at_rest() below properly tokenizes SGR
+#     parameters and skips the trailing args 38/48 consume (5;n or 2;r;g;b)
+#     instead of treating every token as a standalone attribute.
+#  2. "dim ANYWHERE on the row" is not "the operator's own text is dim": a
+#     trailing dim right-aligned affordance, or -- the case this guard exists
+#     for -- a partially-typed real draft with a dim ghost COMPLETION
+#     continuing inline on the same row, must not suppress the real prefix.
+#     The check is therefore scoped to the SGR state active at the exact byte
+#     position where "$rest" (the text right after the glyph) begins, not the
+#     row as a whole.
+#  3. An EMPTY raw (-e) capture is ambiguous between "-e itself is rejected by
+#     an ancient tmux" (capture-pane -e dates to tmux 1.8) and "the pane truly
+#     has nothing to show". Collapsing both to "no draft" would silently lose
+#     the pre-#101 protection on any tmux old enough to reject -e. A plain
+#     (no -e) retry disambiguates: if that succeeds, this degrades to exactly
+#     the #52-only (no color) result; only if BOTH captures are empty is there
+#     really nothing there.
+#
+# Fails toward "draft" (today's over-detection), not toward "no draft", when
+# color can't be read at all: the dim check only ever SUPPRESSES a draft
+# classification the checks above already reached; it never independently
+# asserts one. No positive dim evidence just means the #52 result stands as-is,
+# which is the deliberate direction here -- silently clobbering a real unsent
+# operator draft is worse than an occasional late/duplicate heartbeat nudge
+# from over-detecting a ghost suggestion, and that's exactly the failure mode
+# this guard already tolerated before #101 existed.
 pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
-  local line rest
-  line="$(pane_tail "$1" 15 | grep -v '^[[:space:]]*$' | tail -n 1)"
-  [ -n "$line" ] || return 1
+  local raw stripped idx line rest raw_line
+  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n 15)"
+  if [ -z "$raw" ]; then
+    stripped="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n 15)"
+    [ -n "$stripped" ] || return 1
+    raw=""   # no color info available; degrade to the #52-only checks below
+  else
+    stripped="$(printf '%s\n' "$raw" | strip_ansi)"
+  fi
+  idx="$(printf '%s\n' "$stripped" | grep -vn '^[[:space:]]*$' | tail -n 1 | cut -d: -f1)"
+  [ -n "$idx" ] || return 1
+  line="$(printf '%s\n' "$stripped" | sed -n "${idx}p")"
   [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
   rest="${BASH_REMATCH[2]}"
   [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
   [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
+  if [ -n "$raw" ]; then
+    raw_line="$(printf '%s\n' "$raw" | sed -n "${idx}p")"
+    _pane_draft_dim_at_rest "$raw_line" "$line" "$rest" && return 1
+  fi
   return 0
+}
+
+# Is the SGR "dim/faint" attribute (ECMA-48 code 2 -- a decades-old terminal
+# standard, not a Claude Code TUI detail, so unlike the config-driven
+# TUI_*_REGEX patterns above this is not expected to need per-install tuning)
+# active at the exact byte offset in <raw_line> where <rest> begins within
+# <stripped_line>? Byte offsets, not bash's locale-dependent character counts,
+# are what line up 1:1 with <raw_line> (strip_ansi never adds/removes a
+# non-escape byte) -- perl computes the offset itself from the byte lengths of
+# $line/$rest so callers never need to fork `wc -c`. Parses SGR parameters
+# properly (048/48 consume their trailing 5;n or 2;r;g;b arguments rather than
+# being read as standalone attribute codes) so truecolor's extended-colour
+# introducer (38;2;R;G;Bm) is never mistaken for dim (issue #101 rv101 finding
+# 1), and stops at the target byte rather than scanning the whole line, so a
+# dim run elsewhere on the row (a trailing affordance, or ghost text
+# continuing inline after real typed text) never suppresses a real draft
+# (rv101 finding 2).
+_pane_draft_dim_at_rest() { # <raw_line> <stripped_line> <stripped_rest>  -> 0 if dim
+  perl -e '
+    my ($raw, $line, $rest) = @ARGV;
+    my $target = length($line) - length($rest);
+    my %active;
+    my $i = 0;
+    my $len = length($raw);
+    my $visible = 0;
+    while ($i < $len) {
+      if (substr($raw, $i, 1) eq "\x1b") {
+        if (substr($raw, $i + 1, 1) eq "[") {
+          my $j = $i + 2;
+          while ($j < $len && substr($raw, $j, 1) !~ /[A-Za-z]/) { $j++; }
+          if (substr($raw, $j, 1) eq "m") {
+            my $params = substr($raw, $i + 2, $j - ($i + 2));
+            my @toks = length($params) ? split(/;/, $params, -1) : ("0");
+            my $k = 0;
+            while ($k <= $#toks) {
+              my $p = $toks[$k];
+              $p = "0" if $p eq "";
+              if ($p eq "0") { %active = (); }
+              elsif ($p eq "22") { delete $active{2}; }
+              elsif ($p eq "38" || $p eq "48") {
+                my $mode = defined($toks[$k + 1]) ? $toks[$k + 1] : "";
+                if ($mode eq "5") { $k += 2; }
+                elsif ($mode eq "2") { $k += 4; }
+              } else {
+                $active{$p} = 1;
+              }
+              $k++;
+            }
+          }
+          $i = $j + 1;
+          next;
+        }
+        $i++;  # lone/non-CSI escape byte; not an SGR sequence, skip it alone
+        next;
+      }
+      if ($visible >= $target) { exit(exists $active{2} ? 0 : 1); }
+      $visible++;
+      $i++;
+    }
+    exit 1;
+  ' "$1" "$2" "$3"
 }
 
 # Deliver text into a pane reliably:
