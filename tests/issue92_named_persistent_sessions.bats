@@ -565,7 +565,13 @@ make_full_toolkit() { # <dir> -> a throwaway copy of orch + lib.sh + stop.sh
   make_full_toolkit "$ROOT"
   printf 'bad:name\n' > "$ROOT/_orch/state/session-name"
 
-  run "$ROOT/orch" help
+  # issue #105: this ROOT is a throwaway, non-git toolkit copy under bats'
+  # own tmp dir -- unrelated to whatever ORCH_ROOT the invoking shell may
+  # ambiently carry (this repo's own dev/worker shells routinely export one),
+  # so the mismatch guard can't establish it's the same install via git
+  # identity. Isolate explicitly, same idiom every other test in this file
+  # already relies on.
+  run env -u ORCH_ROOT "$ROOT/orch" help
   [ "$status" -eq 0 ]
   [[ "$output" == *"tmux + Claude Code orchestrator"* ]]
 }
@@ -575,7 +581,8 @@ make_full_toolkit() { # <dir> -> a throwaway copy of orch + lib.sh + stop.sh
   make_full_toolkit "$ROOT"
   printf 'bad:name\n' > "$ROOT/_orch/state/session-name"
 
-  run "$ROOT/orch" down
+  # issue #105: see the isolation note in the previous test.
+  run env -u ORCH_ROOT "$ROOT/orch" down
   [ "$status" -eq 0 ]
 }
 

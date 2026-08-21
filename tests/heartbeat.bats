@@ -114,3 +114,31 @@ setup() {
   # The drain must rename the inbox aside.
   grep -Eq 'mv[[:space:]]+"\$INBOX"' "$hb"
 }
+
+# --- master_window_alive() prefix-hijack regression (issue #107) -------------
+# Real tmux's bare `-t "$1"` (what capture-pane used here before) matches an
+# unambiguous PREFIX, not just an exact session name (confirmed against tmux
+# 3.4 -- same convention as orchcli_ask_tail.bats' stub_tmux_prefix_hijack()).
+# Session "bill" is dead; a longer-named live session "billing" happens to
+# have a window also named "orchestrator". Without session_exists() gating
+# capture-pane first, master_window_alive would resolve "bill:orchestrator"
+# against "billing:orchestrator" and report the master alive -- and every
+# caller (master_dead_alert/clear, then send_prompt) would act on it.
+@test "master_window_alive refuses a DIFFERENT live session whose name is a prefix of the target (issue #107)" {
+  CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
+  : > "$CALLS"
+  cat > "$BATS_TEST_TMPDIR/tmux" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "TMUX_CALLS_PLACEHOLDER"
+case "${1:-}" in
+  list-sessions) echo "billing" ;;
+  capture-pane) echo "> ready for shortcuts" ;;
+esac
+exit 0
+EOF
+  sed -i "s#TMUX_CALLS_PLACEHOLDER#$CALLS#" "$BATS_TEST_TMPDIR/tmux"
+  chmod +x "$BATS_TEST_TMPDIR/tmux"
+  PATH="$BATS_TEST_TMPDIR:$PATH" run master_window_alive "bill:orchestrator"
+  [ "$status" -ne 0 ]
+  ! grep -q '^capture-pane' "$CALLS"
+}

@@ -2,6 +2,111 @@
 # orch — single entrypoint for the tmux + Claude Code orchestrator.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# --- inherited-ORCH_ROOT mismatch guard (issue #105) ------------------------------
+# `orch` exports ORCH_ROOT, so every nested invocation (an _orch/*.sh script
+# sourcing lib.sh, a worker's launch env, a test fixture's subshell) inherits
+# it -- that inheritance is normal and must keep working. What is NOT normal is
+# an ORCH_ROOT that was set by something OTHER than this same script's own
+# $here on the way in: a leftover shell export, a worker's ambient launch env,
+# `ORCH_ROOT=/tmp/D ./orch update` typed from install T. That already
+# corrupted the live toolkit's .orch-version (stamped 9.9.9, which would have
+# made `orch update` report "already up to date" forever), hijacked a
+# self-referential fixture during #97, and nearly buried a real data-loss bug
+# during #114 behind a false "cannot reproduce". Fail loudly on disagreement
+# rather than silently acting on the wrong install, mirroring
+# ensure_related_repo()'s ORCH_ALLOW_UNRELATED_REPO precedent in lib.sh.
+#
+# One legitimate case must not trip this: a hermetic bats test that
+# deliberately points ORCH_ROOT at a throwaway scratch dir (same idiom as
+# lib.sh's own issue #68 leak guard below) while running the real `orch`
+# script, precisely so no state or file write can land in the real toolkit.
+# That is the opposite of the danger here, so it is not a mismatch worth
+# refusing over: detect it the same way #68 does, by checking whether
+# ORCH_ROOT resolves under one of bats' own tmp roots. All three real
+# incidents above were the other shape even when they happened during a bats
+# run -- an AMBIENT ORCH_ROOT nobody deliberately isolated, pointing at a
+# real, non-scratch toolkit -- so that shape still refuses under bats too.
+if [ -n "${ORCH_ROOT:-}" ]; then
+  # ORCH_ROOT need not exist yet (e.g. `orch help` never touches it) -- cd
+  # canonicalizes when possible, and falls back to a plain trailing-slash
+  # strip so a not-yet-created dir isn't treated as an automatic mismatch.
+  resolved_orch_root="$(cd "$ORCH_ROOT" 2>/dev/null && pwd)" || resolved_orch_root="${ORCH_ROOT%/}"
+  orch_root_isolated=0
+  if [ -n "${BATS_TEST_FILENAME:-}" ] && [ -n "$resolved_orch_root" ]; then
+    for orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}" "${BATS_TMPDIR:-}"; do
+      [ -n "$orch_bats_root" ] || continue
+      case "$resolved_orch_root" in
+        "$orch_bats_root"|"$orch_bats_root"/*) orch_root_isolated=1; break ;;
+      esac
+    done
+  fi
+  # Same install, not just the same PHYSICAL PATH: comparing $resolved_orch_root
+  # to $here byte-for-byte over-refuses on symlinks (orch invoked via a symlink
+  # whose dirname differs from the real toolkit dir), /tmp vs /private/tmp-style
+  # aliasing, and -- the case that actually broke this project's own worker
+  # workflow -- two git worktrees of the SAME toolkit repo (this repo's workers
+  # each run from their own `../wt/<hash>/<id>` worktree, per worktree_owner()
+  # below, while often inheriting ORCH_ROOT pointing at the orchestrator's main
+  # checkout). Fall back to repo-identity comparison, mirroring
+  # ensure_related_repo()'s same-toplevel / shared-git-common-dir checks in
+  # lib.sh (deliberately NOT its looser remote-URL/shared-history fallbacks --
+  # those decide whether a TARGET project is "related enough" to a toolkit, a
+  # weaker question than whether two paths ARE the same toolkit install).
+  #
+  # $here itself is `dirname "${BASH_SOURCE[0]}"`, which is NOT symlink-resolved
+  # (bash's `cd` stays logical) -- so the actual symlink case above (orch
+  # invoked as e.g. ~/bin/orch -> a real checkout) does not even reach $here
+  # being "wrong", it reaches git-toplevel lookup FAILING outright, because
+  # $here (~/bin) is often not inside any git repo at all. Resolve the
+  # SCRIPT'S OWN symlink chain (not just its dirname) before the git-identity
+  # fallback so that case is actually covered, not just documented as if it
+  # were.
+  orch_here_resolved="${BASH_SOURCE[0]}"
+  orch_symlink_hops=0
+  while [ -L "$orch_here_resolved" ]; do
+    orch_symlink_hops=$((orch_symlink_hops + 1))
+    # Bound the walk: a circular symlink chain (A -> B -> A) would otherwise
+    # spin forever instead of falling back to whatever we've resolved so far.
+    [ "$orch_symlink_hops" -le 40 ] || break
+    orch_link_target="$(readlink "$orch_here_resolved")"
+    case "$orch_link_target" in
+      /*) orch_here_resolved="$orch_link_target" ;;
+      *) orch_here_resolved="$(dirname "$orch_here_resolved")/$orch_link_target" ;;
+    esac
+  done
+  # Fall back to the unresolved dirname (mirrors $resolved_orch_root's own
+  # fallback above) rather than letting a dangling symlink's missing
+  # directory abort the whole script via set -e with a bare `cd` error.
+  orch_here_resolved="$(cd "$(dirname "$orch_here_resolved")" 2>/dev/null && pwd)" || orch_here_resolved="$(dirname "$orch_here_resolved")"
+  unset orch_link_target orch_symlink_hops
+  orch_root_same_install=0
+  if [ "$resolved_orch_root" = "$here" ] || [ "$resolved_orch_root" = "$orch_here_resolved" ]; then
+    orch_root_same_install=1
+  elif [ -n "$resolved_orch_root" ] && command -v git >/dev/null 2>&1; then
+    orch_here_top="$(git -C "$orch_here_resolved" rev-parse --show-toplevel 2>/dev/null)" || orch_here_top=""
+    orch_given_top="$(git -C "$resolved_orch_root" rev-parse --show-toplevel 2>/dev/null)" || orch_given_top=""
+    if [ -n "$orch_here_top" ] && [ -n "$orch_given_top" ]; then
+      if [ "$orch_here_top" = "$orch_given_top" ]; then
+        orch_root_same_install=1
+      else
+        orch_here_common="$(git -C "$orch_here_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || orch_here_common=""
+        orch_given_common="$(git -C "$orch_given_top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || orch_given_common=""
+        [ -n "$orch_here_common" ] && [ "$orch_here_common" = "$orch_given_common" ] && orch_root_same_install=1
+      fi
+    fi
+    unset orch_here_top orch_given_top orch_here_common orch_given_common
+  fi
+  if [ "$orch_root_same_install" -ne 1 ] && [ "$orch_root_isolated" -ne 1 ] \
+      && [ "${ORCH_ALLOW_ROOT_MISMATCH:-0}" != "1" ]; then
+    printf 'orch: inherited ORCH_ROOT (%s) does not match this script'"'"'s own location (%s).\n' \
+      "$ORCH_ROOT" "$here" >&2
+    printf 'orch: refusing to act on a different install than the one you ran -- unset ORCH_ROOT,\n' >&2
+    printf 'or set ORCH_ALLOW_ROOT_MISMATCH=1 to override deliberately.\n' >&2
+    exit 1
+  fi
+  unset resolved_orch_root orch_root_isolated orch_bats_root orch_root_same_install orch_here_resolved
+fi
 export ORCH_ROOT="${ORCH_ROOT:-$here}"
 
 # --- dependency check (issue #20) -----------------------------------------------

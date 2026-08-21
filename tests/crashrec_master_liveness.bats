@@ -22,6 +22,7 @@ setup() {
   CALLS="$BATS_TEST_TMPDIR/tmux_calls.log"
   : > "$CALLS"
   printf 'orchestrator\n' > "$WINDOWS_FILE"
+  export SESSION_NAME="orch"
 
   # capture-pane fails (as real tmux does) when the -t target's window isn't in
   # $WINDOWS_FILE, so master_window_alive can be driven the same way a real dead
@@ -30,6 +31,12 @@ setup() {
 #!/usr/bin/env bash
 echo "\$@" >> "$CALLS"
 case "\${1:-}" in
+  # issue #107: master_window_alive() now checks session_exists() (an exact
+  # \`tmux list-sessions\` match) before capture-pane, so the stub must answer
+  # it the way a real live session would -- otherwise every check fails
+  # closed and the master always reads as dead, same fix already applied to
+  # injectfix_heartbeat_safety_valve.bats's stub.
+  list-sessions) printf '%s\n' "$SESSION_NAME" ;;
   capture-pane)
     tgt=""
     args=("\$@")
@@ -49,7 +56,6 @@ EOF
   PATH="$STUBBIN:$PATH"
 
   export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
-  export SESSION_NAME="orch"
   export ORCH_WINDOW="orchestrator"
   mkdir -p "$ORCH_ROOT/_orch"
   jq '.intervals.normal_seconds = 0 | .intervals.idle_seconds = 0' \
