@@ -203,7 +203,14 @@ _update_would_disrupt_live_session() {
   local live=0
   live="$(live_worker_count 2>/dev/null || echo 0)"
   [ "$live" -gt 0 ] && return 0
-  command -v tmux >/dev/null 2>&1 && tmux has-session -t "$SESSION_NAME" 2>/dev/null && return 0
+  # require_valid_session_name (issue #92 rv92) right before interpolating
+  # $SESSION_NAME into a tmux target, same convention as clean.sh/watchdog.sh/
+  # etc. — an imperative, single-shot command like `orch update` is exactly
+  # the kind of caller lib.sh's own comment says should hard-exit on an
+  # invalid session name rather than silently targeting the wrong pane.
+  command -v tmux >/dev/null 2>&1 || return 1
+  require_valid_session_name
+  tmux has-session -t "$SESSION_NAME" 2>/dev/null && return 0
   return 1
 }
 

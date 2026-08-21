@@ -199,3 +199,25 @@ setup() {
   [ "$output" = "99" ]
   [ "$(cat "$TARGET/.orch-version")" = "$before_version" ]
 }
+
+@test "install.sh names a swap-phase failure as a mixed tree, and is idempotent to re-run afterward" {
+  # A staging-phase failure (tested above) never touches $target at all. A
+  # SWAP-phase failure is different: each individual mv is atomic, but the
+  # loop across many files is not, so a failure partway through genuinely can
+  # leave $target part-old/part-new. Simulate that specific failure mode (as
+  # opposed to a staging failure) by making _orch un-writable so its file
+  # moves fail while tmux/'s still succeed, and confirm the error names it.
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+  chmod 555 "$TARGET/_orch"
+
+  run "$INSTALL" "$TARGET"
+  chmod 755 "$TARGET/_orch"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"MIX of old and new files"* ]]
+
+  # This installer being idempotent is the whole point of the message
+  # ("re-run it") — confirm a follow-up run actually finishes cleanly.
+  run "$INSTALL" "$TARGET"
+  [ "$status" -eq 0 ]
+}

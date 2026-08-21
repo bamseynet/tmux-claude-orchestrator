@@ -80,12 +80,27 @@ have_cfg=0
 [ "$have_cfg" = 1 ] && rm -f "$stage/_orch/config.json"
 chmod +x "$stage/orch" "$stage/_orch/"*.sh
 
+# Staging above is fully isolated from $target (a failure there never touches
+# it — see the block comment). The swap loop itself is different: each `mv`
+# individually is atomic, but the LOOP across many files is not one atomic
+# unit, so a failure partway through (e.g. a permissions problem on one
+# specific target path) genuinely CAN leave $target with some files already
+# on the new version and others still on the old one. Scope a dedicated
+# error message to just this loop (not the whole script) so that specific,
+# real failure mode is named explicitly rather than surfacing as a bare `mv:`
+# stderr line with no context — this installer is idempotent, so the fix is
+# simply to re-run it, not to hand-repair the tree.
+_swap_loop_failed() {
+  echo "  ! FAILED partway through applying the update to $target/_orch and $target/tmux -- the tree is now a MIX of old and new files. This installer is idempotent: re-run it to finish the update (do not treat this run as a completed install)." >&2
+}
+trap '_swap_loop_failed' ERR
 while IFS= read -r -d '' f; do
   rel="${f#"$stage"/}"
   destf="$target/$rel"
   mkdir -p "$(dirname "$destf")"
   mv -f "$f" "$destf"
 done < <(find "$stage" -type f -print0)
+trap - ERR
 
 if [ "$have_cfg" = 1 ]; then
   echo "  . preserved existing $target/_orch/config.json"

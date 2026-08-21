@@ -458,6 +458,33 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "on a write failure, _write_state still touches the state path so the mtime throttle doesn't retry-storm" {
+  # The "unwritable state dir" test above can't prove this line does
+  # anything: with the DIRECTORY itself unwritable, the fallback touch
+  # (`: > "$UPDATE_STATE"`) fails right alongside the primary jq+mv write, so
+  # deleting the fallback wouldn't change that test's observable outcome
+  # (no file either way). Distinguish them here: fail only the jq write
+  # itself (directory stays fully writable), so a correct fallback touch
+  # SHOULD still succeed and create the path — proving the touch line is
+  # actually doing something, not just dead code alongside a redundant
+  # directory-level failure.
+  REALJQ="$(command -v jq)"
+  cat > "$STUBBIN/jq" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = "-n" ]; then
+    exit 1
+  fi
+done
+exec "$REALJQ" "\$@"
+EOF
+  chmod +x "$STUBBIN/jq"
+
+  GH_VERSION=0.2.0 run "$UPDATE" --daily-check
+  [ "$status" -eq 0 ]
+  [ -f "$ORCH_ROOT/_orch/state/update-check.json" ]
+}
+
 @test "an install with no version stamp at all (unknown) can still see an update as available" {
   rm -f "$ORCH_ROOT/.orch-version" "$ORCH_ROOT/VERSION"
   GH_VERSION=0.2.0 run "$UPDATE" --check
