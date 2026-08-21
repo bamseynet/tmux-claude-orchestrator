@@ -28,6 +28,7 @@ EOF
   source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
 
   ESC="$(printf '\x1b')"
+  BEL="$(printf '\x07')"
 }
 
 set_pane() { printf '%s\n' "$1" > "$PANE_TEXT_FILE"; }
@@ -170,6 +171,27 @@ EOF
   chmod +x "$STUBBIN/tmux"
   PATH="$STUBBIN:$PATH"
 
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
+
+# --- issue #111: strip_ansi() and the dim check must agree byte-for-byte -----
+# strip_ansi() and the (former) separate dim-offset walker were two independent
+# implementations of "which bytes are visible", and OSC-8 hyperlinks (which tmux
+# 3.4 emits verbatim in `-e` captures) exposed their divergence: one deleted the
+# whole OSC sequence, the other only consumed the ESC byte alone. X4 below is the
+# dangerous direction -- a real bright draft misread as no-draft, which would let
+# the heartbeat paste over unsent operator input. X2 is the safe direction (ghost
+# text over-detected as a draft) but still proves the same misalignment.
+
+@test "pane_has_draft is true (X4): dim run + OSC-8 both before a BRIGHT draft must not misalign the offset (issue #111)" {
+  set_pane "${ESC}[2m${ESC}]8;;http://example.com/a/fairly/long/url${BEL}${ESC}[22m❯ ${ESC}[38;5;231mreal operator text"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is false (X2): an OSC-8 hyperlink before dim ghost text must not misalign the offset (issue #111)" {
+  set_pane "${ESC}]8;;http://example.com/a/fairly/long/url${BEL}❯ ${ESC}[2mFile the follow-up issue.${ESC}[0m"
   run pane_has_draft "orch:master"
   [ "$status" -ne 0 ]
 }
