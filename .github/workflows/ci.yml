@@ -148,15 +148,35 @@ jobs:
               # for bash-version-specific failure signatures rather than
               # exit code (a missing `claude`/`jq` dependency in this bare
               # container also exits non-zero, and is expected).
+              #
+              # A "no failure signature seen" check alone is vacuous: it also
+              # passes if the script dies BEFORE reaching line 80 for an
+              # unrelated reason (a missing dep, an earlier guard added
+              # later), or if bootstrap.sh is restructured and the vulnerable
+              # expansion moves. So run under `set -x` (propagated through
+              # the `exec` into bootstrap.sh via SHELLOPTS) and additionally
+              # require a POSITIVE marker only reachable after line 80: the
+              # trace of bootstrap.shs own dependency loop (line ~126,
+              # `for dep in tmux jq claude perl git`). This is distinct from
+              # orchs own earlier pre-flight check_deps (tmux/jq/perl only,
+              # no claude/git) so it cannot be satisfied by tracing that
+              # instead. Verified locally: this marker is present when the
+              # fix is in place and ABSENT when issue #98s bug is reintroduced
+              # (the crash happens before the loop is ever reached).
+              REACH_MARKER="for dep in tmux jq claude perl git"
               check_smoke() {
                 desc="$1"; shift
-                out="$("$@" 2>&1)" || true
+                out="$(set -x; export SHELLOPTS; "$@" 2>&1)" || true
                 if printf "%s" "$out" | grep -Eq "unbound variable|bad substitution|bad array subscript|declare: usage|declare:.*invalid option|bash: mapfile: command not found|bash: readarray: command not found|syntax error near unexpected token"; then
                   echo "BASH-3.2 INCOMPATIBILITY in: $desc"
                   printf "%s\n" "$out"
                   fail=1
+                elif ! printf "%s" "$out" | grep -qF "$REACH_MARKER"; then
+                  echo "VACUOUS PASS in: $desc -- no bash-3.2 failure signature seen, but the smoke never reached past bootstrap.shs dependency loop either. Cannot conclude the vulnerable code path (line 80) actually ran."
+                  printf "%s\n" "$out"
+                  fail=1
                 else
-                  echo "ok: $desc"
+                  echo "ok: $desc (confirmed: execution reached bootstrap.sh:126, past the line-80 expansion)"
                 fi
               }
               check_smoke "orch up --name X" ./orch up --name ci-bash32-smoke
