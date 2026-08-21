@@ -25,6 +25,12 @@
     "poll_interval_seconds": 15,
     "timeout_seconds": 1800
   },
+  "update": {
+    "enabled": true,
+    "interval_hours": 24,
+    "repo": "bamseynet/tmux-claude-orchestrator",
+    "branch": "main"
+  },
   "watchdog": {
     "enabled": true,
     "check_interval": 15,
