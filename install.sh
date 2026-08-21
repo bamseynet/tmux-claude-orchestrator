@@ -39,6 +39,13 @@ mkdir -p "$target/.claude"
 cfg_backup=""
 [ -f "$target/_orch/config.json" ] && cfg_backup="$(cat "$target/_orch/config.json")"
 
+# The persisted session name (issue #92) is per-install identity, not
+# throwaway runtime state -- an operator's `--name` pin must survive an
+# upgrade the same way config.json already does, or a re-install silently
+# reverts a named session back to the orch-<hash> default underneath it.
+name_backup=""
+[ -f "$target/_orch/state/session-name" ] && name_backup="$(cat "$target/_orch/state/session-name")"
+
 cp -R "$src/_orch" "$target/"
 cp -R "$src/tmux" "$target/"
 cp "$src/orch" "$target/"
@@ -48,6 +55,12 @@ rm -rf "$target/_orch/state"   # never copy runtime state
 if [ -n "$cfg_backup" ]; then
   printf '%s' "$cfg_backup" > "$target/_orch/config.json"
   echo "  . preserved existing $target/_orch/config.json"
+fi
+
+if [ -n "$name_backup" ]; then
+  mkdir -p "$target/_orch/state"
+  printf '%s' "$name_backup" > "$target/_orch/state/session-name"
+  echo "  . preserved existing session name ($name_backup)"
 fi
 
 echo "$version" > "$target/.orch-version"

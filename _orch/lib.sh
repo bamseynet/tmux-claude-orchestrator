@@ -76,7 +76,67 @@ _orch_session_hash() { # <string> -> 8 hex chars, stable across shells/platforms
     printf '%s' "$s" | cksum | cut -d' ' -f1
   fi
 }
-: "${SESSION_NAME:=orch-$(_orch_session_hash "$ORCH_ROOT")}"      # tmux session name
+# tmux treats ':' and '.' as target separators (session:window.pane), so a name
+# containing either would silently target the wrong thing everywhere SESSION_NAME
+# is interpolated into a tmux target. Keep the allowed charset conservative.
+# Applied below to whatever SESSION_NAME actually resolves to (issue #92) — not
+# just a fresh `--name` value — so a bad SESSION_NAME env or a hand-edited
+# persisted-name file fails loudly here instead of silently mistargeting later.
+valid_session_name() { # <name> -> 0 if safe to use as a tmux session name
+  [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]]
+}
+
+# --- Nameable, persistent sessions (issue #92) --------------------------------------
+# `--name` at `orch up` persists a memorable session name to $STATE_DIR/session-name
+# so every later `orch` invocation (a different shell, a cron job, after a reboot)
+# resolves to the SAME session without re-exporting SESSION_NAME every time.
+# Precedence: SESSION_NAME env (still wins here, unchanged/back-compat) > persisted
+# name > the #81 hash default below. `orch up --name` itself (bootstrap.sh) additionally
+# overrides SESSION_NAME before this file is sourced from a fresh shell, so it
+# effectively sits above the env tier for THAT invocation.
+_orch_persisted_session_name() { # -> prints the persisted name; returns 1 (no output) if unset/empty
+  local f="$STATE_DIR/session-name" v
+  [ -f "$f" ] || return 1
+  v="$(cat "$f" 2>/dev/null)"
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+if [ -z "${SESSION_NAME:-}" ]; then
+  # `if var=$(cmd)` (not a bare `var=$(cmd)` statement) keeps this exempt from
+  # `set -e`: the assignment's exit status is only inspected, never left to
+  # abort the sourcing script on a "no persisted name yet" 1.
+  if _orch_persisted="$(_orch_persisted_session_name)"; then
+    SESSION_NAME="$_orch_persisted"
+  else
+    SESSION_NAME="orch-$(_orch_session_hash "$ORCH_ROOT")"
+  fi
+  unset _orch_persisted
+fi
+# Validate whatever SESSION_NAME resolved to -- env override, persisted file, or
+# (already-safe) hash default -- not just a fresh `--name` value. SESSION_NAME='a:b'
+# was previously accepted unvalidated and would silently target the wrong tmux
+# pane everywhere it's interpolated. This must NOT be a hard `exit` here, though
+# (issue #92 rv92 finding): lib.sh is sourced unconditionally by every entrypoint,
+# including ones that need no valid session name at all -- `orch help`, `orch
+# down` (stop.sh only prints SESSION_NAME in a cosmetic message; killing the
+# loops needs no tmux target), `orch status`/`logs`/`events`. A top-level exit
+# here would take those out too, with no way to recover short of hand-editing
+# state on disk. Record the problem instead; entrypoints that actually
+# interpolate SESSION_NAME into a tmux target call require_valid_session_name
+# themselves, right before they use it -- see ask.sh/bootstrap.sh/clean.sh/
+# heartbeat.sh/send.sh/send-remote-control.sh/spawn.sh/watchdog.sh and orch's
+# own tail/attach cases.
+SESSION_NAME_ERROR=""
+if ! valid_session_name "$SESSION_NAME"; then
+  SESSION_NAME_ERROR="orch: invalid session name [$SESSION_NAME] (from \$SESSION_NAME or a persisted name at $STATE_DIR/session-name) -- session names may contain only letters, digits, _ and - (tmux treats : and . as target separators, so either would silently target the wrong pane). Fix or unset \$SESSION_NAME, remove the persisted-name file, or run: orch up --name <valid-name>"
+fi
+require_valid_session_name() { # call before interpolating $SESSION_NAME into a tmux target
+  if [ -n "$SESSION_NAME_ERROR" ]; then
+    echo "$SESSION_NAME_ERROR" >&2
+    exit 1
+  fi
+}
+export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 : "${ORCH_WINDOW:=orchestrator}"  # master window name
 
 # --- Per-toolkit git-layer namespacing (issue #86) -----------------------------------

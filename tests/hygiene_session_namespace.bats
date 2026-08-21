@@ -8,18 +8,79 @@
 # bootstrap.sh resolves its own dir from $BASH_SOURCE, so each test runs it from
 # a throwaway toolkit copy with heartbeat.sh/watchdog.sh stubbed to no-ops —
 # this must never launch the real background loops or touch a real tmux session.
+#
+# Ownership tracking was hardened by issue #92 (rv92 finding 2): it used to live
+# in a file under THIS install's own $STATE_DIR, which a DIFFERENT install could
+# never actually populate on a real run (two ORCH_ROOTs have two separate state
+# dirs) — so the guard could only be exercised by hand-seeding a file production
+# code never writes there. It now lives ON the tmux session itself (a
+# session-scoped @orch_owner option), which every install resolving the same
+# session name can see for real. These tests exercise that for real: root A's
+# bootstrap.sh actually creates the session, root B's actually adopts it.
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
+  SESSIONS_FILE="$BATS_TEST_TMPDIR/tmux-sessions"
+  OPTS_DIR="$BATS_TEST_TMPDIR/tmux-opts"
+  : > "$SESSIONS_FILE"
+  mkdir -p "$OPTS_DIR"
 }
 
-stub_tmux() { # <has_session_exit_code>
+# A STATEFUL tmux stub (list-sessions/new-session/set-option/show-options
+# backed by plain files under $BATS_TEST_TMPDIR), so two separate bootstrap.sh
+# invocations in one test see the same fake "tmux server" — same as two real
+# installs on one machine sharing one real tmux server.
+stub_tmux() {
   cat > "$STUBBIN/tmux" <<EOF
 #!/usr/bin/env bash
 echo "\$@" >> "$BATS_TEST_TMPDIR/tmux.log"
+SESSIONS_FILE="$SESSIONS_FILE"
+OPTS_DIR="$OPTS_DIR"
 case "\${1:-}" in
-  has-session)  exit $1 ;;
+  has-session)
+    # Real tmux matches an unambiguous PREFIX too (confirmed against tmux
+    # 3.4) -- fake that here so this stub is never stricter than real tmux
+    # (see issue #92 rv92 finding 1, fixed in bootstrap.sh via an exact
+    # list-sessions match instead of a bare has-session check).
+    grep -qxF -- "\${3:-}" "\$SESSIONS_FILE" 2>/dev/null && exit 0
+    grep -q  -- "^\${3:-}" "\$SESSIONS_FILE" 2>/dev/null && exit 0
+    exit 1
+    ;;
+  list-sessions)
+    cat "\$SESSIONS_FILE"
+    exit 0
+    ;;
+  new-session)
+    name="" prev=""
+    for a in "\$@"; do
+      [ "\$prev" = "-s" ] && name="\$a"
+      prev="\$a"
+    done
+    [ -n "\$name" ] && echo "\$name" >> "\$SESSIONS_FILE"
+    exit 0
+    ;;
+  set-option)
+    shift
+    tgt=""
+    if [ "\${1:-}" = "-t" ]; then tgt="\$2"; shift 2; fi
+    key="\${1:-}"; shift || true
+    val="\$*"
+    if [ -n "\$tgt" ] && [ -n "\$key" ]; then
+      printf '%s' "\$val" > "\$OPTS_DIR/\$tgt \$key"
+    fi
+    exit 0
+    ;;
+  show-options)
+    shift
+    tgt=""
+    if [ "\${1:-}" = "-t" ]; then tgt="\$2"; shift 2; fi
+    [ "\${1:-}" = "-v" ] && shift
+    key="\${1:-}"
+    f="\$OPTS_DIR/\$tgt \$key"
+    if [ -f "\$f" ]; then cat "\$f"; exit 0; fi
+    exit 1
+    ;;
   capture-pane) echo '> ready for shortcuts' ;;
   show-buffer)  exit 1 ;;
 esac
@@ -94,17 +155,17 @@ make_toolkit() { # <dir> -> sets up a throwaway toolkit copy at <dir>/_orch
 
 # --- bootstrap.sh: the regression test that matters most -------------------
 
-@test "bootstrap.sh: reusing a session THIS root created stays a quiet reassurance" {
+@test "bootstrap.sh: reusing a session THIS root created (for real) stays a quiet reassurance" {
   ROOT="$BATS_TEST_TMPDIR/toolkit"
   make_toolkit "$ROOT"
-  stub_tmux 0   # has-session succeeds -> reuse path
-  mkdir -p "$ROOT/_orch/state"
-  printf '%s\n' "$ROOT" > "$ROOT/_orch/state/session-owner"
+  stub_tmux
 
   export ORCH_ROOT="$ROOT"
   export PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
   export SESSION_NAME="orch-shared-test"
   mkdir -p "$PROJECT_ROOT"
+
+  "$ROOT/_orch/bootstrap.sh" >/dev/null   # real create path, records @orch_owner=$ROOT
 
   run "$ROOT/_orch/bootstrap.sh"
   [ "$status" -eq 0 ]
@@ -112,21 +173,20 @@ make_toolkit() { # <dir> -> sets up a throwaway toolkit copy at <dir>/_orch
   [[ "$output" != *"WARNING"* ]]
 }
 
-@test "bootstrap.sh: reusing a session a DIFFERENT root created warns loudly, naming both roots" {
+@test "bootstrap.sh: reusing a session a DIFFERENT root created (for real) warns loudly, naming both roots" {
   ROOT_A="$BATS_TEST_TMPDIR/toolkit_a"
   ROOT_B="$BATS_TEST_TMPDIR/toolkit_b"
   make_toolkit "$ROOT_A"
   make_toolkit "$ROOT_B"
-  stub_tmux 0   # has-session succeeds -> reuse path
-  mkdir -p "$ROOT_B/_orch/state"
-  # Simulate: root A created the session first.
-  printf '%s\n' "$ROOT_A" > "$ROOT_B/_orch/state/session-owner"
+  stub_tmux
 
-  export ORCH_ROOT="$ROOT_B"
   export PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
   export SESSION_NAME="orch-shared-test"
   mkdir -p "$PROJECT_ROOT"
 
+  ORCH_ROOT="$ROOT_A" "$ROOT_A/_orch/bootstrap.sh" >/dev/null   # root A creates it for real
+
+  export ORCH_ROOT="$ROOT_B"
   run "$ROOT_B/_orch/bootstrap.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
@@ -138,7 +198,7 @@ make_toolkit() { # <dir> -> sets up a throwaway toolkit copy at <dir>/_orch
 @test "bootstrap.sh: a freshly created session records its owning root" {
   ROOT="$BATS_TEST_TMPDIR/toolkit"
   make_toolkit "$ROOT"
-  stub_tmux 1   # has-session fails -> create path
+  stub_tmux
 
   export ORCH_ROOT="$ROOT"
   export PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
@@ -147,5 +207,5 @@ make_toolkit() { # <dir> -> sets up a throwaway toolkit copy at <dir>/_orch
 
   run "$ROOT/_orch/bootstrap.sh"
   [ "$status" -eq 0 ]
-  [ "$(cat "$ROOT/_orch/state/session-owner")" = "$ROOT" ]
+  [ "$("$STUBBIN/tmux" show-options -t "$SESSION_NAME" -v @orch_owner)" = "$ROOT" ]
 }

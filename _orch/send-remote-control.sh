@@ -53,6 +53,12 @@ fi
 source "$here/lib.sh"   # provides SESSION_NAME, ORCH_WINDOW, send_prompt(), pane_has_draft()
 
 # Resolve the target: explicit arg > $ORCH_TARGET > the orchestrator window.
+# Only the last tier actually interpolates $SESSION_NAME, so only check it then
+# -- an explicit target/ORCH_TARGET must not be blocked by an unrelated bad
+# persisted name.
+if [ -z "$target" ] && [ -z "${ORCH_TARGET:-}" ]; then
+  require_valid_session_name
+fi
 target="${target:-${ORCH_TARGET:-${SESSION_NAME}:${ORCH_WINDOW}}}"
 
 command -v tmux >/dev/null 2>&1 || { say "tmux not found" >&2; exit 1; }

@@ -223,5 +223,6 @@ Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, re
 # Run the loop only when executed directly. When sourced (e.g. by hermetic bats
 # tests) this exposes inbox_swap/drain_inbox without starting the loop.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  require_valid_session_name
   heartbeat_main
 fi

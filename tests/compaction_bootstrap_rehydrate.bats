@@ -20,6 +20,7 @@ setup() {
 echo "$@" >> "$TMUX_LOG"
 case "${1:-}" in
   has-session)  exit 0 ;;                        # session already exists -> reuse path
+  list-sessions) echo "orch_rehydrate_test" ;;    # same: bootstrap.sh now checks this instead
   capture-pane) echo '> ready for shortcuts' ;;
   show-buffer)  exit 1 ;;                         # buffer "already delivered"
   load-buffer)

@@ -7,6 +7,7 @@ source "$here/lib.sh"
 
 id="${1:?usage: send.sh <worker-id> <message>}"; shift
 msg="$*"
+require_valid_session_name
 S="$SESSION_NAME"
 
 if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then

@@ -6,15 +6,16 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
 
-S="$SESSION_NAME"
-proj="${PROJECT_ROOT:-$(pwd)}"
-
-for dep in tmux jq claude perl git; do
-  command -v "$dep" >/dev/null || { say "missing dependency: $dep"; exit 1; }
-done
-
-rm -f "$STATE_DIR/.stop"
-mkdir -p "$WORKERS_DIR"
+# tmux target resolution allows an UNAMBIGUOUS PREFIX to match a session name
+# (e.g. `-t bill` hits a live session named "billing") -- confirmed against
+# tmux 3.4. A plain `tmux has-session -t <name>` is therefore not safe to use
+# for "does a session with exactly this name exist": it can silently report
+# success against a completely different, longer-named session, which is
+# exactly the --name hijack trap issue #92 warns about. List sessions and
+# match the name literally instead.
+session_exists() { # <name> -> 0 if a session with that EXACT name exists
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$1"
+}
 
 # --- PID-identity guard (issue #15) --------------------------------------------
 # A bare `kill -0 "$pid"` only proves SOME process currently holds that PID — not
@@ -42,17 +43,116 @@ pid_is_expected() {
   [[ "$cmdline" == *"$script"* ]]
 }
 
-# --- Session ownership record (issue #81) --------------------------------------
-# Session names are namespaced per toolkit root by default now (see lib.sh), which
-# handles the common case. But SESSION_NAME can still be pinned explicitly (e.g.
-# two installs both set SESSION_NAME=orch on purpose, or by accident), so record
-# which resolved ORCH_ROOT created the session and compare on reuse. Reusing a
-# session this root itself created stays a quiet, harmless reassurance; reusing one
-# a DIFFERENT root created must be a loud warning naming both roots -- that silent
-# "reusing" line is what hid a second instance for three days.
-owner_file="$STATE_DIR/session-owner"
+# Best-effort stop of an already-running heartbeat/watchdog loop and its
+# pidfile, used only when --name actually changes the persisted session name
+# (below). Both loops resolve SESSION_NAME once, at their own process
+# startup, by sourcing lib.sh -- an already-running loop keeps polling the
+# OLD name forever and never picks up a rename on its own. Without this, a
+# rename leaves the NEW session with no heartbeat/watchdog at all, because
+# the pidfile below still names a live (just wrongly-targeted) process and
+# `pid_is_expected` has no way to know its target session went stale.
+_restart_stale_loop() { # <name> <script_basename>
+  local name="$1" script="$2" pidfile pid i=0
+  pidfile="$STATE_DIR/$name.pid"
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  if [ -n "$pid" ] && pid_is_expected "$pid" "$here/$script"; then
+    kill "$pid" 2>/dev/null || true
+    while [ "$i" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.25; i=$((i + 1)); done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    log "session renamed: stopped stale $name (pid $pid) so it relaunches bound to the new name"
+  fi
+  rm -f "$pidfile"
+}
 
-if ! tmux has-session -t "$S" 2>/dev/null; then
+# --- --name flag (issue #92) ---------------------------------------------------
+# `orch up --name <name>` sets AND persists this install's session name, so a
+# later `orch` invocation in a clean environment (no SESSION_NAME exported)
+# still resolves to it — see lib.sh's precedence comment above SESSION_NAME.
+# --name outranks even an env-set SESSION_NAME for this invocation.
+name_flag=""
+bootstrap_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) name_flag="${2:?--name needs a value}"; shift 2 ;;
+    *) bootstrap_args+=("$1"); shift ;;
+  esac
+done
+set -- "${bootstrap_args[@]}"
+
+if [ -n "$name_flag" ]; then
+  if ! valid_session_name "$name_flag"; then
+    say "orch up: invalid --name '$name_flag' -- session names may contain only letters, digits, '_' and '-' (tmux treats ':' and '.' as target separators, so either would silently target the wrong thing)" >&2
+    exit 1
+  fi
+  # The RESOLVED name this invocation would use WITHOUT --name (lib.sh already
+  # computed this above: env > persisted > hash default) -- NOT just the
+  # persisted file. Checking only the persisted file misses the two most
+  # common cases: the very first --name ever run (no persisted file yet, so
+  # the live session is still under the hash default) and a rename away from
+  # a session currently pinned via the SESSION_NAME env var. Either miss lets
+  # `orch up --name X` silently strand the live master + workers under a name
+  # nothing resolves to again — the exact outcome this guard exists to stop.
+  resolved_name="$SESSION_NAME"
+  # Renaming while the session under the RESOLVED old name is still running is
+  # refused, not warned-and-proceeded: silently orphaning a live session under a
+  # name nothing will resolve to again is worse than making the operator stop
+  # it (or finish up under the old name) first. Re-affirming the SAME name is
+  # always allowed (it's a no-op rename).
+  if [ "$resolved_name" != "$name_flag" ] && session_exists "$resolved_name"; then
+    say "orch up: refusing to rename this install's session from '$resolved_name' to '$name_flag' -- '$resolved_name' is still running." >&2
+    say "  Stop it first (./orch down, then tmux kill-session -t $resolved_name) or finish up under the old name, then retry --name $name_flag." >&2
+    exit 1
+  fi
+  SESSION_NAME="$name_flag"
+  # A valid --name always wins, even over an invalid $SESSION_NAME env value it
+  # is replacing (rv92 finding 3): clear whatever lib.sh recorded about the
+  # PRE-override name so the require_valid_session_name check below doesn't
+  # block the very flag that fixes the problem.
+  SESSION_NAME_ERROR=""
+  export SESSION_NAME SESSION_NAME_ERROR
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$SESSION_NAME" > "$STATE_DIR/session-name"
+  log "session name persisted: $SESSION_NAME (via --name)"
+  if [ "$resolved_name" != "$name_flag" ]; then
+    _restart_stale_loop heartbeat heartbeat.sh
+    _restart_stale_loop watchdog  watchdog.sh
+  fi
+fi
+
+require_valid_session_name
+S="$SESSION_NAME"
+proj="${PROJECT_ROOT:-$(pwd)}"
+
+for dep in tmux jq claude perl git; do
+  command -v "$dep" >/dev/null || { say "missing dependency: $dep"; exit 1; }
+done
+
+rm -f "$STATE_DIR/.stop"
+mkdir -p "$WORKERS_DIR"
+
+# --- Session ownership record (issue #81, hardened by #92) ----------------------
+# Session names are namespaced per toolkit root by default now (see lib.sh), which
+# handles the common case. But SESSION_NAME can still be pinned explicitly -- via
+# SESSION_NAME or, since #92, an operator-chosen --name -- so two installs can
+# collide on one name much more easily than by accident. Record which resolved
+# ORCH_ROOT created the session and compare on reuse. Reusing a session this root
+# itself created stays a quiet, harmless reassurance; reusing one a DIFFERENT
+# root created must be a loud warning naming both roots -- that silent "reusing"
+# line is what hid a second instance for three days (#81).
+#
+# The ownership marker lives ON THE TMUX SESSION ITSELF, as a session-scoped
+# custom option (@orch_owner) -- NOT in this install's own $STATE_DIR. A file
+# under $STATE_DIR can only ever record what THIS install wrote: two different
+# ORCH_ROOTs have two entirely separate state directories, so an install that
+# adopts a DIFFERENT install's session always finds its own owner-file empty on
+# first contact and would print the quiet "reusing" line with no warning ever
+# firing -- the guard was unreachable for the one case it exists to catch. A
+# tmux option set on the session is visible to and queryable by every install
+# that resolves that same session name, closing that gap.
+orch_owner_opt() { tmux show-options -t "$1" -v @orch_owner 2>/dev/null || true; } # <session>
+orch_owner_set() { tmux set-option  -t "$1" @orch_owner "$2"; }                    # <session> <root>
+
+if ! session_exists "$S"; then
   tmux new-session -d -s "$S" -n "$ORCH_WINDOW" -c "$proj"
 
   # Session-scoped HUD + activity flags (does NOT touch your global tmux config).
@@ -75,18 +175,18 @@ if ! tmux has-session -t "$S" 2>/dev/null; then
     log "master not ready in 90s; open the window and read $here/CLAUDE.md manually"
   fi
   log "session $S created"
-  printf '%s\n' "$ORCH_ROOT" > "$owner_file"
+  orch_owner_set "$S" "$ORCH_ROOT"
 else
-  owner="$(cat "$owner_file" 2>/dev/null || true)"
+  owner="$(orch_owner_opt "$S")"
   if [ -n "$owner" ] && [ "$owner" != "$ORCH_ROOT" ]; then
     say "WARNING: session '$S' already exists but was created by a DIFFERENT toolkit root:" >&2
     say "  this install:  $ORCH_ROOT" >&2
     say "  session owner: $owner" >&2
-    say "Two installs are sharing one session name -- set SESSION_NAME to give each its own." >&2
+    say "Two installs are sharing one session name -- set --name (or SESSION_NAME) to give each its own." >&2
     log "session $S owner mismatch: this=$ORCH_ROOT owner=$owner"
   else
     say "session '$S' already exists; reusing"
-    [ -n "$owner" ] || printf '%s\n' "$ORCH_ROOT" > "$owner_file"
+    [ -n "$owner" ] || orch_owner_set "$S" "$ORCH_ROOT"
   fi
   # Restart/reattach case (issue #41): the master's transcript may be gone (crash,
   # a fresh bootstrap after a compact-and-exit) even though the tmux session and

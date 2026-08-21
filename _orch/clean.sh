@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$id" ] || { say "usage: clean.sh <id> [--sweep-legacy]" >&2; exit 1; }
 
+require_valid_session_name
 S="$SESSION_NAME"
 proj="${PROJECT_ROOT:-$(pwd)}"
 wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)

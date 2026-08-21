@@ -11,6 +11,7 @@ source "$here/lib.sh"
 id="${1:?usage: ask.sh <worker-id> <question>}"; shift
 msg="$*"
 [ -n "$msg" ] || { say "usage: ask.sh <worker-id> <question>"; exit 1; }
+require_valid_session_name
 S="$SESSION_NAME"
 
 if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then

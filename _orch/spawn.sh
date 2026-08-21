@@ -138,6 +138,7 @@ if [ -n "$resume" ] && [ "$mode" != "--no-worktree" ]; then
   log "resume requested -> forcing --no-worktree (Claude keys sessions by project dir)"
 fi
 
+require_valid_session_name
 S="$SESSION_NAME"
 
 # --- target-repo resolution fallback (issue #47) ------------------------------------
