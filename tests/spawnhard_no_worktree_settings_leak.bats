@@ -29,6 +29,7 @@ setup() {
   cat > "$STUBBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
+  list-sessions) echo "orch" ;;
   list-windows)  exit 0 ;;
   capture-pane)  echo '> ready for shortcuts' ;;
 esac
