@@ -39,6 +39,11 @@ bash32_job_name() {
 
 @test "bash32 job's displayed name does not claim broad bash-3.2 coverage" {
   name="$(bash32_job_name)"
+  # Guard against a broken/renamed extraction silently passing: an empty
+  # $name would fall through the case below with no default arm and match
+  # nothing, vacuously "passing" this coverage-overstatement check without
+  # actually verifying anything.
+  [ -n "$name" ]
   # The overstated name this issue is about: "bash 3.2 compatibility smoke"
   # (with or without a parenthetical) implies the whole codebase's behaviour
   # was verified under 3.2. It was not -- only syntax + one code path was.

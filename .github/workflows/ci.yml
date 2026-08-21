@@ -189,6 +189,17 @@ jobs:
               # and covers every tracked script, not just the entrypoints the
               # runtime smoke below exercises.
               scripts="$(git ls-files "*.sh"; echo orch)"
+              # Sanity: if the tar-pipe extraction or the in-container git
+              # init/add/commit silently failed or came up short (this
+              # script only sets `set -u`, not `-e`, so a failure in that
+              # earlier `&&` chain does not stop execution here), `scripts`
+              # could come back empty or truncated and this loop would just
+              # do nothing -- reporting success while having checked
+              # nothing. Fail loudly instead of passing vacuously.
+              [ "$(printf "%s\n" "$scripts" | grep -c .)" -ge 5 ] || {
+                echo "FATAL: too few tracked scripts found ($scripts) -- checkout extraction into the container likely failed"
+                exit 1
+              }
               for f in $scripts; do
                 [ -f "$f" ] || continue
                 bash -n "$f" && echo "ok: $f" || { echo "SYNTAX FAIL: $f"; fail=1; }
