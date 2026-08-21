@@ -41,6 +41,58 @@ drain_inbox() {
   rm -f "$proc"
 }
 
+# Turn a drained batch (one raw JSON event line per event, as produced by
+# drain_inbox) into a single terse inject line, e.g.
+# "[orch] w1 done · w2 needs-input x3". Honors `heartbeat.inject_denylist`
+# in config.json (default ["subagent-done"]) as a DENYLIST, never an
+# allowlist: only event types named there are dropped from the summary, so
+# any new event type introduced later always surfaces instead of being
+# silently swallowed forever. Repeats of the same (id,event) collapse into
+# one item with an "xN" count. Prints the line and returns 0 when at least
+# one non-denylisted event is present; prints nothing and returns 1 when
+# the whole batch is denylisted-only, i.e. there is nothing actionable —
+# callers use that failure to skip send_prompt entirely (issue #122).
+#
+# events.jsonl (the durable log) is untouched by this: report.sh/watchdog.sh/
+# spawn.sh tee every event there before it ever reaches drain_inbox, so
+# nothing summarized or dropped here affects that record.
+summarize_events() { # <events>
+  local events="$1" denylist_json line
+  denylist_json="$(jq -c '.heartbeat.inject_denylist // ["subagent-done"]' "$CONFIG")"
+
+  local -A counts=()
+  local -a order=()
+  local id event key
+  while IFS=$'\t' read -r id event; do
+    [ -n "$id" ] || continue
+    key="$id"$'\x1f'"$event"
+    if [ -z "${counts[$key]:-}" ]; then
+      order+=("$key")
+      counts[$key]=0
+    fi
+    counts[$key]=$((counts[$key] + 1))
+  done < <(printf '%s\n' "$events" | jq -r --argjson deny "$denylist_json" '
+    select(.id != null and .event != null) |
+    . as $ev |
+    select(($deny | index($ev.event)) | not) |
+    "\(.id)\t\(.event)"
+  ' 2>/dev/null)
+
+  [ "${#order[@]}" -gt 0 ] || return 1
+
+  local out="" k id2 event2 count item
+  for k in "${order[@]}"; do
+    id2="${k%%$'\x1f'*}"
+    event2="${k#*$'\x1f'}"
+    count="${counts[$k]}"
+    item="$id2 $event2"
+    [ "$count" -gt 1 ] && item="$item x$count"
+    if [ -z "$out" ]; then out="$item"; else out="$out · $item"; fi
+  done
+
+  printf '[orch] %s' "$out"
+}
+
 # Status of worker <id>, or empty if its status file doesn't exist yet.
 _worker_status() { # <id>
   local f="$WORKERS_DIR/$1.json"
@@ -201,7 +253,15 @@ heartbeat_main() {
     fi
 
     if events="$(drain_inbox)"; then
-      if ! master_window_alive "$S:$ORCH_WINDOW"; then
+      local summary
+      if ! summary="$(summarize_events "$events")"; then
+        # Issue #122: the whole batch was denylist-only (e.g. a run of
+        # subagent-done) — nothing actionable, so skip send_prompt entirely.
+        # No wake, no orchestrator turn, no tokens spent. events.jsonl already
+        # has every event durably (report.sh/watchdog.sh/spawn.sh tee there
+        # before drain_inbox ever sees it), so nothing is lost by not requeuing.
+        log "heartbeat: no actionable events, not waking master ($(echo "$events" | tr '\n' ' '))"
+      elif ! master_window_alive "$S:$ORCH_WINDOW"; then
         # Master window is gone outright — wait_ready would just poll a dead
         # target until its own timeout every tick. Requeue and move on instead
         # of burning that timeout; master_dead_alert above already surfaced it.
@@ -234,11 +294,8 @@ heartbeat_main() {
         if [ "$force_deliver" -eq 1 ]; then
           draft_requeue_count=0
           draft_requeue_since=0
-          send_prompt "$S:$ORCH_WINDOW" "[orchestrator heartbeat] Worker events since last check:
-$events
-
-Read _orch/state/workers/*.json, then decide and dispatch next steps (assign, review, or shut down). If you're at all unsure of current orchestration state (e.g. right after a compaction), run $here/rehydrate.sh first."
-          log "woke master with: $(echo "$events" | tr '\n' ' ')"
+          send_prompt "$S:$ORCH_WINDOW" "$summary"
+          log "woke master with: $summary"
         else
           printf '%s\n' "$events" >> "$INBOX"
           log "master has an unsent draft; requeued events (${draft_requeue_count}/${max_draft_ticks})"
