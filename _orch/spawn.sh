@@ -141,14 +141,13 @@ fi
 require_valid_session_name
 S="$SESSION_NAME"
 
-# session_exists() (issue #107): a bare `-t "$S"` target matches by UNAMBIGUOUS
-# PREFIX, so the duplicate-window check and new-window/send-keys/paste-buffer
-# below could otherwise silently create/drive a window in a DIFFERENT,
-# longer-named live session instead of failing (issue #96 fixed the read-only
-# existence checks; this closes the write paths).
-if ! session_exists "$S"; then
-  say "no such tmux session: $S" >&2; exit 1
-fi
+# require_session_exists() (issue #107): a bare `-t "$S"` target matches by
+# UNAMBIGUOUS PREFIX, so the duplicate-window check and new-window/send-keys/
+# paste-buffer below could otherwise silently create/drive a window in a
+# DIFFERENT, longer-named live session instead of failing (issue #96 fixed the
+# read-only existence checks; this closes the write paths). Shared helper in
+# lib.sh so this guard can't drift/be forgotten per-file.
+require_session_exists "$S"
 
 # --- target-repo resolution fallback (issue #47) ------------------------------------
 # `./orch` resolves the target repo (--repo > $PROJECT_ROOT > $ORCH_TARGET_REPO >
