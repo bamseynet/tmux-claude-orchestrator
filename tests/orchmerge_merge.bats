@@ -319,6 +319,6 @@ mkbranch() { # <id>
   kill "$bg_pid" 2>/dev/null || true
   wait "$bg_pid" 2>/dev/null || true
 
-  [ "$alive_status" -ne 0 ]   # was running -> helper must have failed
+  [ "$alive_status" -eq 1 ]   # was running -> helper must have failed (not a guard's exit 2)
   refute_alive "$bg_pid"      # now reaped -> helper must pass
 }
