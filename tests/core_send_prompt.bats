@@ -146,6 +146,34 @@ EOF
   [ "$enters" -eq 1 ]
 }
 
+@test "send_prompt stays bounded when ORCH_SEND_POLL_TRIES is all digits but unusable" {
+  # An all-digit value that `[ -ge ]` cannot parse as an integer (wider than
+  # intmax) errors on every iteration, so the cap would never fire — the same
+  # unbounded hang as a non-numeric value. Leading-zero values ("00") are the
+  # mirror image: they compare as 0 and give up on the very first poll.
+  wire_always_present_buffer_stub
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  err_file="$BATS_TEST_TMPDIR/stderr.log"
+  run timeout "$(scaled_timeout 30)" bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; ORCH_SEND_POLL_TRIES=99999999999999999999 send_prompt orch:w1 hi 2>'$err_file'"
+  [ "$status" -eq 0 ]
+  polls="$(grep -c '^show-buffer' "$CALLS")"
+  [ "$polls" -eq 50 ]
+  grep -q 'invalid ORCH_SEND_POLL_TRIES' "$err_file"
+}
+
+@test "send_prompt rejects a leading-zero ORCH_SEND_POLL_TRIES instead of giving up at once" {
+  wire_always_present_buffer_stub
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  err_file="$BATS_TEST_TMPDIR/stderr.log"
+  run timeout "$(scaled_timeout 30)" bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; ORCH_SEND_POLL_TRIES=00 send_prompt orch:w1 hi 2>'$err_file'"
+  [ "$status" -eq 0 ]
+  polls="$(grep -c '^show-buffer' "$CALLS")"
+  [ "$polls" -eq 50 ]
+  grep -q 'invalid ORCH_SEND_POLL_TRIES' "$err_file"
+}
+
 @test "send_prompt stays silent on the normal path where the buffer clears" {
   # Default setup() stub: paste-buffer really deletes the buffer file, so
   # show-buffer reports it gone well before the poll cap.
