@@ -264,3 +264,21 @@ mkbranch() { # <id>
   run refute_grep 'a\{1' "$BATS_TEST_TMPDIR/present2"
   [ "$status" -ne 0 ]
 }
+
+@test "refute_grep fails on a missing/empty path argument instead of passing vacuously" {
+  # A typo'd variable expands to nothing; that is a caller bug, not an absence.
+  run refute_grep "anything" ""
+  [ "$status" -ne 0 ]
+  run refute_grep "anything"
+  [ "$status" -ne 0 ]
+  run refute_grep_in_existing "anything" ""
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails on a missing/empty pid argument instead of passing vacuously" {
+  # `kill -0 ""` fails, so without a guard an unset pid reads as "not running".
+  run refute_alive ""
+  [ "$status" -ne 0 ]
+  run refute_alive
+  [ "$status" -ne 0 ]
+}

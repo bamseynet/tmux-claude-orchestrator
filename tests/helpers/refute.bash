@@ -14,10 +14,19 @@ refute_grep() { # <pattern> <file> -- fails if <pattern> is present.
                 # A missing <file> counts as absent (deliberate), handled by
                 # the explicit -e test. Every OTHER grep error (exit >= 2 --
                 # e.g. an invalid regex, or an unreadable file) fails the
-                # assertion rather than passing vacuously. Verified exit 2 on
-                # GNU grep, busybox grep and ugrep. Note a DIRECTORY argument
-                # is not in that set: all three exit 1 ("no match") for one,
-                # so it still reads as absent.
+                # assertion rather than passing vacuously; verified exit 2
+                # on the GNU grep CI actually runs (ubuntu-latest) and on
+                # busybox grep. A DIRECTORY argument also lands there on GNU
+                # grep (exit 2, "Is a directory"), i.e. it fails loudly rather
+                # than reading as absent; some other greps (ugrep) exit 1 for
+                # one and it reads as absent. No call site passes a directory.
+                #
+                # Wrong arity (or an empty path -- typically a typo'd variable
+                # that expanded to nothing) is a caller bug, not an absence:
+                # it fails rather than passing vacuously, which is the whole
+                # point of this file.
+  [ "$#" -eq 2 ] || return 2
+  [ -n "$2" ] || return 2
   [ -e "$2" ] || return 0
   local n status=0
   n="$(grep -c -- "$1" "$2")" || status=$?
@@ -28,10 +37,18 @@ refute_grep() { # <pattern> <file> -- fails if <pattern> is present.
 refute_grep_in_existing() { # <pattern> <file> -- same, but ALSO fails if
                             # <file> is missing, so the assertion can't pass
                             # vacuously.
+  [ "$#" -eq 2 ] || return 2
+  [ -n "$2" ] || return 2
   [ -e "$2" ] || return 1
   refute_grep "$1" "$2"
 }
 
 refute_alive() { # <pid> -- fails if the pid is still running.
+                 # Same arity/empty guard as refute_grep, and for the same
+                 # reason: `kill -0 ""` fails, so an unset or typo'd pid
+                 # variable would otherwise read as "not running" and pass
+                 # vacuously forever.
+  [ "$#" -eq 1 ] || return 2
+  [ -n "$1" ] || return 2
   ! kill -0 "$1" 2>/dev/null
 }
