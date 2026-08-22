@@ -743,6 +743,7 @@ _pane_scan_lines() {
 #  - -p -d pastes bracketed then deletes the buffer; Enter is gated on that delete
 #    actually landing (polled via `show-buffer`) instead of a fixed timing guess
 : "${_SEND_PROMPT_SEQ:=0}"
+: "${ORCH_SEND_POLL_TRIES:=50}"   # 50 * 0.1s sleep = 5s cap on waiting for the paste buffer to clear
 send_prompt() { # <target> <text...>
   local target="$1"; shift
   local text="$*"
@@ -752,10 +753,30 @@ send_prompt() { # <target> <text...>
   tmux paste-buffer -p -d -b "$buf" -t "$target"
   # -d deletes the buffer once the paste is delivered; poll for that instead of
   # a blind sleep, capped so a stuck/renamed buffer can never hang the send.
+  # Sanitise the cap into a local first. Anything `[ -ge ]` cannot compare as an
+  # integer (empty, non-numeric, or wider than bash's intmax) makes the test error
+  # out on every iteration so the cap never fires, reinstating exactly the
+  # unbounded hang it exists to prevent; a zero/leading-zero value ("0", "00")
+  # gives up on the very first poll and sends Enter ungated. Demand a plain
+  # positive decimal of at most 6 digits (999999 polls ~= 28h, far past any real
+  # use) and fall back to the default otherwise.
+  local tries="${ORCH_SEND_POLL_TRIES:-50}"
+  local tries_ok=1
+  case "$tries" in
+    ''|*[!0-9]*|0*) tries_ok=0 ;;
+    *) [ "${#tries}" -le 6 ] || tries_ok=0 ;;
+  esac
+  if [ "$tries_ok" -eq 0 ]; then
+    say "send_prompt: ignoring invalid ORCH_SEND_POLL_TRIES='$tries'; using 50" >&2
+    tries=50
+  fi
   local i=0
   while tmux show-buffer -b "$buf" >/dev/null 2>&1; do
     i=$((i + 1))
-    [ "$i" -ge 50 ] && break
+    if [ "$i" -ge "$tries" ]; then
+      say "send_prompt: paste buffer $buf still present after $tries polls; sending Enter ungated" >&2
+      break
+    fi
     sleep 0.1
   done
   tmux send-keys -t "$target" Enter
