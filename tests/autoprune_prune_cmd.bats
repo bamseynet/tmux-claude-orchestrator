@@ -26,13 +26,17 @@ setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
 
-  cat > "$STUBBIN/tmux" <<'EOF'
-#!/usr/bin/env bash
-case "${1:-}" in
-  list-windows) : ;;
-esac
-exit 0
-EOF
+  # No session is ever created in the fixture, so every tmux call below
+  # (list-windows from live_windows()/clean.sh) fails exactly as real tmux
+  # would against a nonexistent session -- watchdog.sh has no `set -e`, and
+  # neither the one-shot `prune` path nor reap_terminal_workers checks
+  # live_windows()'s exit status, so "session absent" and the previous stub's
+  # "list-windows always succeeds with no output" are observationally
+  # identical here: both yield an empty live-windows list.
+  export FAKE_TMUX_STATE="$BATS_TEST_TMPDIR/fake-tmux-state"
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/helpers/fake-tmux.bash"
+  fake_tmux_install_stub "$STUBBIN"
 
   cat > "$STUBBIN/git" <<'EOF'
 #!/usr/bin/env bash

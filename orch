@@ -34,7 +34,15 @@ if [ -n "${ORCH_ROOT:-}" ]; then
   resolved_orch_root="$(cd "$ORCH_ROOT" 2>/dev/null && pwd)" || resolved_orch_root="${ORCH_ROOT%/}"
   orch_root_isolated=0
   if [ -n "${BATS_TEST_FILENAME:-}" ] && [ -n "$resolved_orch_root" ]; then
-    for orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}" "${BATS_TMPDIR:-}"; do
+    # Deliberately NOT $BATS_TMPDIR here: bats-core defaults it to the bare
+    # /tmp when the user hasn't overridden it, which is not a per-run
+    # scratch dir at all -- treating "anything under /tmp" as isolated would
+    # wave through an ambient ORCH_ROOT pointing at a real, non-scratch
+    # toolkit checkout that happens to live under /tmp (the exact #97/#105
+    # hazard this guard exists to catch), any time a bats run is in
+    # progress. BATS_TEST_TMPDIR/BATS_SUITE_TMPDIR/BATS_RUN_TMPDIR are
+    # always bats-generated unique per-run directories, so they're safe.
+    for orch_bats_root in "${BATS_TEST_TMPDIR:-}" "${BATS_SUITE_TMPDIR:-}" "${BATS_RUN_TMPDIR:-}"; do
       [ -n "$orch_bats_root" ] || continue
       case "$resolved_orch_root" in
         "$orch_bats_root"|"$orch_bats_root"/*) orch_root_isolated=1; break ;;
