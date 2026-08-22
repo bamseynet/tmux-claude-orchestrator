@@ -46,7 +46,9 @@ install_escape_guard() {
 printf 'ARGS=%s\n' "\$*" >> "$log"
 for arg in "\$@"; do
   case "\$arg" in
-    kill-server|kill-session|kill-window|kill-pane|send-keys|new-session|new-window|respawn-pane|respawn-window)
+    kill-server|kill-session|kill-window|kill-pane|send-keys|new-session|new-window|respawn-pane|respawn-window|\
+    set-option|set-window-option|rename-session|rename-window|swap-window|swap-pane|move-window|move-pane|\
+    split-window|paste-buffer|run-shell)
       exit 0 ;;
   esac
 done

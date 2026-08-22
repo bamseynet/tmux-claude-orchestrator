@@ -100,6 +100,11 @@ jobs:
           bats --version
 
       - name: Run bats tests
+        env:
+          # Shared runners are noisier than a dev box; scale the wall-clock
+          # slack in the de-flaked tests (issue #125) so CI actually benefits
+          # from it instead of always resolving to the unscaled default.
+          ORCH_TEST_TIMEOUT_SCALE: "3"
         run: bats tests/
 
   bash32:

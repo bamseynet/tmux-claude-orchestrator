@@ -103,10 +103,11 @@ seed_session() { "$STUBBIN/tmux" new-session -d -s "$1" -n orchestrator -c /tmp 
 # bootstrap.sh create-path would have recorded it -- via set-option.
 seed_owner() { "$STUBBIN/tmux" set-option -t "$1" @orch_owner "$2" >/dev/null; } # <session> <owner>
 
+# shellcheck disable=SC1091
+source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+
 wait_for() { # <predicate...>, poll up to 2s * ORCH_TEST_TIMEOUT_SCALE (default 1x) so a loaded box gets slack instead of a flake
-  local scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
-  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
-  for _ in $(seq 1 $((100 * scale))); do "$@" && return 0; sleep 0.02; done
+  for _ in $(seq 1 "$(scaled_timeout 100)"); do "$@" && return 0; sleep 0.02; done
   return 1
 }
 

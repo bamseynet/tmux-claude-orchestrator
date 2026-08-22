@@ -13,9 +13,9 @@ setup() {
   # Scales the ORCH_ASK_TIMEOUT values below so a loaded box gets more slack
   # instead of a flake, rather than tightening/loosening the fixed values
   # themselves (issue #125).
-  ask_scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
-  [ "$ask_scale" -ge 1 ] 2>/dev/null || ask_scale=1
-  ASK_TIMEOUT=$((5 * ask_scale))
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  ASK_TIMEOUT="$(scaled_timeout 5)"
   # `orch`/`ask.sh` only fall back to their own script location for ORCH_ROOT when
   # the var isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can
   # inherit ORCH_ROOT from its own launch env, pointing at the PARENT

@@ -154,13 +154,13 @@ EOF
   # portable-fallback path this test exercises). The 10s below is only test
   # overhead slack, scaled so a loaded box gets more headroom instead of a
   # flake (issue #125).
-  scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
-  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
   start="$(date +%s)"
   ORCH_UPDATE_FETCH_TIMEOUT=1 PATH="$NOTIMEOUT" run "$UPDATE" --check
   elapsed=$(( $(date +%s) - start ))
   [ "$status" -ne 0 ]
-  [ "$elapsed" -lt $((10 * scale)) ]
+  [ "$elapsed" -lt "$(scaled_timeout 10)" ]
 }
 
 @test "orch update falls back to curl when gh is unavailable" {

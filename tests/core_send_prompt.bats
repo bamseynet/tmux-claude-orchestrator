@@ -92,9 +92,9 @@ EOF
   # send_prompt's own poll loop is bounded at 50*0.1s=5s; the outer timeout
   # here is just test-harness slack, scaled so a loaded box gets more of it
   # instead of a flake (issue #125).
-  scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
-  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
-  run timeout $((10 * scale)) bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; send_prompt orch:w1 hi"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  run timeout "$(scaled_timeout 10)" bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; send_prompt orch:w1 hi"
   [ "$status" -eq 0 ]
 }
 
