@@ -282,3 +282,34 @@ mkbranch() { # <id>
   run refute_alive
   [ "$status" -ne 0 ]
 }
+
+@test "refute_grep fails on an empty pattern instead of passing vacuously" {
+  # An empty pattern matches every line, so it only LOOKS like a real check:
+  # against an empty file it would silently pass. Treat it as the caller bug
+  # it is, in both directions.
+  : > "$BATS_TEST_TMPDIR/empty"
+  run refute_grep "" "$BATS_TEST_TMPDIR/empty"
+  [ "$status" -ne 0 ]
+  run refute_grep_in_existing "" "$BATS_TEST_TMPDIR/empty"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails on a non-numeric pid instead of passing vacuously" {
+  # `kill -0 not-a-pid` fails the same way a dead pid does, so an unguarded
+  # helper would read a typo'd pid as "not running".
+  run refute_alive "not-a-pid"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails while the pid is running and passes once it exits" {
+  # The point of the helper, pinned in both directions: without this, dropping
+  # or inverting its `!` would leave the suite green.
+  sleep 30 &
+  local pid=$!
+  run refute_alive "$pid"
+  [ "$status" -ne 0 ]
+
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null || true
+  refute_alive "$pid"
+}
