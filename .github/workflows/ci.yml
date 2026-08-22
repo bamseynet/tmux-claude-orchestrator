@@ -78,7 +78,11 @@ jobs:
   test:
     name: bats (hermetic unit tests + mocked tmux/claude smoke)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Measured baseline (ORCH_TEST_TIMEOUT_SCALE unset, i.e. 1x): two green
+    # runs at 14m24s and 14m50s wall-clock for this step, about half of which
+    # is the issue125 property test's nested second full-suite pass. 25m
+    # gives that real number headroom without being a blank check.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -104,6 +108,20 @@ jobs:
           # Shared runners are noisier than a dev box; scale the wall-clock
           # slack in the de-flaked tests (issue #125) so CI actually benefits
           # from it instead of always resolving to the unscaled default.
+          #
+          # A first attempt at this (run 32561539006) hung ~6min after its
+          # last visible test result and got killed by timeout-minutes, with
+          # a leaked tmux-server + bash orphans in the runner's cleanup log.
+          # Root cause: tests/issue125_tmux_escape_guard.bats's destructive-
+          # verb self-test relied on a `trap ... EXIT` set inside its @test
+          # body to kill its real canary tmux session -- bats-core owns EXIT
+          # on the test process and silently discards a trap set there, so
+          # that cleanup never ran, on ANY run of that test regardless of
+          # scale (confirmed independently of scale: 8 leaked
+          # escape-guard-canary-* sessions were found still running on a dev
+          # box from unscaled manual runs). Fixed by moving the cleanup into
+          # teardown(), the hook bats actually guarantees runs. Re-enabling
+          # scale here on top of that fix.
           ORCH_TEST_TIMEOUT_SCALE: "3"
         run: bats tests/
 

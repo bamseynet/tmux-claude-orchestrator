@@ -44,13 +44,21 @@ install_escape_guard() {
   cat >"$wrap/tmux" <<EOF
 #!/usr/bin/env bash
 printf 'ARGS=%s\n' "\$*" >> "$log"
+# Only the tmux subcommand (first non-option argument) selects the
+# destructive-verb no-op path -- matching any argument POSITION would
+# misclassify a benign call whose argument VALUE happens to equal one of
+# these tokens (e.g. a session/window name literally "kill-session").
 for arg in "\$@"; do
+  case "\$arg" in
+    -*) continue ;;
+  esac
   case "\$arg" in
     kill-server|kill-session|kill-window|kill-pane|send-keys|new-session|new-window|respawn-pane|respawn-window|\
     set-option|set-window-option|rename-session|rename-window|swap-window|swap-pane|move-window|move-pane|\
     split-window|paste-buffer|run-shell)
       exit 0 ;;
   esac
+  break
 done
 if [ -n "$REAL_TMUX" ]; then
   exec "$REAL_TMUX" "\$@"
@@ -78,6 +86,17 @@ EOF
   grep -qF 'ARGS=-V' "$LOG"
 }
 
+teardown() {
+  # A `trap ... EXIT` set inside a @test body does NOT survive to fire here --
+  # bats-core owns EXIT on the process running the test and this is the hook
+  # it actually guarantees runs after every test, pass or fail. (Confirmed by
+  # direct reproduction: an in-test EXIT trap silently never ran, leaking a
+  # real tmux session on every invocation of the test below.)
+  if [ -n "${CANARY:-}" ] && [ -n "${REAL_TMUX:-}" ]; then
+    "$REAL_TMUX" kill-session -t "$CANARY" 2>/dev/null || true
+  fi
+}
+
 @test "escape guard mechanism: destructive verbs are neutralised, not forwarded to real tmux" {
   if [ -z "$REAL_TMUX" ]; then
     skip "no real tmux on this box -- nothing to prove forwarding didn't happen"
@@ -89,7 +108,6 @@ EOF
   : >"$LOG"
   install_escape_guard "$WRAP" "$LOG"
 
-  trap '"$REAL_TMUX" kill-session -t "$CANARY" 2>/dev/null || true' EXIT
   "$REAL_TMUX" new-session -d -s "$CANARY"
 
   run "$WRAP/tmux" kill-session -t "$CANARY"
