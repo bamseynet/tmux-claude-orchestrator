@@ -75,20 +75,26 @@ EOF
 }
 
 @test "escape guard mechanism: destructive verbs are neutralised, not forwarded to real tmux" {
+  if [ -z "$REAL_TMUX" ]; then
+    skip "no real tmux on this box -- nothing to prove forwarding didn't happen"
+  fi
+
   LOG="$BATS_TEST_TMPDIR/destructive-escapes.log"
   WRAP="$BATS_TEST_TMPDIR/destructive-wrap"
+  CANARY="escape-guard-canary-$$"
   : >"$LOG"
   install_escape_guard "$WRAP" "$LOG"
 
-  run "$WRAP/tmux" kill-session -t orch-16da41b0
-  [ "$status" -eq 0 ]
-  grep -qF 'ARGS=kill-session -t orch-16da41b0' "$LOG"
+  "$REAL_TMUX" new-session -d -s "$CANARY"
 
-  # Not forwarded: the live orchestrator session on this box (if any) is
-  # still there -- a real kill-session would have removed it.
-  if [ -n "$REAL_TMUX" ]; then
-    "$REAL_TMUX" has-session -t orch-16da41b0 2>/dev/null || true
-  fi
+  run "$WRAP/tmux" kill-session -t "$CANARY"
+  [ "$status" -eq 0 ]
+  grep -qF "ARGS=kill-session -t $CANARY" "$LOG"
+
+  # Not forwarded: a real kill-session would have removed this session.
+  "$REAL_TMUX" has-session -t "$CANARY" 2>/dev/null
+
+  "$REAL_TMUX" kill-session -t "$CANARY" 2>/dev/null || true
 }
 
 # --- the property itself -------------------------------------------------------
