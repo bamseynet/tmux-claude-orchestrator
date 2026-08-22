@@ -492,8 +492,8 @@ confirm_inject() { # <target> [timeout_s]
 #     next 3 params are an RGB triple", not dim, and a real bright draft on a
 #     truecolor terminal would have been misread as ghost text and force-
 #     delivered over. _pane_scan_lines() below properly tokenizes SGR
-#     parameters and skips the trailing args 38/48 consume (5;n or 2;r;g;b)
-#     instead of treating every token as a standalone attribute.
+#     parameters and skips the trailing args 38/48/58 consume (5;n or
+#     2;r;g;b) instead of treating every token as a standalone attribute.
 #  2. "dim ANYWHERE on the row" is not "the operator's own text is dim": a
 #     trailing dim right-aligned affordance, or -- the case this guard exists
 #     for -- a partially-typed real draft with a dim ghost COMPLETION
@@ -570,8 +570,8 @@ SCANEOF
 # and everything else (including an escape byte that doesn't complete one of
 # those four shapes before end of line) as literal visible text, matching
 # strip_ansi()'s "no match, no deletion" behavior. SGR ("m"-terminated CSI)
-# parameters are parsed properly so 38/48's trailing 5;n or 2;r;g;b arguments
-# are consumed rather than misread as standalone attribute codes (rv101
+# parameters are parsed properly so 38/48/58's trailing 5;n or 2;r;g;b
+# arguments are consumed rather than misread as standalone attribute codes (rv101
 # finding 1), and %active resets at the start of every line, same as the
 # per-line walker this replaces (rv101 finding 2's per-row scoping still
 # holds: dim state is whatever it is exactly at each visible byte, not
@@ -611,7 +611,7 @@ _pane_scan_lines() {
                   $p = "0" if $p eq "";
                   if ($p eq "0") { %active = (); }
                   elsif ($p eq "22") { delete $active{2}; }
-                  elsif ($p eq "38" || $p eq "48") {
+                  elsif ($p eq "38" || $p eq "48" || $p eq "58") {
                     my $mode = defined($toks[$k + 1]) ? $toks[$k + 1] : "";
                     if ($mode eq "5") { $k += 2; }
                     elsif ($mode eq "2") { $k += 4; }
