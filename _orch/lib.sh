@@ -466,8 +466,19 @@ inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # unsent, task never dispatched) confirms as "landed" on the banner's own
   # glyph and neither this guard nor pane_has_welcome is ever reached.
   pane_has_pending_paste "$1" && return 1
-  pane_active "$1" && return 0
+  # Checked BEFORE pane_active for the same reason (rv129): the banner's own
+  # "✻" is an ACTIVE-glyph match, so with pane_active first this line was
+  # unreachable in practice on a real worker pane and ANY shape of
+  # never-dispatched injection under a still-visible banner confirmed as
+  # "landed" -- not just the paste-chip shape #128 reported. A single-line task
+  # short enough that Claude Code renders it literally instead of collapsing it
+  # into a chip, or a paste lost outright leaving an empty input box, both look
+  # exactly like that. The banner is unambiguous: it only survives while no
+  # prompt has been accepted, so it disqualifies the injection outright. A
+  # worker genuinely mid-turn is already confirmed by is_busy() above, before
+  # either check.
   pane_has_welcome "$1" && return 1
+  pane_active "$1" && return 0
   is_ready "$1" && return 0
   return 1
 }

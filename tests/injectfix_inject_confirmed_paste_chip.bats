@@ -103,3 +103,42 @@ esc to interrupt'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -eq 0 ]
 }
+
+# rv129 review: the chip guard alone is narrower than the bug class. The banner
+# glyph "✻" is what makes pane_active() confirm a never-dispatched injection, so
+# every shape of "banner still up, task never dispatched" -- not just the chip
+# -- has to lose to pane_has_welcome(). A task short enough that Claude Code
+# renders it literally instead of collapsing it into a chip is one such shape.
+@test "inject_confirmed is NOT fooled by a LITERAL (uncollapsed) unsent task under the startup banner" {
+  fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
+╭────────────────────────────────╮
+│ ❯ do the thing                  │
+╰────────────────────────────────╯
+  Sonnet 5  energy'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
+
+# ...and the shape where the paste was lost outright: banner up, input box
+# empty. is_ready() would call that "landed and finished fast"; the banner says
+# no prompt has ever been accepted.
+@test "inject_confirmed is NOT fooled by an EMPTY input box under the startup banner" {
+  fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
+╭────────────────────────────────╮
+│ ❯                               │
+╰────────────────────────────────╯
+  Sonnet 5  energy'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
+
+# Regression guard for the reorder: a spinner frame with the banner already
+# scrolled away is still positive evidence the task landed.
+@test "inject_confirmed still confirms a spinner frame once the banner has scrolled away" {
+  fake_tmux_set_pane "orch" "orchestrator" '✽ Crunching the task
+╭────────────────────────────────╮
+│ ❯                               │
+╰────────────────────────────────╯'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -eq 0 ]
+}
