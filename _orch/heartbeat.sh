@@ -155,6 +155,18 @@ heartbeat_main() {
   local master_alert_interval
   master_alert_interval="$(jq -r '.heartbeat.master_alert_interval_seconds // 60' "$CONFIG")"
 
+  # Issue #122: events whose .event is on this list carry no decision (e.g.
+  # subagent-done fires on every worker turn) and must not wake the master at
+  # all. Read once here, like normal/idle above -- not per tick. Denylist,
+  # never allowlist: an unrecognized/future event type is always actionable,
+  # so a new event class can never go silently missing. Portable bash 3.2
+  # array build (no mapfile/readarray), same pattern as merge.sh's
+  # required_checks.
+  local inject_denylist=() _idl_line
+  while IFS= read -r _idl_line; do
+    [ -n "$_idl_line" ] && inject_denylist+=("$_idl_line")
+  done < <(jq -r '.heartbeat.inject_denylist // ["subagent-done"] | .[]' "$CONFIG" 2>/dev/null || true)
+
   # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
   # single misdetection (or a genuinely long-lived operator draft) must never be
   # able to starve delivery forever. Once EITHER bound trips — N consecutive
@@ -208,7 +220,39 @@ heartbeat_main() {
     fi
 
     if events="$(drain_inbox)"; then
-      if ! master_window_alive "$S:$ORCH_WINDOW"; then
+      # Issue #122: decide noise-only-ness BEFORE anything else in this
+      # branch -- before master_window_alive/wait_ready and before the
+      # draft-requeue safety valve. Filtering later would still pay the 45s
+      # wait_ready wait every tick, and a requeued noise batch could trip the
+      # issue #52 safety valve and force-deliver the noise anyway (symptom
+      # gone, defect alive).
+      local noise_only=1 _dl_ev_line _dl_ev_type _dl_hit _dl
+      if [ "${#inject_denylist[@]}" -eq 0 ]; then
+        noise_only=0
+      else
+        while IFS= read -r _dl_ev_line; do
+          [ -n "$_dl_ev_line" ] || continue
+          # Fail open: unparseable JSON or a missing/empty .event field makes
+          # the whole batch actionable rather than silently swallowing it.
+          _dl_ev_type="$(jq -r '.event // empty' <<<"$_dl_ev_line" 2>/dev/null)" || { noise_only=0; break; }
+          [ -n "$_dl_ev_type" ] || { noise_only=0; break; }
+          _dl_hit=0
+          for _dl in "${inject_denylist[@]}"; do
+            [ "$_dl_ev_type" = "$_dl" ] && { _dl_hit=1; break; }
+          done
+          [ "$_dl_hit" -eq 1 ] || { noise_only=0; break; }
+        done <<<"$events"
+      fi
+
+      if [ "$noise_only" -eq 1 ]; then
+        # Every line matched heartbeat.inject_denylist on the .event FIELD
+        # (never a raw-line substring -- a denylisted name appearing only in
+        # another event's free-text `reason`, e.g. merge.sh's merge-blocked,
+        # must never suppress that event). Drop the batch: no send_prompt, no
+        # requeue. events.jsonl already has the full record (every emitter
+        # dual-writes it); this only decides what gets injected.
+        log "noise-only batch, suppressing wake: $(echo "$events" | tr '\n' ' ')"
+      elif ! master_window_alive "$S:$ORCH_WINDOW"; then
         # Master window is gone outright — wait_ready would just poll a dead
         # target until its own timeout every tick. Requeue and move on instead
         # of burning that timeout; master_dead_alert above already surfaced it.
