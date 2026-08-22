@@ -8,6 +8,9 @@
 
 MERGE="$BATS_TEST_DIRNAME/../_orch/merge.sh"
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   REALGIT="$(command -v git)"
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -123,7 +126,7 @@ mkbranch() { # <id>
   [ "$status" -eq 0 ]
   [[ "$output" == *"https://github.com/org/repo/pull/1"* ]]
   grep -q "push" "$GIT_LOG"
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
   [ ! -f "$ORCH_ROOT/_orch/state/events.jsonl" ]
 }
 
@@ -165,7 +168,7 @@ mkbranch() { # <id>
   mkbranch w5
   GH_CHECKS_MODE=fail run "$MERGE" w5 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w5.json"
   [ "$output" = "blocked" ]
@@ -177,7 +180,7 @@ mkbranch() { # <id>
   mkbranch w6
   GH_CHECKS_MODE=pending run "$MERGE" w6 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w6.json"
   [ "$output" = "blocked" ]
@@ -189,8 +192,8 @@ mkbranch() { # <id>
   mkbranch w7
   GH_MERGEABLE=CONFLICTING run "$MERGE" w7 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr checks" "$GH_LOG"
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr checks" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w7.json"
   [ "$output" = "blocked" ]
@@ -202,7 +205,7 @@ mkbranch() { # <id>
   mkbranch w8
   GH_MERGE_STATE=DIRTY run "$MERGE" w8 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr checks" "$GH_LOG"
+  refute_grep_in_existing "pr checks" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w8.json"
   [ "$output" = "blocked" ]
@@ -227,4 +230,30 @@ mkbranch() { # <id>
   GH_CHECKS_MODE=pass run "$MERGE" w10 --auto
   [ "$status" -eq 0 ]
   grep -q "pr merge" "$GH_LOG"
+}
+
+# --- shared refute helper (issue #134): missing-file semantics ----------------
+# refute_grep and refute_grep_in_existing differ ONLY on a missing file, which
+# is exactly the case PR #130's file-local refute_grep got wrong (grep -c on a
+# nonexistent path prints nothing and exits 2; `|| true` swallowed that, leaving
+# `[ "" -eq 0 ]`, a bash error rather than a pass/fail). Pin both directions.
+
+@test "refute_grep treats a missing file as absent (does not error)" {
+  refute_grep "anything" "$BATS_TEST_TMPDIR/does-not-exist"
+}
+
+@test "refute_grep_in_existing fails when the file is missing" {
+  run refute_grep_in_existing "anything" "$BATS_TEST_TMPDIR/does-not-exist"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep_in_existing passes when the file exists and the pattern is absent" {
+  echo "unrelated content" > "$BATS_TEST_TMPDIR/present"
+  refute_grep_in_existing "anything" "$BATS_TEST_TMPDIR/present"
+}
+
+@test "refute_grep fails when the pattern is present" {
+  echo "found it" > "$BATS_TEST_TMPDIR/present"
+  run refute_grep "found it" "$BATS_TEST_TMPDIR/present"
+  [ "$status" -ne 0 ]
 }
