@@ -78,6 +78,7 @@ jobs:
   test:
     name: bats (hermetic unit tests + mocked tmux/claude smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

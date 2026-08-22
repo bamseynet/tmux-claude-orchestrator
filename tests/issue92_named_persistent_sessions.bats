@@ -105,6 +105,7 @@ seed_owner() { "$STUBBIN/tmux" set-option -t "$1" @orch_owner "$2" >/dev/null; }
 
 wait_for() { # <predicate...>, poll up to 2s * ORCH_TEST_TIMEOUT_SCALE (default 1x) so a loaded box gets slack instead of a flake
   local scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
+  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
   for _ in $(seq 1 $((100 * scale))); do "$@" && return 0; sleep 0.02; done
   return 1
 }

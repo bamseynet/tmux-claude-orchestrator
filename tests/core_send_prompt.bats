@@ -93,6 +93,7 @@ EOF
   # here is just test-harness slack, scaled so a loaded box gets more of it
   # instead of a flake (issue #125).
   scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
+  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
   run timeout $((10 * scale)) bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; send_prompt orch:w1 hi"
   [ "$status" -eq 0 ]
 }

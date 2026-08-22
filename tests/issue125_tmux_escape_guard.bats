@@ -44,10 +44,12 @@ install_escape_guard() {
   cat >"$wrap/tmux" <<EOF
 #!/usr/bin/env bash
 printf 'ARGS=%s\n' "\$*" >> "$log"
-case "\${1:-}" in
-  kill-server|kill-session|kill-window|kill-pane|send-keys|new-session|new-window|respawn-pane|respawn-window)
-    exit 0 ;;
-esac
+for arg in "\$@"; do
+  case "\$arg" in
+    kill-server|kill-session|kill-window|kill-pane|send-keys|new-session|new-window|respawn-pane|respawn-window)
+      exit 0 ;;
+  esac
+done
 if [ -n "$REAL_TMUX" ]; then
   exec "$REAL_TMUX" "\$@"
 fi
@@ -85,6 +87,7 @@ EOF
   : >"$LOG"
   install_escape_guard "$WRAP" "$LOG"
 
+  trap '"$REAL_TMUX" kill-session -t "$CANARY" 2>/dev/null || true' EXIT
   "$REAL_TMUX" new-session -d -s "$CANARY"
 
   run "$WRAP/tmux" kill-session -t "$CANARY"
@@ -93,8 +96,6 @@ EOF
 
   # Not forwarded: a real kill-session would have removed this session.
   "$REAL_TMUX" has-session -t "$CANARY" 2>/dev/null
-
-  "$REAL_TMUX" kill-session -t "$CANARY" 2>/dev/null || true
 }
 
 # --- the property itself -------------------------------------------------------

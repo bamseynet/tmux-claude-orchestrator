@@ -155,6 +155,7 @@ EOF
   # overhead slack, scaled so a loaded box gets more headroom instead of a
   # flake (issue #125).
   scale="${ORCH_TEST_TIMEOUT_SCALE:-1}"
+  [ "$scale" -ge 1 ] 2>/dev/null || scale=1
   start="$(date +%s)"
   ORCH_UPDATE_FETCH_TIMEOUT=1 PATH="$NOTIMEOUT" run "$UPDATE" --check
   elapsed=$(( $(date +%s) - start ))
