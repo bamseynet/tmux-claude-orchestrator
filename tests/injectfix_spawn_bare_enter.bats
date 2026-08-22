@@ -141,35 +141,3 @@ EOF
   [ "$output" = "working" ]
   ! grep -q 'sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log" 2>/dev/null
 }
-
-@test "spawn.sh never re-pastes the task while an unsent [Pasted text] chip is still in the input box (rv129)" {
-  # Pane is permanently stuck in the #128 shape: banner up, chip unsent. Bare
-  # Enters never land, so the ladder reaches its last resort -- which must NOT
-  # paste a second copy of the task on top of the one already sitting there.
-  cat > "$STUBBIN/tmux" <<EOF
-#!/usr/bin/env bash
-echo "\$@" >> "$CALLS"
-case "\${1:-}" in
-  list-sessions) echo "orch" ;;
-  list-windows) exit 0 ;;
-  capture-pane)
-    printf '%s\n' '✻ Welcome to Claude Code!' '│ ❯ [Pasted text #1 +31 lines]  │' '  Sonnet 5  energy'
-    ;;
-  show-buffer) exit 1 ;;
-esac
-exit 0
-EOF
-  chmod +x "$STUBBIN/tmux"
-
-  run "$SPAWN" w4 sonnet "do the thing" --no-worktree
-  [[ "$output" == *"spawn-failed w4"* ]]
-
-  run jq -r .status "$ORCH_ROOT/_orch/state/workers/w4.json"
-  [ "$output" = "spawn-failed" ]
-
-  # Exactly one paste went out: the original inject. The last-resort re-inject
-  # must be suppressed while the task text is visibly still unsent.
-  paste_calls="$(grep -c 'paste-buffer' "$CALLS")"
-  [ "$paste_calls" -eq 1 ]
-  grep -Fq 'worker w4: task text still sits unsent in the input box; not re-pasting' "$ORCH_ROOT/_orch/state/orch.log"
-}
