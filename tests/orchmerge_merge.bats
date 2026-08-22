@@ -134,7 +134,7 @@ mkbranch() { # <id>
   mkbranch w2
   GH_EXISTING_PR=1 run "$MERGE" w2
   [ "$status" -eq 0 ]
-  ! grep -q "pr create" "$GH_LOG"
+  refute_grep_in_existing "pr create" "$GH_LOG"
 }
 
 @test "merge.sh --auto merges and emits a merged event when checks pass" {
@@ -255,5 +255,12 @@ mkbranch() { # <id>
 @test "refute_grep fails when the pattern is present" {
   echo "found it" > "$BATS_TEST_TMPDIR/present"
   run refute_grep "found it" "$BATS_TEST_TMPDIR/present"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep fails on a grep error rather than passing vacuously" {
+  echo "unrelated content" > "$BATS_TEST_TMPDIR/present2"
+  # An invalid BRE makes grep exit 2; that must NOT read as "pattern absent".
+  run refute_grep 'a\{1' "$BATS_TEST_TMPDIR/present2"
   [ "$status" -ne 0 ]
 }

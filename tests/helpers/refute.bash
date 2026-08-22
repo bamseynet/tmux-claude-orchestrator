@@ -11,11 +11,17 @@
 # `!`-negated.
 
 refute_grep() { # <pattern> <file> -- fails if <pattern> is present.
-                # A missing <file> counts as absent (deliberate): grep -c
-                # exits 2 and prints nothing on a missing file, so the raw
-                # count is coerced to 0 rather than left empty.
-  local n
-  n="$(grep -c -- "$1" "$2" 2>/dev/null)" || n=0
+                # A missing <file> counts as absent (deliberate), handled by
+                # the explicit -e test. Every OTHER grep error (exit >= 2 --
+                # e.g. an invalid regex, or an unreadable file) fails the
+                # assertion rather than passing vacuously. Verified exit 2 on
+                # GNU grep, busybox grep and ugrep. Note a DIRECTORY argument
+                # is not in that set: all three exit 1 ("no match") for one,
+                # so it still reads as absent.
+  [ -e "$2" ] || return 0
+  local n status=0
+  n="$(grep -c -- "$1" "$2")" || status=$?
+  [ "$status" -le 1 ] || return 1
   [ "${n:-0}" -eq 0 ]
 }
 
