@@ -2,7 +2,7 @@
 # _orch/lib.sh — shared helpers. Source this; do not execute directly.
 # Provides: paths, log(), session_exists(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
-#           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject(),
+#           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -382,6 +382,9 @@ TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
 TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for shortcuts|\? for shortcuts|Context (left|low)|tokens? (saved|left|used))')"
+# The collapsed "[Pasted text ...]" chip the TUI shows for an unsent paste
+# still sitting in the input box (issue #128).
+TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?( \+[0-9]+ lines?)?\]')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -416,15 +419,70 @@ pane_has_welcome() { pane_tail "$1" 25 | grep -qi "$TUI_WELCOME_REGEX"; }
 # Pane shows live activity (spinner / interrupt hint)? (0 = active)
 pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_REGEX"; }
 
+# A pending, un-submitted "[Pasted text]" chip sitting on the input row --
+# proof the paste landed but was never dispatched (issue #128). Unlike
+# pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
+# non-blank line, this looks at the last line carrying the input glyph: on a
+# real Claude Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto
+# mode on") renders BELOW the input box once the TUI has drawn once, so the
+# input row holding the chip is not the last non-blank line and
+# pane_has_draft's lookup misses it entirely. inject_confirmed needs the
+# opposite bias from pane_has_draft: fail toward "not confirmed", so an input
+# row showing an unsent chip disqualifies the injection regardless of what
+# else is rendered below it.
+#
+# Only the LAST input-glyph row in the tail is inspected, not every matching
+# row: an unsent chip can only ever sit on the live input row, which is always
+# the lowest such row on screen. Scanning every row would also match the TUI's
+# echo of a chip for a paste that WAS submitted (and a resumed session's
+# replayed transcript), keeping inject_confirmed at "not confirmed" for a
+# worker that is happily running the task -- costing it a duplicate re-inject
+# and a bogus spawn-failed.
+pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is visible
+  local line input_row=""
+  while IFS= read -r line; do
+    [[ "$line" =~ $TUI_INPUT_GLYPH_REGEX ]] && input_row="$line"
+  done <<< "$(pane_tail "$1" 25)"
+  [ -n "$input_row" ] || return 1
+  [[ "$input_row" =~ $TUI_PASTE_CHIP_REGEX ]]
+}
+
 # An injected prompt appears to have landed. Requires positive evidence rather than
-# defaulting to "landed" (issue #12): either the pane is actively working the task,
-# or the startup banner has scrolled away AND the pane is back to a ready prompt
-# (i.e. it landed and finished fast). Anything else — including "banner already
-# gone but no activity and no ready prompt either" — is treated as NOT confirmed,
-# so spawn.sh's retry/failure path can kick in instead of silently trusting it.
+# defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn
+# marker, or — with the startup banner already scrolled away and no unsent paste
+# chip on the input row — the pane shows spinner activity or is back at a ready
+# prompt (i.e. it landed and finished fast). Anything else — including "banner
+# already gone but no activity and no ready prompt either", and any shape of
+# never-dispatched injection under a still-visible banner (issue #128) — is
+# treated as NOT confirmed, so spawn.sh's retry/failure path can kick in instead
+# of silently trusting it.
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
-  pane_active "$1" && return 0
+  # A genuine mid-turn marker ("esc to interrupt") is unambiguous proof a turn
+  # is running, so it wins outright: the chip guard below must never talk a
+  # demonstrably-working worker into a duplicate re-inject and a spawn-failed.
+  # The startup banner carries no such marker, so #128's shape still falls
+  # through to the guard.
+  is_busy "$1" && return 0
+  # Checked BEFORE pane_active: an unsent chip disqualifies the injection no
+  # matter what else is on screen. The real startup banner is "✻ Welcome to
+  # Claude Code!", and that "✻" matches TUI_ACTIVE_GLYPH_REGEX -- so with
+  # pane_active first, the exact shape #128 reports (banner still up, chip
+  # unsent, task never dispatched) confirms as "landed" on the banner's own
+  # glyph and neither this guard nor pane_has_welcome is ever reached.
+  pane_has_pending_paste "$1" && return 1
+  # Checked BEFORE pane_active for the same reason (rv129): the banner's own
+  # "✻" is an ACTIVE-glyph match, so with pane_active first this line was
+  # unreachable in practice on a real worker pane and ANY shape of
+  # never-dispatched injection under a still-visible banner confirmed as
+  # "landed" -- not just the paste-chip shape #128 reported. A single-line task
+  # short enough that Claude Code renders it literally instead of collapsing it
+  # into a chip, or a paste lost outright leaving an empty input box, both look
+  # exactly like that. The banner is unambiguous: it only survives while no
+  # prompt has been accepted, so it disqualifies the injection outright. A
+  # worker genuinely mid-turn is already confirmed by is_busy() above, before
+  # either check.
   pane_has_welcome "$1" && return 1
+  pane_active "$1" && return 0
   is_ready "$1" && return 0
   return 1
 }
