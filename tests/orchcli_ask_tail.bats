@@ -10,6 +10,12 @@ ASK="$BATS_TEST_DIRNAME/../_orch/ask.sh"
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
+  # Scales the ORCH_ASK_TIMEOUT values below so a loaded box gets more slack
+  # instead of a flake, rather than tightening/loosening the fixed values
+  # themselves (issue #125).
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  ASK_TIMEOUT="$(scaled_timeout 5)"
   # `orch`/`ask.sh` only fall back to their own script location for ORCH_ROOT when
   # the var isn't already set ("${ORCH_ROOT:-$here}") — a worker's shell can
   # inherit ORCH_ROOT from its own launch env, pointing at the PARENT
@@ -87,7 +93,7 @@ EOF
 @test "ask.sh sends the question and prints the worker's reply once ready" {
   stub_tmux_with_window
   printf '42, the answer\n> ready for shortcuts\n' > "$PANE_TEXT_FILE"
-  PATH="$STUBBIN:$PATH" ORCH_ASK_TIMEOUT=5 run "$ASK" w1 "what is the answer?"
+  PATH="$STUBBIN:$PATH" ORCH_ASK_TIMEOUT="$ASK_TIMEOUT" run "$ASK" w1 "what is the answer?"
   [ "$status" -eq 0 ]
   [[ "$output" == *"42, the answer"* ]]
 }
@@ -95,7 +101,7 @@ EOF
 @test "orch ask dispatches to ask.sh" {
   stub_tmux_with_window
   printf 'reply text\n> ready for shortcuts\n' > "$PANE_TEXT_FILE"
-  PATH="$STUBBIN:$PATH" ORCH_ASK_TIMEOUT=5 run "$ORCH" ask w1 "q"
+  PATH="$STUBBIN:$PATH" ORCH_ASK_TIMEOUT="$ASK_TIMEOUT" run "$ORCH" ask w1 "q"
   [ "$status" -eq 0 ]
   [[ "$output" == *"reply text"* ]]
 }

@@ -103,7 +103,13 @@ seed_session() { "$STUBBIN/tmux" new-session -d -s "$1" -n orchestrator -c /tmp 
 # bootstrap.sh create-path would have recorded it -- via set-option.
 seed_owner() { "$STUBBIN/tmux" set-option -t "$1" @orch_owner "$2" >/dev/null; } # <session> <owner>
 
-wait_for() { for _ in $(seq 1 100); do "$@" && return 0; sleep 0.02; done; return 1; } # <predicate...>, poll up to 2s
+# shellcheck disable=SC1091
+source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+
+wait_for() { # <predicate...>, poll up to 2s * ORCH_TEST_TIMEOUT_SCALE (default 1x) so a loaded box gets slack instead of a flake
+  for _ in $(seq 1 "$(scaled_timeout 100)"); do "$@" && return 0; sleep 0.02; done
+  return 1
+}
 
 make_toolkit() { # <dir> -> sets up a throwaway toolkit copy at <dir>/_orch
   local dir="$1"
@@ -594,4 +600,20 @@ make_full_toolkit() { # <dir> -> a throwaway copy of orch + lib.sh + stop.sh
   # Ordering, not just presence: a mutation that drops or reshuffles the
   # precedence sentence must fail this, not just "mentions --name somewhere".
   [[ "$output" == *"--name flag"*"SESSION_NAME env"*"persisted name"*"orch-<hash"* ]]
+}
+
+# --- wait_for() deadline (issue #125: de-flake under load) --------------------
+
+@test "wait_for's deadline scales with ORCH_TEST_TIMEOUT_SCALE instead of a fixed 100-iteration ceiling" {
+  # A predicate that only turns true on its 150th call -- past the unscaled
+  # 100-iteration ceiling but within a 2x-scaled 200-iteration one. Counts
+  # calls rather than wall-clock time so the assertion is deterministic
+  # (fork/sleep overhead alone can pad a timing-based check past its bound).
+  CALLS_FILE="$BATS_TEST_TMPDIR/wait_for_calls"
+  : > "$CALLS_FILE"
+  ready_on_150th_call() {
+    printf 'x' >> "$CALLS_FILE"
+    [ "$(wc -c < "$CALLS_FILE")" -ge 150 ]
+  }
+  ORCH_TEST_TIMEOUT_SCALE=2 wait_for ready_on_150th_call
 }

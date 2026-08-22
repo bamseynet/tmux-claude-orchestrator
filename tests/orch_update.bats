@@ -150,11 +150,17 @@ echo "0.9.9"
 EOF
   chmod +x "$NOTIMEOUT/gh"
 
+  # ORCH_UPDATE_FETCH_TIMEOUT stays 1 -- that's the real bound under test (the
+  # portable-fallback path this test exercises). The 10s below is only test
+  # overhead slack, scaled so a loaded box gets more headroom instead of a
+  # flake (issue #125).
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
   start="$(date +%s)"
   ORCH_UPDATE_FETCH_TIMEOUT=1 PATH="$NOTIMEOUT" run "$UPDATE" --check
   elapsed=$(( $(date +%s) - start ))
   [ "$status" -ne 0 ]
-  [ "$elapsed" -lt 10 ]
+  [ "$elapsed" -lt "$(scaled_timeout 10)" ]
 }
 
 @test "orch update falls back to curl when gh is unavailable" {
