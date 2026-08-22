@@ -76,3 +76,30 @@ esc to interrupt'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -ne 0 ]
 }
+
+# rv129 review: the chip guard must not out-vote unambiguous mid-turn evidence.
+# If the TUI ever echoes the SUBMITTED paste's chip on a row that also carries
+# the input glyph (a resumed session replaying its transcript is the same
+# shape), scanning for a chip first would keep a worker that is demonstrably
+# running the task at "not confirmed" -- earning it a duplicate full re-inject
+# and a bogus spawn-failed.
+@test "inject_confirmed confirms a busy pane even if a chip row is still on screen" {
+  fake_tmux_set_pane "orch" "orchestrator" '❯ [Pasted text #1 +31 lines]
+Thinking...
+esc to interrupt'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -eq 0 ]
+}
+
+# Only the LAST input-glyph row can be the live input box; a chip echoed above
+# it, with an empty prompt below, means the paste was submitted.
+@test "inject_confirmed confirms when the chip is above an empty live input row" {
+  fake_tmux_set_pane "orch" "orchestrator" '❯ [Pasted text #1 +31 lines]
+  ⏺ done.
+╭────────────────────────────────╮
+│ ❯                               │
+╰────────────────────────────────╯
+  Sonnet 5  energy'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -eq 0 ]
+}

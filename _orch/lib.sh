@@ -422,20 +422,28 @@ pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_
 # A pending, un-submitted "[Pasted text]" chip sitting on the input row --
 # proof the paste landed but was never dispatched (issue #128). Unlike
 # pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
-# non-blank line, this scans every line of the tail: on a real Claude Code
-# worker pane the model/mode footer ("Sonnet 5 <id>", "auto mode on") renders
-# BELOW the input box once the TUI has drawn once, so the input row holding
-# the chip is not the last non-blank line and pane_has_draft's lookup misses
-# it entirely. inject_confirmed needs the opposite bias from pane_has_draft:
-# fail toward "not confirmed", so any input row showing an unsent chip
-# disqualifies the injection regardless of what else is below it.
+# non-blank line, this looks at the last line carrying the input glyph: on a
+# real Claude Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto
+# mode on") renders BELOW the input box once the TUI has drawn once, so the
+# input row holding the chip is not the last non-blank line and
+# pane_has_draft's lookup misses it entirely. inject_confirmed needs the opposite bias from pane_has_draft:
+# fail toward "not confirmed", so an input row showing an unsent chip
+# disqualifies the injection regardless of what else is rendered below it.
+#
+# Only the LAST input-glyph row in the tail is inspected, not every matching
+# row: an unsent chip can only ever sit on the live input row, which is always
+# the lowest such row on screen. Scanning every row would also match the TUI's
+# echo of a chip for a paste that WAS submitted (and a resumed session's
+# replayed transcript), keeping inject_confirmed at "not confirmed" for a
+# worker that is happily running the task -- costing it a duplicate re-inject
+# and a bogus spawn-failed.
 pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is visible
-  local line
+  local line input_row=""
   while IFS= read -r line; do
-    [[ "$line" =~ $TUI_INPUT_GLYPH_REGEX ]] || continue
-    [[ "$line" =~ $TUI_PASTE_CHIP_REGEX ]] && return 0
+    [[ "$line" =~ $TUI_INPUT_GLYPH_REGEX ]] && input_row="$line"
   done <<< "$(pane_tail "$1" 25)"
-  return 1
+  [ -n "$input_row" ] || return 1
+  [[ "$input_row" =~ $TUI_PASTE_CHIP_REGEX ]]
 }
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
@@ -444,8 +452,13 @@ pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is vis
 # (i.e. it landed and finished fast). Anything else — including "banner already
 # gone but no activity and no ready prompt either" — is treated as NOT confirmed,
 # so spawn.sh's retry/failure path can kick in instead of silently trusting it.
-
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
+  # A genuine mid-turn marker ("esc to interrupt") is unambiguous proof a turn
+  # is running, so it wins outright: the chip guard below must never talk a
+  # demonstrably-working worker into a duplicate re-inject and a spawn-failed.
+  # The startup banner carries no such marker, so #128's shape still falls
+  # through to the guard.
+  is_busy "$1" && return 0
   # Checked BEFORE pane_active: an unsent chip disqualifies the injection no
   # matter what else is on screen. The real startup banner is "✻ Welcome to
   # Claude Code!", and that "✻" matches TUI_ACTIVE_GLYPH_REGEX -- so with
