@@ -685,6 +685,7 @@ _pane_scan_lines() {
 #  - -p -d pastes bracketed then deletes the buffer; Enter is gated on that delete
 #    actually landing (polled via `show-buffer`) instead of a fixed timing guess
 : "${_SEND_PROMPT_SEQ:=0}"
+: "${ORCH_SEND_POLL_TRIES:=50}"   # 50 * 0.1s sleep = 5s cap on waiting for the paste buffer to clear
 send_prompt() { # <target> <text...>
   local target="$1"; shift
   local text="$*"
@@ -697,7 +698,10 @@ send_prompt() { # <target> <text...>
   local i=0
   while tmux show-buffer -b "$buf" >/dev/null 2>&1; do
     i=$((i + 1))
-    [ "$i" -ge 50 ] && break
+    if [ "$i" -ge "$ORCH_SEND_POLL_TRIES" ]; then
+      say "send_prompt: paste buffer $buf still present after $ORCH_SEND_POLL_TRIES polls; sending Enter ungated" >&2
+      break
+    fi
     sleep 0.1
   done
   tmux send-keys -t "$target" Enter
