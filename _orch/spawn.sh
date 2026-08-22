@@ -396,9 +396,19 @@ else
     fi
   done
   if [ "$spawn_ok" -ne 1 ]; then
-    log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
-    send_prompt "$S:$id" "${preamble}${task}"
-    if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    # Last resort only when the text is demonstrably NOT still sitting in the
+    # input box. If the pane still shows an un-submitted "[Pasted text]" chip
+    # (issue #128), re-pasting would append a SECOND copy of the task next to
+    # the first and submit both -- exactly the duplication this ladder exists
+    # to avoid ("never blindly re-paste", above). Better a clean spawn-failed
+    # the master can act on than a worker running the task twice over.
+    if pane_has_pending_paste "$S:$id"; then
+      log "worker $id: task text still sits unsent in the input box; not re-pasting (would duplicate it)"
+    else
+      log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
+      send_prompt "$S:$id" "${preamble}${task}"
+      if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    fi
   fi
 fi
 

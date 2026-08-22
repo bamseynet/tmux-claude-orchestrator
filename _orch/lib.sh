@@ -426,9 +426,10 @@ pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_
 # real Claude Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto
 # mode on") renders BELOW the input box once the TUI has drawn once, so the
 # input row holding the chip is not the last non-blank line and
-# pane_has_draft's lookup misses it entirely. inject_confirmed needs the opposite bias from pane_has_draft:
-# fail toward "not confirmed", so an input row showing an unsent chip
-# disqualifies the injection regardless of what else is rendered below it.
+# pane_has_draft's lookup misses it entirely. inject_confirmed needs the
+# opposite bias from pane_has_draft: fail toward "not confirmed", so an input
+# row showing an unsent chip disqualifies the injection regardless of what
+# else is rendered below it.
 #
 # Only the LAST input-glyph row in the tail is inspected, not every matching
 # row: an unsent chip can only ever sit on the live input row, which is always
@@ -447,11 +448,14 @@ pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is vis
 }
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
-# defaulting to "landed" (issue #12): either the pane is actively working the task,
-# or the startup banner has scrolled away AND the pane is back to a ready prompt
-# (i.e. it landed and finished fast). Anything else — including "banner already
-# gone but no activity and no ready prompt either" — is treated as NOT confirmed,
-# so spawn.sh's retry/failure path can kick in instead of silently trusting it.
+# defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn
+# marker, or — with the startup banner already scrolled away and no unsent paste
+# chip on the input row — the pane shows spinner activity or is back at a ready
+# prompt (i.e. it landed and finished fast). Anything else — including "banner
+# already gone but no activity and no ready prompt either", and any shape of
+# never-dispatched injection under a still-visible banner (issue #128) — is
+# treated as NOT confirmed, so spawn.sh's retry/failure path can kick in instead
+# of silently trusting it.
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # A genuine mid-turn marker ("esc to interrupt") is unambiguous proof a turn
   # is running, so it wins outright: the chip guard below must never talk a
