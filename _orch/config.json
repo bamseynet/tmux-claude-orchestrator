@@ -5,6 +5,7 @@
     "idle_seconds": 60
   },
   "heartbeat": {
+    "inject_denylist": ["subagent-done"],
     "max_draft_requeue_ticks": 10,
     "max_draft_requeue_seconds": 300
   },
