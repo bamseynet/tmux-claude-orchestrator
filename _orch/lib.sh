@@ -2,7 +2,7 @@
 # _orch/lib.sh — shared helpers. Source this; do not execute directly.
 # Provides: paths, log(), session_exists(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
-#           pane_has_welcome(), pane_active(), inject_confirmed(), confirm_inject(),
+#           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -382,6 +382,9 @@ TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
 TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for shortcuts|\? for shortcuts|Context (left|low)|tokens? (saved|left|used))')"
+# The collapsed "[Pasted text ...]" chip the TUI shows for an unsent paste
+# still sitting in the input box (issue #128).
+TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?( \+[0-9]+ lines?)?\]')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -422,9 +425,30 @@ pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_
 # (i.e. it landed and finished fast). Anything else — including "banner already
 # gone but no activity and no ready prompt either" — is treated as NOT confirmed,
 # so spawn.sh's retry/failure path can kick in instead of silently trusting it.
+
+# A pending, un-submitted "[Pasted text]" chip sitting on the input row --
+# proof the paste landed but was never dispatched (issue #128). Unlike
+# pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
+# non-blank line, this scans every line of the tail: on a real Claude Code
+# worker pane the model/mode footer ("Sonnet 5 <id>", "auto mode on") renders
+# BELOW the input box once the TUI has drawn once, so the input row holding
+# the chip is not the last non-blank line and pane_has_draft's lookup misses
+# it entirely. inject_confirmed needs the opposite bias from pane_has_draft:
+# fail toward "not confirmed", so any input row showing an unsent chip
+# disqualifies the injection regardless of what else is below it.
+pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is visible
+  local line
+  while IFS= read -r line; do
+    [[ "$line" =~ $TUI_INPUT_GLYPH_REGEX ]] || continue
+    [[ "$line" =~ $TUI_PASTE_CHIP_REGEX ]] && return 0
+  done <<< "$(pane_tail "$1" 25)"
+  return 1
+}
+
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   pane_active "$1" && return 0
   pane_has_welcome "$1" && return 1
+  pane_has_pending_paste "$1" && return 1
   is_ready "$1" && return 0
   return 1
 }
