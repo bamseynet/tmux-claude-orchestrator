@@ -60,3 +60,19 @@ esc to interrupt'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -eq 0 ]
 }
+
+# The production shape from #128: the real startup banner is "✻ Welcome to
+# Claude Code!", and that "✻" matches TUI_ACTIVE_GLYPH_REGEX. If pane_active
+# is consulted before the chip guard, inject_confirmed returns "landed" on the
+# banner's own glyph and the guard above is never reached -- exactly the
+# never-dispatched worker the issue reports. Pins the ordering.
+@test "inject_confirmed is NOT fooled by an unsent chip under the startup banner's activity glyph" {
+  fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
+╭────────────────────────────────╮
+│ ❯ [Pasted text #1 +31 lines]   │
+╰────────────────────────────────╯
+  Sonnet 5  energy
+  ⏵⏵ auto mode on (shift+tab to cycle)'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}

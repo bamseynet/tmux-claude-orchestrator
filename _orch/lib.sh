@@ -419,13 +419,6 @@ pane_has_welcome() { pane_tail "$1" 25 | grep -qi "$TUI_WELCOME_REGEX"; }
 # Pane shows live activity (spinner / interrupt hint)? (0 = active)
 pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_REGEX"; }
 
-# An injected prompt appears to have landed. Requires positive evidence rather than
-# defaulting to "landed" (issue #12): either the pane is actively working the task,
-# or the startup banner has scrolled away AND the pane is back to a ready prompt
-# (i.e. it landed and finished fast). Anything else — including "banner already
-# gone but no activity and no ready prompt either" — is treated as NOT confirmed,
-# so spawn.sh's retry/failure path can kick in instead of silently trusting it.
-
 # A pending, un-submitted "[Pasted text]" chip sitting on the input row --
 # proof the paste landed but was never dispatched (issue #128). Unlike
 # pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
@@ -445,10 +438,23 @@ pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is vis
   return 1
 }
 
+# An injected prompt appears to have landed. Requires positive evidence rather than
+# defaulting to "landed" (issue #12): either the pane is actively working the task,
+# or the startup banner has scrolled away AND the pane is back to a ready prompt
+# (i.e. it landed and finished fast). Anything else — including "banner already
+# gone but no activity and no ready prompt either" — is treated as NOT confirmed,
+# so spawn.sh's retry/failure path can kick in instead of silently trusting it.
+
 inject_confirmed() { # <target>  -> 0 if the injection looks accepted
+  # Checked BEFORE pane_active: an unsent chip disqualifies the injection no
+  # matter what else is on screen. The real startup banner is "✻ Welcome to
+  # Claude Code!", and that "✻" matches TUI_ACTIVE_GLYPH_REGEX -- so with
+  # pane_active first, the exact shape #128 reports (banner still up, chip
+  # unsent, task never dispatched) confirms as "landed" on the banner's own
+  # glyph and neither this guard nor pane_has_welcome is ever reached.
+  pane_has_pending_paste "$1" && return 1
   pane_active "$1" && return 0
   pane_has_welcome "$1" && return 1
-  pane_has_pending_paste "$1" && return 1
   is_ready "$1" && return 0
   return 1
 }
