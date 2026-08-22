@@ -8,6 +8,9 @@
 
 MERGE="$BATS_TEST_DIRNAME/../_orch/merge.sh"
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   REALGIT="$(command -v git)"
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -123,7 +126,7 @@ mkbranch() { # <id>
   [ "$status" -eq 0 ]
   [[ "$output" == *"https://github.com/org/repo/pull/1"* ]]
   grep -q "push" "$GIT_LOG"
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
   [ ! -f "$ORCH_ROOT/_orch/state/events.jsonl" ]
 }
 
@@ -131,7 +134,7 @@ mkbranch() { # <id>
   mkbranch w2
   GH_EXISTING_PR=1 run "$MERGE" w2
   [ "$status" -eq 0 ]
-  ! grep -q "pr create" "$GH_LOG"
+  refute_grep_in_existing "pr create" "$GH_LOG"
 }
 
 @test "merge.sh --auto merges and emits a merged event when checks pass" {
@@ -165,7 +168,7 @@ mkbranch() { # <id>
   mkbranch w5
   GH_CHECKS_MODE=fail run "$MERGE" w5 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w5.json"
   [ "$output" = "blocked" ]
@@ -177,7 +180,7 @@ mkbranch() { # <id>
   mkbranch w6
   GH_CHECKS_MODE=pending run "$MERGE" w6 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w6.json"
   [ "$output" = "blocked" ]
@@ -189,8 +192,8 @@ mkbranch() { # <id>
   mkbranch w7
   GH_MERGEABLE=CONFLICTING run "$MERGE" w7 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr checks" "$GH_LOG"
-  ! grep -q "pr merge" "$GH_LOG"
+  refute_grep_in_existing "pr checks" "$GH_LOG"
+  refute_grep_in_existing "pr merge" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w7.json"
   [ "$output" = "blocked" ]
@@ -202,7 +205,7 @@ mkbranch() { # <id>
   mkbranch w8
   GH_MERGE_STATE=DIRTY run "$MERGE" w8 --auto
   [ "$status" -ne 0 ]
-  ! grep -q "pr checks" "$GH_LOG"
+  refute_grep_in_existing "pr checks" "$GH_LOG"
 
   run jq -r '.status' "$ORCH_ROOT/_orch/state/workers/w8.json"
   [ "$output" = "blocked" ]
@@ -227,4 +230,95 @@ mkbranch() { # <id>
   GH_CHECKS_MODE=pass run "$MERGE" w10 --auto
   [ "$status" -eq 0 ]
   grep -q "pr merge" "$GH_LOG"
+}
+
+# --- shared refute helper (issue #134): missing-file semantics ----------------
+# refute_grep and refute_grep_in_existing differ ONLY on a missing file, which
+# is exactly the case PR #130's file-local refute_grep got wrong (grep -c on a
+# nonexistent path prints nothing and exits 2; `|| true` swallowed that, leaving
+# `[ "" -eq 0 ]`, a bash error rather than a pass/fail). Pin both directions.
+
+@test "refute_grep treats a missing file as absent (does not error)" {
+  refute_grep "anything" "$BATS_TEST_TMPDIR/does-not-exist"
+}
+
+@test "refute_grep_in_existing fails when the file is missing" {
+  run refute_grep_in_existing "anything" "$BATS_TEST_TMPDIR/does-not-exist"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep_in_existing passes when the file exists and the pattern is absent" {
+  echo "unrelated content" > "$BATS_TEST_TMPDIR/present"
+  refute_grep_in_existing "anything" "$BATS_TEST_TMPDIR/present"
+}
+
+@test "refute_grep fails when the pattern is present" {
+  echo "found it" > "$BATS_TEST_TMPDIR/present"
+  run refute_grep "found it" "$BATS_TEST_TMPDIR/present"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep fails on a grep error rather than passing vacuously" {
+  echo "unrelated content" > "$BATS_TEST_TMPDIR/present2"
+  # An invalid BRE makes grep exit 2; that must NOT read as "pattern absent".
+  run refute_grep 'a\{1' "$BATS_TEST_TMPDIR/present2"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep fails on a missing/empty path argument instead of passing vacuously" {
+  # A typo'd variable expands to nothing; that is a caller bug, not an absence.
+  run refute_grep "anything" ""
+  [ "$status" -ne 0 ]
+  run refute_grep "anything"
+  [ "$status" -ne 0 ]
+  run refute_grep_in_existing "anything" ""
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails on a missing/empty pid argument instead of passing vacuously" {
+  # `kill -0 ""` fails, so without a guard an unset pid reads as "not running".
+  run refute_alive ""
+  [ "$status" -ne 0 ]
+  run refute_alive
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_grep fails on an empty pattern instead of passing vacuously" {
+  # An empty pattern matches every line, so it only LOOKS like a real check:
+  # against an empty file it would silently pass. Treat it as the caller bug
+  # it is, in both directions.
+  : > "$BATS_TEST_TMPDIR/empty"
+  run refute_grep "" "$BATS_TEST_TMPDIR/empty"
+  [ "$status" -ne 0 ]
+  run refute_grep_in_existing "" "$BATS_TEST_TMPDIR/empty"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails on a non-numeric pid instead of passing vacuously" {
+  # `kill -0 not-a-pid` fails the same way a dead pid does, so an unguarded
+  # helper would read a typo'd pid as "not running".
+  run refute_alive "not-a-pid"
+  [ "$status" -ne 0 ]
+}
+
+@test "refute_alive fails while the pid is running and passes once it exits" {
+  # The point of the helper, pinned in both directions: without this, dropping
+  # or inverting its `!` would leave the suite green.
+  #
+  # The canary is reaped BEFORE the first assertion, and its verdict stashed,
+  # deliberately: under bats' set -e a failing assertion aborts the body, so a
+  # kill placed after it never runs and `sleep` survives holding bats' output
+  # pipe for its full 30s (measured: the file went ~13s -> ~43s). A teardown()
+  # is not the fix here -- this suite has none, and bats-core owns EXIT on the
+  # test process, the same quirk .github/workflows/ci.yml already documents.
+  # Cleanup-before-assert needs no trap and cannot be skipped.
+  sleep 30 >/dev/null 2>&1 &
+  bg_pid=$!
+  run refute_alive "$bg_pid"
+  alive_status="$status"
+  kill "$bg_pid" 2>/dev/null || true
+  wait "$bg_pid" 2>/dev/null || true
+
+  [ "$alive_status" -eq 1 ]   # was running -> helper must have failed (not a guard's exit 2)
+  refute_alive "$bg_pid"      # now reaped -> helper must pass
 }
