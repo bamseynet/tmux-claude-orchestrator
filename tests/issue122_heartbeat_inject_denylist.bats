@@ -59,6 +59,14 @@ wait_for() { # <predicate...>
   return 1
 }
 
+# `! grep -q ...` asserts NOTHING in bats unless it is the very last line of the
+# test: bash exempts a `!`-negated command from `set -e`, so the test sails past a
+# failing absence check. Verified against bats-core 1.10.0. Use this instead --
+# its failure is a plain non-zero exit that bats does catch.
+refute_grep() { # <pattern> <file>
+  [ "$(grep -c -- "$1" "$2" 2>/dev/null || true)" -eq 0 ]
+}
+
 start_hb() {
   heartbeat_main &
   HB_PID=$!
@@ -78,8 +86,8 @@ start_hb() {
   touch "$STATE_DIR/.stop"
   wait "$HB_PID" 2>/dev/null || true
 
-  ! grep -q 'paste-buffer' "$CALLS"
-  ! grep -q 'send-keys' "$CALLS"
+  refute_grep 'paste-buffer' "$CALLS"
+  refute_grep 'send-keys' "$CALLS"
   # The batch was consumed (not left requeued forever).
   [ ! -s "$INBOX" ]
 }
@@ -205,4 +213,63 @@ start_hb() {
   # master_window_alive). A busy-spin would produce hundreds/thousands.
   calls="$(grep -c 'list-sessions' "$CALLS")"
   [ "$calls" -le 20 ]
+}
+
+# --- Case 9: placement -- decided before wait_ready and the issue-#52 valve ------
+#
+# Cases 1-8 all pass even if the denylist check is moved to the very end of the
+# branch (after master_window_alive, wait_ready and the draft valve), because
+# their stub pane holds no draft: a late filter still ends up not sending. That
+# is precisely the break issue #122 names third, and it leaves the defect alive
+# -- every noise tick still pays the 45s wait_ready, still requeues, and still
+# trips the #52 safety valve. Pin the placement directly: with a permanent pane
+# draft and a low tick cap, a suppressed noise batch must produce NO requeue and
+# NO valve trip at all, because the decision happened before that code ran.
+
+@test "case9: a noise-only batch is decided before wait_ready and never touches the #52 valve" {
+  printf '❯ some unsent draft text' > "$PANE_TEXT_FILE"
+  jq '.heartbeat.max_draft_requeue_ticks = 2 | .heartbeat.max_draft_requeue_seconds = 3600' \
+    "$ORCH_ROOT/_orch/config.json" > "$ORCH_ROOT/_orch/config.json.tmp"
+  mv "$ORCH_ROOT/_orch/config.json.tmp" "$ORCH_ROOT/_orch/config.json"
+
+  start_hb
+  printf '{"id":"r120","event":"subagent-done"}\n' >> "$INBOX"
+
+  wait_for grep -q 'noise-only batch' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  refute_grep 'paste-buffer' "$CALLS"
+  refute_grep 'send-keys' "$CALLS"
+  # The draft path must never have seen this batch.
+  refute_grep 'requeued events' "$LOG"
+  refute_grep 'safety valve tripped' "$LOG"
+  [ ! -s "$INBOX" ]
+}
+
+# --- Case 10: placement -- decided before master_window_alive -------------------
+
+@test "case10: a noise-only batch is dropped, not requeued, when the master window is dead" {
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) : ;;   # no sessions: the master window is gone
+  capture-pane)  exit 1 ;;
+  load-buffer)   cat >> "$PASTED" ;;
+  show-buffer)   exit 1 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  start_hb
+  printf '{"id":"r120","event":"subagent-done"}\n' >> "$INBOX"
+
+  wait_for grep -q 'noise-only batch' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  refute_grep 'master window down; requeued events' "$LOG"
+  [ ! -s "$INBOX" ]
 }
