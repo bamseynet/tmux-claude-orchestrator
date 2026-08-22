@@ -304,12 +304,21 @@ mkbranch() { # <id>
 @test "refute_alive fails while the pid is running and passes once it exits" {
   # The point of the helper, pinned in both directions: without this, dropping
   # or inverting its `!` would leave the suite green.
-  sleep 30 &
-  local pid=$!
-  run refute_alive "$pid"
-  [ "$status" -ne 0 ]
+  #
+  # The canary is reaped BEFORE the first assertion, and its verdict stashed,
+  # deliberately: under bats' set -e a failing assertion aborts the body, so a
+  # kill placed after it never runs and `sleep` survives holding bats' output
+  # pipe for its full 30s (measured: the file went ~13s -> ~43s). A teardown()
+  # is not the fix here -- this suite has none, and bats-core owns EXIT on the
+  # test process, the same quirk .github/workflows/ci.yml already documents.
+  # Cleanup-before-assert needs no trap and cannot be skipped.
+  sleep 30 >/dev/null 2>&1 &
+  bg_pid=$!
+  run refute_alive "$bg_pid"
+  alive_status="$status"
+  kill "$bg_pid" 2>/dev/null || true
+  wait "$bg_pid" 2>/dev/null || true
 
-  kill "$pid" 2>/dev/null
-  wait "$pid" 2>/dev/null || true
-  refute_alive "$pid"
+  [ "$alive_status" -ne 0 ]   # was running -> helper must have failed
+  refute_alive "$bg_pid"      # now reaped -> helper must pass
 }

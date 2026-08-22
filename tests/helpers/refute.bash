@@ -57,6 +57,12 @@ refute_alive() { # <pid> -- fails if the pid is still running.
                  # exit 1, i.e. "not running"), so require digits; the `case`
                  # form is used over `[[ =~ ]]` for bash 3.2 (see the bash32
                  # CI job).
+                 #
+                 # Known limitation: `kill -0` cannot distinguish ESRCH ("no
+                 # such process") from EPERM ("alive, but owned by another
+                 # user") -- both exit 1 -- so a live process this user may not
+                 # signal still reads as dead. Every call site here signals its
+                 # own children, so this does not bite in practice.
   [ "$#" -eq 1 ] || return 2
   case "$1" in
     '' | *[!0-9]*) return 2 ;;
