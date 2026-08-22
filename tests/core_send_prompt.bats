@@ -127,6 +127,25 @@ EOF
   [ "$enters" -eq 1 ]
 }
 
+@test "send_prompt stays bounded when ORCH_SEND_POLL_TRIES is malformed" {
+  # A non-numeric (or zero) override must not defeat the cap: the `-ge` test
+  # would error on every iteration and the loop would spin forever, which is
+  # the exact hang the cap exists to prevent.
+  wire_always_present_buffer_stub
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/timeout_scale.bash"
+  err_file="$BATS_TEST_TMPDIR/stderr.log"
+  # The fallback is the full 50-poll cap (~5s of sleeps), so give the outer
+  # harness timeout plenty of slack on a loaded box (issue #125).
+  run timeout "$(scaled_timeout 30)" bash -c "source '$BATS_TEST_DIRNAME/../_orch/lib.sh'; ORCH_SEND_POLL_TRIES=abc send_prompt orch:w1 hi 2>'$err_file'"
+  [ "$status" -eq 0 ]
+  polls="$(grep -c '^show-buffer' "$CALLS")"
+  [ "$polls" -eq 50 ]
+  grep -q 'invalid ORCH_SEND_POLL_TRIES' "$err_file"
+  enters="$(grep -c '^send-keys -t orch:w1 Enter' "$CALLS")"
+  [ "$enters" -eq 1 ]
+}
+
 @test "send_prompt stays silent on the normal path where the buffer clears" {
   # Default setup() stub: paste-buffer really deletes the buffer file, so
   # show-buffer reports it gone well before the poll cap.

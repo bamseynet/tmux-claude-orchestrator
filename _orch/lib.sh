@@ -695,11 +695,21 @@ send_prompt() { # <target> <text...>
   tmux paste-buffer -p -d -b "$buf" -t "$target"
   # -d deletes the buffer once the paste is delivered; poll for that instead of
   # a blind sleep, capped so a stuck/renamed buffer can never hang the send.
+  # Sanitise the cap into a local first: a malformed override (empty, non-numeric,
+  # or 0) would make the `-ge` test error out on every iteration and never fire,
+  # reinstating exactly the unbounded hang the cap exists to prevent.
+  local tries="${ORCH_SEND_POLL_TRIES:-50}"
+  case "$tries" in
+    ''|*[!0-9]*|0)
+      say "send_prompt: ignoring invalid ORCH_SEND_POLL_TRIES='$tries'; using 50" >&2
+      tries=50
+      ;;
+  esac
   local i=0
   while tmux show-buffer -b "$buf" >/dev/null 2>&1; do
     i=$((i + 1))
-    if [ "$i" -ge "$ORCH_SEND_POLL_TRIES" ]; then
-      say "send_prompt: paste buffer $buf still present after $ORCH_SEND_POLL_TRIES polls; sending Enter ungated" >&2
+    if [ "$i" -ge "$tries" ]; then
+      say "send_prompt: paste buffer $buf still present after $tries polls; sending Enter ungated" >&2
       break
     fi
     sleep 0.1
