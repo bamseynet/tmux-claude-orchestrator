@@ -509,12 +509,30 @@ confirm_inject() { # <target> [timeout_s]
 # input row, and any hint text on the true input row other than the two
 # hardcoded placeholders was treated as a draft — so this failed CLOSED and the
 # heartbeat requeued every worker event forever. It must fail OPEN instead: only
-# the true prompt row (the pane's last non-blank line, which is where a live
-# cursor always renders) is inspected, and only a high-confidence non-placeholder
-# match on THAT line counts as a draft. Any other shape — no glyph on the last
-# line, a placeholder/hint, or an empty pane — is treated as "no draft", the safe
-# default, and lets the placeholder allow-list broaden via config instead of code
-# changes (issue #52 config knob).
+# the true prompt row is inspected, and only a high-confidence non-placeholder
+# match on THAT line counts as a draft. Any other shape — no glyph on the true
+# input row, a placeholder/hint, or an empty pane — is treated as "no draft", the
+# safe default, and lets the placeholder allow-list broaden via config instead of
+# code changes (issue #52 config knob).
+#
+# Issue #141: "the true prompt row is the pane's last non-blank line" (as #52
+# left it) stopped holding once Claude Code started rendering the model/mode
+# footer BELOW the input box — the true last line became the footer, which
+# never carries the glyph, so a real draft above it went undetected forever
+# (the master-draft-swallow bug). The true prompt row is instead the LAST line
+# whose visible text matches the glyph at line start
+# (^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)); taking the last such match (not
+# merely anchoring at line start) is still required to fail open on a
+# completed table/box row that itself starts with the glyph (#52, and the
+# harder "│ > 5 │ ok │" variant) when a real input box follows it lower in the
+# pane. Selecting by glyph alone also made an empty box permanently report
+# DRAFT: its filler is U+00A0 (NBSP), not an ASCII space, and this function's
+# LC_ALL=C means [[:space:]] does not match it — so NBSP must be stripped
+# before the blank check too. Both halves are required together: line-start
+# selection alone regresses every idle master to a permanent false DRAFT
+# (no #52 safety valve on the send-remote-control.sh path), and the NBSP fix
+# alone does nothing without the row-selection fix to find the real input row
+# in the first place.
 #
 # Issue #101: Claude Code's own suggested-next-prompt ghost text renders on this
 # same input row once a turn ends, and it's model-generated prose -- no static
@@ -588,11 +606,19 @@ pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds uns
   scanned="$(printf '%s\n' "$raw" | _pane_scan_lines)"
   [ -n "$scanned" ] || return 1
 
+  # Issue #141: current Claude Code renders the model/mode footer BELOW the
+  # input box, so the true prompt row is no longer "the last non-blank pane
+  # line" (that's the footer now, e.g. the "bypass permissions" hint) --
+  # it's the LAST line whose VISIBLE text carries the glyph AT LINE START.
+  # Taking the last such match (not the first) is what keeps a completed
+  # table/box row that happens to start with the glyph (#52, and the harder
+  # "│ > 5 │ ok │" variant) from being mistaken for the live input row when a
+  # real (possibly empty) input box still follows it lower in the pane.
   sep="$(printf '\x01')"
   while IFS= read -r out_line; do
     line="${out_line%%"$sep"*}"
     mask="${out_line#*"$sep"}"
-    if [[ -n "${line//[[:space:]]/}" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX) ]]; then
       last_line="$line"
       last_mask="$mask"
       found=1
@@ -604,7 +630,13 @@ SCANEOF
 
   [[ "$last_line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
   local rest="${BASH_REMATCH[2]}"
-  [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
+  # Issue #141: an empty input box's filler is U+00A0 (NBSP, byte C2 A0), not
+  # an ASCII space -- LC_ALL=C means [[:space:]] does not match it, so a
+  # genuinely empty box would otherwise report DRAFT permanently. Strip NBSP
+  # bytes before the blank check; the offset math below still uses the
+  # unstripped $rest, so it stays correct.
+  local rest_blank_check="${rest//$'\xc2\xa0'/}"
+  [[ "$rest_blank_check" =~ ^[[:space:]]*$ ]] && return 1
   [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
 
   local off=$(( ${#last_line} - ${#rest} ))
