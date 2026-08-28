@@ -67,6 +67,7 @@
     "input_glyph_regex": "│ *>|❯",
     "box_border_regex": "│[[:space:]]*",
     "box_border_close_regex": "│",
+    "draft_scan_lines": "60",
     "draft_placeholder_regex": "^(Try \"|for shortcuts|\\? for shortcuts|Context (left|low)|tokens? (saved|left|used))",
     "paste_chip_regex": "\\[Pasted text( #[0-9]+)?( \\+[0-9]+ lines?)?\\]"
   }

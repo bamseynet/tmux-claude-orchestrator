@@ -161,6 +161,22 @@ footer() {
   [ "$status" -ne 0 ]
 }
 
+@test "pane_has_draft is true for a TALL multi-line draft whose glyph row is many rows above the footer (rv142 pass 3)" {
+  # The input glyph renders on the draft's FIRST row only, so the scan window
+  # has to reach back past the whole draft. With the old 15-row window a long
+  # orchestrator brief -- exactly #141's reported shape -- pushed the glyph row
+  # out of view, pane_has_draft found no glyph row at all, and the heartbeat
+  # pasted over the unsent draft.
+  {
+    printf 'earlier assistant output\n'
+    printf '%s You are the ORCHESTRATOR for this project. Long brief follows:\n' '❯'
+    for i in $(seq 1 25); do printf '  brief line %s of the unsent draft\n' "$i"; done
+    footer; printf '\n'
+  } > "$PANE_TEXT_FILE"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
 @test "pane_has_draft is false for a table row whose first column is the glyph, above a live empty box (issue #141 fixture 4)" {
   # Harder variant of the #52 table-row case: '│ > 5 │ ok │' matches the
   # glyph AT LINE START, so line-start anchoring alone does not reject it --

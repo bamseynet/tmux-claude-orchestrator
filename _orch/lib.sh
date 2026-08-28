@@ -394,6 +394,13 @@ TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
 # via the leading [[:space:]]* with or without the border group.
 TUI_BOX_BORDER_REGEX="$(_tui_pattern box_border_regex '│[[:space:]]*')"
 TUI_BOX_BORDER_CLOSE_REGEX="$(_tui_pattern box_border_close_regex '│')"
+# How many pane rows pane_has_draft() scans back for the input row. Must exceed
+# the tallest draft an operator plausibly leaves unsent plus the footer below
+# the box, because the input glyph sits on the draft's first row only.
+TUI_DRAFT_SCAN_LINES="$(_tui_pattern draft_scan_lines '60')"
+# A non-numeric override would make `tail -n` fail, leaving an empty capture and
+# a silent "no draft" -- the direction that clobbers operator text. Fall back.
+case "$TUI_DRAFT_SCAN_LINES" in ''|*[!0-9]*) TUI_DRAFT_SCAN_LINES=60 ;; esac
 # Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
@@ -615,9 +622,19 @@ pane_has_draft() { # <target>  -> 0 ONLY if the true input row (last glyph line)
   local LC_ALL=C   # byte-count ${#...} below, not locale-dependent char counts
   local raw scanned sep out_line line mask found=0 last_line="" last_mask=""
 
-  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n 15)"
+  # rv142: the window has to be tall enough to still contain the input row of a
+  # MULTI-LINE draft. The glyph renders only on the draft's FIRST row, so a
+  # 15-line window loses it as soon as the draft wraps past ~12 rows (the
+  # model/mode footer eats the rest) -- found=0, "no draft", and the heartbeat
+  # pastes straight over it. That is precisely #141's reported shape: a long
+  # orchestrator brief typed into master. Widening only ever ADDS rows above
+  # the ones already scanned, and the row-selection below takes the LAST glyph
+  # row, so the row chosen for a pane that already had one is unchanged; the
+  # only new outcomes are on panes that previously found no glyph row at all,
+  # and those move toward the fail-safe ("draft") direction.
+  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n "$TUI_DRAFT_SCAN_LINES")"
   if [ -z "$raw" ]; then
-    raw="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n 15)"
+    raw="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "$TUI_DRAFT_SCAN_LINES")"
     [ -n "$raw" ] || return 1
   fi
 
