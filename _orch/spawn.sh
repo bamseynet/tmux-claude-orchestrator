@@ -320,8 +320,11 @@ fi
 # a "(...)" specifier) so they fail the capitalised-canonical check on their own;
 # they are special-cased through unwrapped rather than being wrapped as a
 # (nonexistent) shell command, which silently dropped the permission (issue #84).
+# issue #144: awaySummaryEnabled is the documented settings key that suppresses
+# the session recap row, belt-and-braces alongside ORCH_GHOST_ENV (lib.sh).
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
   {
+    awaySummaryEnabled: false,
     hooks: {
       Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done"}]}],
       Notification: [{hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
