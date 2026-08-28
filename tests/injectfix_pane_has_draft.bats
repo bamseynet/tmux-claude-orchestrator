@@ -122,6 +122,27 @@ footer() {
   [ "$status" -ne 0 ]
 }
 
+@test "pane_has_draft is true for a draft in a SIDE-BORDERED input box above the footer (rv142)" {
+  # Claude Code frames the prompt row on some builds ("│ ❯ text   │" -- the
+  # exact shape tests/injectfix_inject_confirmed_paste_chip.bats captures).
+  # Anchoring the glyph at line start without discounting the opening border
+  # matched that row not at all, so the guard went silently inert and the
+  # heartbeat would paste over a real unsent draft.
+  set_pane "$(printf '│ ❯ ORCHESTRATOR: do not send yet          │\n%s' "$(footer)")"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is false for an EMPTY side-bordered box, even with a stale glyph echo above it (rv142)" {
+  # Two halves at once: the row's trailing "│" is frame, not operator text (or
+  # every idle master reports a permanent DRAFT), and the live boxed row must
+  # win over the older bare-glyph scrollback echo above it (or #52's
+  # requeue-forever returns).
+  set_pane "$(printf '❯ can you also check the tests too\nAssistant is now responding with output\n│ ❯ %s                        │\n%s' "$NBSP" "$(footer)")"
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
+
 @test "pane_has_draft is false for a table row whose first column is the glyph, above a live empty box (issue #141 fixture 4)" {
   # Harder variant of the #52 table-row case: '│ > 5 │ ok │' matches the
   # glyph AT LINE START, so line-start anchoring alone does not reject it --

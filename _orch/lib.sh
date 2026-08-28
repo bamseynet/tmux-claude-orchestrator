@@ -378,6 +378,16 @@ TUI_ACTIVE_GLYPH_REGEX="$(_tui_pattern active_glyph_regex '✻|✽|✳|✶')"
 TUI_READY_REGEX="$(_tui_pattern ready_regex '│ *>|❯|for shortcuts|Try "')"
 TUI_WELCOME_REGEX="$(_tui_pattern welcome_regex 'Welcome')"
 TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
+# The input box's own side borders. Claude Code renders the prompt row framed
+# ("│ ❯ text                 │") on some builds and bare ("❯ text") on others;
+# pane_has_draft() anchors the glyph at line start (that anchoring is the #52
+# safety valve against tool-output table rows), so without discounting the
+# opening border the framed shape matches nothing at all — the guard goes
+# inert, and any stale bare-"❯" scrollback echo higher in the tail becomes the
+# "last glyph row" instead. Kept deliberately tight (border + at most two
+# spaces) so "│ w1 │ > 5 │" style table rows still fail open.
+TUI_BOX_BORDER_REGEX="$(_tui_pattern box_border_regex '│[[:space:]]{0,2}')"
+TUI_BOX_BORDER_CLOSE_REGEX="$(_tui_pattern box_border_close_regex '│')"
 # Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
@@ -618,7 +628,7 @@ pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds uns
   while IFS= read -r out_line; do
     line="${out_line%%"$sep"*}"
     mask="${out_line#*"$sep"}"
-    if [[ "$line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX) ]]; then
+    if [[ "$line" =~ ^[[:space:]]*($TUI_BOX_BORDER_REGEX)?($TUI_INPUT_GLYPH_REGEX) ]]; then
       last_line="$line"
       last_mask="$mask"
       found=1
@@ -628,15 +638,19 @@ $scanned
 SCANEOF
   [ "$found" -eq 1 ] || return 1
 
-  [[ "$last_line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
-  local rest="${BASH_REMATCH[2]}"
+  [[ "$last_line" =~ ^[[:space:]]*($TUI_BOX_BORDER_REGEX)?($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
+  local rest="${BASH_REMATCH[3]}"
   # Issue #141: an empty input box's filler is U+00A0 (NBSP, byte C2 A0), not
   # an ASCII space -- LC_ALL=C means [[:space:]] does not match it, so a
   # genuinely empty box would otherwise report DRAFT permanently. Strip NBSP
   # bytes before the blank check; the offset math below still uses the
   # unstripped $rest, so it stays correct.
   local rest_blank_check="${rest//$'\xc2\xa0'/}"
-  [[ "$rest_blank_check" =~ ^[[:space:]]*$ ]] && return 1
+  # ...and when the input box is drawn with side borders, the row's trailing
+  # "│" is part of the frame, not operator text: without discounting it an
+  # empty boxed row ("│ ❯      │") would report DRAFT forever, the same
+  # permanent false positive the NBSP strip above exists to prevent.
+  [[ "$rest_blank_check" =~ ^[[:space:]]*($TUI_BOX_BORDER_CLOSE_REGEX)?[[:space:]]*$ ]] && return 1
   [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
 
   local off=$(( ${#last_line} - ${#rest} ))
