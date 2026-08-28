@@ -84,11 +84,11 @@ JSON
   run "$SPAWN" w1 sonnet "do the thing"
   [ "$status" -eq 0 ]
 
-  wdir="$(find "$ORCH_ROOT" -type d -name '.claude' -path '*w1*' 2>/dev/null | head -1)"
-  # worktree mode: settings live under $PROJECT_ROOT-derived wdir; locate via CALLS'
-  # tmux new-window -c argument instead of guessing the layout.
+  # worktree mode: settings live under the worker's own worktree; locate it via
+  # CALLS' tmux `new-window -c` argument instead of guessing the layout.
   wdir_line="$(grep -F 'new-window' "$CALLS" | head -1)"
   wdir="$(printf '%s' "$wdir_line" | sed -n "s/.*-c \\([^ ]*\\).*/\\1/p")"
+  [ -n "$wdir" ]
   settings_file="$wdir/.claude/settings.local.json"
   [ -f "$settings_file" ]
   run jq -e '.awaySummaryEnabled == false' "$settings_file"
