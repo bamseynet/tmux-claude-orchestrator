@@ -352,7 +352,10 @@ settings_flag=""
 [ "$mode" = "--no-worktree" ] && settings_flag=" --settings '$settings_file'"
 skip_perms_flag=""
 [ -n "$skip_perms" ] && skip_perms_flag=" --dangerously-skip-permissions"
-tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' claude --model $model${settings_flag}${resume:+ $resume}${skip_perms_flag}" Enter
+# issue #140: env var (not the disproved prompt-suggestions CLI flag) suppresses
+# the prompt-suggestion ghost row; belt-and-braces alongside pane_has_draft().
+ghost_env="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "
+tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' ${ghost_env}claude --model $model${settings_flag}${resume:+ $resume}${skip_perms_flag}" Enter
 
 # 5) wait for the REPL to be ready before injecting the task.
 #    Model is now set at launch via --model (see #30), so no slash-command dance.

@@ -161,7 +161,10 @@ if ! session_exists "$S"; then
   # (see PR #7): only this orchestrator window is trusted to self-approve.
   # models.orchestrator (issue #25): optional model pin for the master session.
   master_model="$(jq -r '.models.orchestrator // empty' "$here/config.json" 2>/dev/null)"
-  tmux send-keys -t "$S:$ORCH_WINDOW" "claude --dangerously-skip-permissions${master_model:+ --model $master_model}" Enter
+  # issue #140: env var (not the disproved prompt-suggestions CLI flag) suppresses
+  # the prompt-suggestion ghost row; belt-and-braces alongside pane_has_draft().
+  ghost_env="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "
+  tmux send-keys -t "$S:$ORCH_WINDOW" "${ghost_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}" Enter
   if wait_ready "$S:$ORCH_WINDOW" 90; then
     send_prompt "$S:$ORCH_WINDOW" "You are the ORCHESTRATOR for this project. First read the file $here/CLAUDE.md and follow it exactly. Your control CLI is $ORCH_ROOT/orch (e.g. '$ORCH_ROOT/orch spawn w1 sonnet \"task\"', '$ORCH_ROOT/orch status', '$ORCH_ROOT/orch send w1 \"msg\"'). Worker completion and blocked events arrive automatically, prefixed [orchestrator heartbeat]. Acknowledge briefly, then wait for my tasks."
   else
