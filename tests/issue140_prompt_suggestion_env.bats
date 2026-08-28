@@ -110,8 +110,13 @@ JSON
   # such as `claude --help` grepped for compatibility). refute_grep_in_existing
   # (plain command, set -e-caught) is used rather than a bare `! grep`, which is
   # inert on every line but the last (issue #134); each of these must be live.
+  # lib.sh is included because ORCH_GHOST_ENV -- the single definition both
+  # launch sites interpolate -- lives there, so it is now the likeliest place a
+  # reintroduction would land.
   refute_grep_in_existing '--prompt-suggestions' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
   refute_grep_in_existing '--prompt-suggestions' "$BATS_TEST_DIRNAME/../_orch/bootstrap.sh"
+  refute_grep_in_existing '--prompt-suggestions' "$LIB"
   refute_grep_in_existing 'claude.*--help' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
   refute_grep_in_existing 'claude.*--help' "$BATS_TEST_DIRNAME/../_orch/bootstrap.sh"
+  refute_grep_in_existing 'claude.*--help' "$LIB"
 }
