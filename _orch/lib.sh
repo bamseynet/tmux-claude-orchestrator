@@ -378,6 +378,35 @@ TUI_ACTIVE_GLYPH_REGEX="$(_tui_pattern active_glyph_regex '✻|✽|✳|✶')"
 TUI_READY_REGEX="$(_tui_pattern ready_regex '│ *>|❯|for shortcuts|Try "')"
 TUI_WELCOME_REGEX="$(_tui_pattern welcome_regex 'Welcome')"
 TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
+# The input box's own side borders. Claude Code renders the prompt row framed
+# ("│ ❯ text                 │") on some builds and bare ("❯ text") on others;
+# pane_has_draft() anchors the glyph at line start (that anchoring is the #52
+# safety valve against tool-output table rows), so without discounting the
+# opening border the framed shape matches nothing at all — the guard goes
+# inert, and any stale bare-"❯" scrollback echo higher in the tail becomes the
+# "last glyph row" instead. The glyph must follow the border with nothing but
+# spaces between it, which is what keeps "│ w1 │ > 5 │" style table rows failing
+# open. An earlier bound of "border + at most TWO spaces" (rv142 pass 1) was
+# tighter still, but overrunning it fails in the dangerous direction: a real
+# draft in a wider-padded box ("│   ❯ draft   │") then matched nothing at all,
+# so the guard went inert and the heartbeat clobbered the draft -- and the
+# tightness bought no #52 safety, since an indented bare "❯" already matches
+# via the leading [[:space:]]* with or without the border group.
+TUI_BOX_BORDER_REGEX="$(_tui_pattern box_border_regex '│[[:space:]]*')"
+TUI_BOX_BORDER_CLOSE_REGEX="$(_tui_pattern box_border_close_regex '│')"
+# How many pane rows pane_has_draft() scans back for the input row. Must exceed
+# the tallest draft an operator plausibly leaves unsent plus the footer below
+# the box, because the input glyph sits on the draft's first row only.
+TUI_DRAFT_SCAN_LINES_DEFAULT=60
+TUI_DRAFT_SCAN_LINES="$(_tui_pattern draft_scan_lines "$TUI_DRAFT_SCAN_LINES_DEFAULT")"
+# A non-numeric override would make `tail -n` fail, and "0" (which IS numeric)
+# makes `tail -n 0` emit nothing at all -- both leave an empty capture and a
+# silent "no draft", the direction that clobbers operator text. Any value that
+# cannot yield at least one scanned row falls back to the default.
+case "$TUI_DRAFT_SCAN_LINES" in
+  ''|*[!0-9]*) TUI_DRAFT_SCAN_LINES="$TUI_DRAFT_SCAN_LINES_DEFAULT" ;;
+  *) [ "$TUI_DRAFT_SCAN_LINES" -ge 1 ] || TUI_DRAFT_SCAN_LINES="$TUI_DRAFT_SCAN_LINES_DEFAULT" ;;
+esac
 # Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
@@ -420,16 +449,18 @@ pane_has_welcome() { pane_tail "$1" 25 | grep -qi "$TUI_WELCOME_REGEX"; }
 pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_REGEX"; }
 
 # A pending, un-submitted "[Pasted text]" chip sitting on the input row --
-# proof the paste landed but was never dispatched (issue #128). Unlike
-# pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
-# non-blank line, this looks at the last line carrying the input glyph: on a
-# real Claude Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto
-# mode on") renders BELOW the input box once the TUI has drawn once, so the
-# input row holding the chip is not the last non-blank line and
-# pane_has_draft's lookup misses it entirely. inject_confirmed needs the
-# opposite bias from pane_has_draft: fail toward "not confirmed", so an input
-# row showing an unsent chip disqualifies the injection regardless of what
-# else is rendered below it.
+# proof the paste landed but was never dispatched (issue #128). Like
+# pane_has_draft(), this locates the input row as the LAST line carrying the
+# input glyph rather than the pane's last non-blank line: on a real Claude
+# Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto mode on")
+# renders BELOW the input box once the TUI has drawn once, so the input row
+# holding the chip is never the last non-blank line. (pane_has_draft() used
+# the last-non-blank-line rule until issue #141, which is exactly the bug #141
+# fixed there.) It still differs from pane_has_draft() in two ways: the match
+# is unanchored (a chip row is high-confidence evidence wherever the glyph
+# sits on it), and inject_confirmed needs the opposite bias -- fail toward
+# "not confirmed", so an input row showing an unsent chip disqualifies the
+# injection regardless of what else is rendered below it.
 #
 # Only the LAST input-glyph row in the tail is inspected, not every matching
 # row: an unsent chip can only ever sit on the live input row, which is always
@@ -509,12 +540,30 @@ confirm_inject() { # <target> [timeout_s]
 # input row, and any hint text on the true input row other than the two
 # hardcoded placeholders was treated as a draft — so this failed CLOSED and the
 # heartbeat requeued every worker event forever. It must fail OPEN instead: only
-# the true prompt row (the pane's last non-blank line, which is where a live
-# cursor always renders) is inspected, and only a high-confidence non-placeholder
-# match on THAT line counts as a draft. Any other shape — no glyph on the last
-# line, a placeholder/hint, or an empty pane — is treated as "no draft", the safe
-# default, and lets the placeholder allow-list broaden via config instead of code
-# changes (issue #52 config knob).
+# the true prompt row is inspected, and only a high-confidence non-placeholder
+# match on THAT line counts as a draft. Any other shape — no glyph on the true
+# input row, a placeholder/hint, or an empty pane — is treated as "no draft", the
+# safe default, and lets the placeholder allow-list broaden via config instead of
+# code changes (issue #52 config knob).
+#
+# Issue #141: "the true prompt row is the pane's last non-blank line" (as #52
+# left it) stopped holding once Claude Code started rendering the model/mode
+# footer BELOW the input box — the true last line became the footer, which
+# never carries the glyph, so a real draft above it went undetected forever
+# (the master-draft-swallow bug). The true prompt row is instead the LAST line
+# whose visible text matches the glyph at line start
+# (^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)); taking the last such match (not
+# merely anchoring at line start) is still required to fail open on a
+# completed table/box row that itself starts with the glyph (#52, and the
+# harder "│ > 5 │ ok │" variant) when a real input box follows it lower in the
+# pane. Selecting by glyph alone also made an empty box permanently report
+# DRAFT: its filler is U+00A0 (NBSP), not an ASCII space, and this function's
+# LC_ALL=C means [[:space:]] does not match it — so NBSP must be stripped
+# before the blank check too. Both halves are required together: line-start
+# selection alone regresses every idle master to a permanent false DRAFT
+# (no #52 safety valve on the send-remote-control.sh path), and the NBSP fix
+# alone does nothing without the row-selection fix to find the real input row
+# in the first place.
 #
 # Issue #101: Claude Code's own suggested-next-prompt ghost text renders on this
 # same input row once a turn ends, and it's model-generated prose -- no static
@@ -575,24 +624,42 @@ confirm_inject() { # <target> [timeout_s]
 # operator draft is worse than an occasional late/duplicate heartbeat nudge
 # from over-detecting a ghost suggestion, and that's exactly the failure mode
 # this guard already tolerated before #101 existed.
-pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
+pane_has_draft() { # <target>  -> 0 ONLY if the true input row (last glyph line) holds unsent operator text
   local LC_ALL=C   # byte-count ${#...} below, not locale-dependent char counts
   local raw scanned sep out_line line mask found=0 last_line="" last_mask=""
 
-  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n 15)"
+  # rv142: the window has to be tall enough to still contain the input row of a
+  # MULTI-LINE draft. The glyph renders only on the draft's FIRST row, so a
+  # 15-line window loses it as soon as the draft wraps past ~12 rows (the
+  # model/mode footer eats the rest) -- found=0, "no draft", and the heartbeat
+  # pastes straight over it. That is precisely #141's reported shape: a long
+  # orchestrator brief typed into master. Widening only ever ADDS rows above
+  # the ones already scanned, and the row-selection below takes the LAST glyph
+  # row, so the row chosen for a pane that already had one is unchanged; the
+  # only new outcomes are on panes that previously found no glyph row at all,
+  # and those move toward the fail-safe ("draft") direction.
+  raw="$(tmux capture-pane -t "$1" -p -e 2>/dev/null | tail -n "$TUI_DRAFT_SCAN_LINES")"
   if [ -z "$raw" ]; then
-    raw="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n 15)"
+    raw="$(tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "$TUI_DRAFT_SCAN_LINES")"
     [ -n "$raw" ] || return 1
   fi
 
   scanned="$(printf '%s\n' "$raw" | _pane_scan_lines)"
   [ -n "$scanned" ] || return 1
 
+  # Issue #141: current Claude Code renders the model/mode footer BELOW the
+  # input box, so the true prompt row is no longer "the last non-blank pane
+  # line" (that's the footer now, e.g. the "bypass permissions" hint) --
+  # it's the LAST line whose VISIBLE text carries the glyph AT LINE START.
+  # Taking the last such match (not the first) is what keeps a completed
+  # table/box row that happens to start with the glyph (#52, and the harder
+  # "│ > 5 │ ok │" variant) from being mistaken for the live input row when a
+  # real (possibly empty) input box still follows it lower in the pane.
   sep="$(printf '\x01')"
   while IFS= read -r out_line; do
     line="${out_line%%"$sep"*}"
     mask="${out_line#*"$sep"}"
-    if [[ -n "${line//[[:space:]]/}" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*($TUI_BOX_BORDER_REGEX)?($TUI_INPUT_GLYPH_REGEX) ]]; then
       last_line="$line"
       last_mask="$mask"
       found=1
@@ -602,10 +669,27 @@ $scanned
 SCANEOF
   [ "$found" -eq 1 ] || return 1
 
-  [[ "$last_line" =~ ^[[:space:]]*($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
-  local rest="${BASH_REMATCH[2]}"
-  [[ "$rest" =~ ^[[:space:]]*$ ]] && return 1
-  [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
+  [[ "$last_line" =~ ^[[:space:]]*($TUI_BOX_BORDER_REGEX)?($TUI_INPUT_GLYPH_REGEX)[[:space:]]?(.*)$ ]] || return 1
+  local rest="${BASH_REMATCH[3]}"
+  # Issue #141: an empty input box's filler is U+00A0 (NBSP, byte C2 A0), not
+  # an ASCII space -- LC_ALL=C means [[:space:]] does not match it, so a
+  # genuinely empty box would otherwise report DRAFT permanently. Strip NBSP
+  # bytes before the blank check; the offset math below still uses the
+  # unstripped $rest, so it stays correct.
+  local rest_no_nbsp="${rest//$'\xc2\xa0'/}"
+  # ...and when the input box is drawn with side borders, the row's trailing
+  # "│" is part of the frame, not operator text: without discounting it an
+  # empty boxed row ("│ ❯      │") would report DRAFT forever, the same
+  # permanent false positive the NBSP strip above exists to prevent.
+  [[ "$rest_no_nbsp" =~ ^[[:space:]]*($TUI_BOX_BORDER_CLOSE_REGEX)?[[:space:]]*$ ]] && return 1
+  # The placeholder allow-list is anchored at the start of $rest, and only ONE
+  # ASCII space was consumed as the glyph/text separator above -- so on a build
+  # that pads the box with NBSP the hint would read as "<NBSP>for shortcuts",
+  # miss the allow-list entirely, and every idle master would report a
+  # permanent false DRAFT (#52's requeue-forever). Test the NBSP-stripped copy
+  # as well; leading ASCII space is deliberately NOT trimmed, so this widens
+  # the allow-list only for the filler byte, never toward clobbering a draft.
+  { [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] || [[ "$rest_no_nbsp" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]]; } && return 1
 
   local off=$(( ${#last_line} - ${#rest} ))
   [ "${last_mask:$off:1}" = "1" ] && return 1
