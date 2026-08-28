@@ -133,6 +133,24 @@ footer() {
   [ "$status" -eq 0 ]
 }
 
+@test "pane_has_draft is true for a draft in a WIDER-PADDED side-bordered box (rv142 pass 2)" {
+  # The border discount must not assume a fixed amount of box padding: with a
+  # "border + at most two spaces" bound this row matched NOTHING, so the guard
+  # returned "no draft" and the heartbeat would paste over a real draft. The
+  # matching table-row fixtures below pin that widening it costs no #52 safety.
+  set_pane "$(printf '│   ❯ real unsent draft that must survive   │\n%s' "$(footer)")"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft still fails open on a multi-column table row whose gutter precedes the glyph (rv142 pass 2)" {
+  # '│ w1 │ > 5 │' must never be taken for the input row: the glyph does not
+  # follow the opening border across spaces alone. Guards the widened border.
+  set_pane "$(printf 'Results:\n│ w1 │ > 5 │\nAssistant is still writing output')"
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
+
 @test "pane_has_draft is false for an EMPTY side-bordered box, even with a stale glyph echo above it (rv142)" {
   # Two halves at once: the row's trailing "│" is frame, not operator text (or
   # every idle master reports a permanent DRAFT), and the live boxed row must

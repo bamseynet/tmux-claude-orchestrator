@@ -65,7 +65,7 @@
     "ready_regex": "│ *>|❯|for shortcuts|Try \"",
     "welcome_regex": "Welcome",
     "input_glyph_regex": "│ *>|❯",
-    "box_border_regex": "│[[:space:]]{0,2}",
+    "box_border_regex": "│[[:space:]]*",
     "box_border_close_regex": "│",
     "draft_placeholder_regex": "^(Try \"|for shortcuts|\\? for shortcuts|Context (left|low)|tokens? (saved|left|used))",
     "paste_chip_regex": "\\[Pasted text( #[0-9]+)?( \\+[0-9]+ lines?)?\\]"

@@ -384,9 +384,15 @@ TUI_INPUT_GLYPH_REGEX="$(_tui_pattern input_glyph_regex '│ *>|❯')"
 # safety valve against tool-output table rows), so without discounting the
 # opening border the framed shape matches nothing at all — the guard goes
 # inert, and any stale bare-"❯" scrollback echo higher in the tail becomes the
-# "last glyph row" instead. Kept deliberately tight (border + at most two
-# spaces) so "│ w1 │ > 5 │" style table rows still fail open.
-TUI_BOX_BORDER_REGEX="$(_tui_pattern box_border_regex '│[[:space:]]{0,2}')"
+# "last glyph row" instead. The glyph must follow the border with nothing but
+# spaces between it, which is what keeps "│ w1 │ > 5 │" style table rows failing
+# open. An earlier bound of "border + at most TWO spaces" (rv142 pass 1) was
+# tighter still, but overrunning it fails in the dangerous direction: a real
+# draft in a wider-padded box ("│   ❯ draft   │") then matched nothing at all,
+# so the guard went inert and the heartbeat clobbered the draft -- and the
+# tightness bought no #52 safety, since an indented bare "❯" already matches
+# via the leading [[:space:]]* with or without the border group.
+TUI_BOX_BORDER_REGEX="$(_tui_pattern box_border_regex '│[[:space:]]*')"
 TUI_BOX_BORDER_CLOSE_REGEX="$(_tui_pattern box_border_close_regex '│')"
 # Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
@@ -430,16 +436,18 @@ pane_has_welcome() { pane_tail "$1" 25 | grep -qi "$TUI_WELCOME_REGEX"; }
 pane_active() { pane_tail "$1" 25 | grep -qE "$TUI_BUSY_REGEX|$TUI_ACTIVE_GLYPH_REGEX"; }
 
 # A pending, un-submitted "[Pasted text]" chip sitting on the input row --
-# proof the paste landed but was never dispatched (issue #128). Unlike
-# pane_has_draft() (#52), which deliberately looks ONLY at the pane's last
-# non-blank line, this looks at the last line carrying the input glyph: on a
-# real Claude Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto
-# mode on") renders BELOW the input box once the TUI has drawn once, so the
-# input row holding the chip is not the last non-blank line and
-# pane_has_draft's lookup misses it entirely. inject_confirmed needs the
-# opposite bias from pane_has_draft: fail toward "not confirmed", so an input
-# row showing an unsent chip disqualifies the injection regardless of what
-# else is rendered below it.
+# proof the paste landed but was never dispatched (issue #128). Like
+# pane_has_draft(), this locates the input row as the LAST line carrying the
+# input glyph rather than the pane's last non-blank line: on a real Claude
+# Code worker pane the model/mode footer ("Sonnet 5 <id>", "auto mode on")
+# renders BELOW the input box once the TUI has drawn once, so the input row
+# holding the chip is never the last non-blank line. (pane_has_draft() used
+# the last-non-blank-line rule until issue #141, which is exactly the bug #141
+# fixed there.) It still differs from pane_has_draft() in two ways: the match
+# is unanchored (a chip row is high-confidence evidence wherever the glyph
+# sits on it), and inject_confirmed needs the opposite bias -- fail toward
+# "not confirmed", so an input row showing an unsent chip disqualifies the
+# injection regardless of what else is rendered below it.
 #
 # Only the LAST input-glyph row in the tail is inspected, not every matching
 # row: an unsent chip can only ever sit on the live input row, which is always
@@ -603,7 +611,7 @@ confirm_inject() { # <target> [timeout_s]
 # operator draft is worse than an occasional late/duplicate heartbeat nudge
 # from over-detecting a ghost suggestion, and that's exactly the failure mode
 # this guard already tolerated before #101 existed.
-pane_has_draft() { # <target>  -> 0 ONLY if the true (last) input line holds unsent operator text
+pane_has_draft() { # <target>  -> 0 ONLY if the true input row (last glyph line) holds unsent operator text
   local LC_ALL=C   # byte-count ${#...} below, not locale-dependent char counts
   local raw scanned sep out_line line mask found=0 last_line="" last_mask=""
 
