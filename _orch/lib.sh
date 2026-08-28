@@ -358,17 +358,21 @@ pane_tail() { # <target> [lines]
   tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "${2:-15}" | strip_ansi
 }
 
-# --- Claude Code launch env (issue #140) --------------------------------------------
+# --- Claude Code launch env (issues #140, #144) ---------------------------------------
 # Env prefix prepended to every `claude` launch line this toolkit types into a
-# tmux pane (worker spawn and master bootstrap). The env var is the empirically
-# verified mechanism for suppressing the prompt-suggestion ghost row; the
-# prompt-suggestions CLI flag route was disproved and must not come back (the
-# flag name is written without its dashes here so the issue #140 acceptance test
-# can forbid the real spelling in this file too).
+# tmux pane (worker spawn and master bootstrap): suppresses auto-generated text
+# this toolkit never wants -- the prompt-suggestion ghost row (#140) and the
+# session recap row (#144). Both vars are the empirically verified mechanism;
+# CLI flag routes for either were disproved and must not come back (flag names
+# are written without their dashes here so the acceptance tests can forbid the
+# real spelling in this file too).
 # Centralized here -- rather than duplicated at each of the two launch sites --
 # so the two can never drift, exactly like the TUI patterns below. Keep the
 # TRAILING SPACE: call sites interpolate it directly ahead of `claude`.
-ORCH_GHOST_ENV="CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "
+# #144: CLAUDE_CODE_ENABLE_AWAY_SUMMARY is PREPENDED (not appended) ahead of
+# PROMPT_SUGGESTION so #140's tests -- which assert the exact adjacency
+# "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude ..." -- stay green.
+ORCH_GHOST_ENV="CLAUDE_CODE_ENABLE_AWAY_SUMMARY=false CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false "
 
 # --- TUI match patterns (issue #12) -------------------------------------------------
 # Every regex used to read the Claude Code TUI's pane state is centralized here,

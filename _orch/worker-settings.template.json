@@ -1,5 +1,6 @@
 {
   "_comment": "Reference only. spawn.sh writes a concrete version of this to each worker's worktree at .claude/settings.local.json, substituting the absolute report.sh path and the worker id.",
+  "awaySummaryEnabled": false,
   "hooks": {
     "Stop":         [{"hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> done"}]}],
     "Notification": [{"hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> needs-input"}]}],
