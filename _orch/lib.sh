@@ -397,10 +397,16 @@ TUI_BOX_BORDER_CLOSE_REGEX="$(_tui_pattern box_border_close_regex '│')"
 # How many pane rows pane_has_draft() scans back for the input row. Must exceed
 # the tallest draft an operator plausibly leaves unsent plus the footer below
 # the box, because the input glyph sits on the draft's first row only.
-TUI_DRAFT_SCAN_LINES="$(_tui_pattern draft_scan_lines '60')"
-# A non-numeric override would make `tail -n` fail, leaving an empty capture and
-# a silent "no draft" -- the direction that clobbers operator text. Fall back.
-case "$TUI_DRAFT_SCAN_LINES" in ''|*[!0-9]*) TUI_DRAFT_SCAN_LINES=60 ;; esac
+TUI_DRAFT_SCAN_LINES_DEFAULT=60
+TUI_DRAFT_SCAN_LINES="$(_tui_pattern draft_scan_lines "$TUI_DRAFT_SCAN_LINES_DEFAULT")"
+# A non-numeric override would make `tail -n` fail, and "0" (which IS numeric)
+# makes `tail -n 0` emit nothing at all -- both leave an empty capture and a
+# silent "no draft", the direction that clobbers operator text. Any value that
+# cannot yield at least one scanned row falls back to the default.
+case "$TUI_DRAFT_SCAN_LINES" in
+  ''|*[!0-9]*) TUI_DRAFT_SCAN_LINES="$TUI_DRAFT_SCAN_LINES_DEFAULT" ;;
+  *) [ "$TUI_DRAFT_SCAN_LINES" -ge 1 ] || TUI_DRAFT_SCAN_LINES="$TUI_DRAFT_SCAN_LINES_DEFAULT" ;;
+esac
 # Placeholder/hint text that can legitimately follow the glyph on an otherwise-empty
 # input row (issue #52) — broaden this list via config as the TUI's copy changes,
 # rather than hardcoding new patterns into pane_has_draft() itself.
@@ -670,13 +676,20 @@ SCANEOF
   # genuinely empty box would otherwise report DRAFT permanently. Strip NBSP
   # bytes before the blank check; the offset math below still uses the
   # unstripped $rest, so it stays correct.
-  local rest_blank_check="${rest//$'\xc2\xa0'/}"
+  local rest_no_nbsp="${rest//$'\xc2\xa0'/}"
   # ...and when the input box is drawn with side borders, the row's trailing
   # "│" is part of the frame, not operator text: without discounting it an
   # empty boxed row ("│ ❯      │") would report DRAFT forever, the same
   # permanent false positive the NBSP strip above exists to prevent.
-  [[ "$rest_blank_check" =~ ^[[:space:]]*($TUI_BOX_BORDER_CLOSE_REGEX)?[[:space:]]*$ ]] && return 1
-  [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] && return 1
+  [[ "$rest_no_nbsp" =~ ^[[:space:]]*($TUI_BOX_BORDER_CLOSE_REGEX)?[[:space:]]*$ ]] && return 1
+  # The placeholder allow-list is anchored at the start of $rest, and only ONE
+  # ASCII space was consumed as the glyph/text separator above -- so on a build
+  # that pads the box with NBSP the hint would read as "<NBSP>for shortcuts",
+  # miss the allow-list entirely, and every idle master would report a
+  # permanent false DRAFT (#52's requeue-forever). Test the NBSP-stripped copy
+  # as well; leading ASCII space is deliberately NOT trimmed, so this widens
+  # the allow-list only for the filler byte, never toward clobbering a draft.
+  { [[ "$rest" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]] || [[ "$rest_no_nbsp" =~ $TUI_DRAFT_PLACEHOLDER_REGEX ]]; } && return 1
 
   local off=$(( ${#last_line} - ${#rest} ))
   [ "${last_mask:$off:1}" = "1" ] && return 1

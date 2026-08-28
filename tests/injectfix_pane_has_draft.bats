@@ -185,3 +185,33 @@ footer() {
   run pane_has_draft "orch:master"
   [ "$status" -ne 0 ]
 }
+
+# --- rv142 pass 4 -------------------------------------------------------
+
+@test "a draft_scan_lines override of 0 falls back to the default instead of disabling the guard (rv142 pass 4)" {
+  # "0" IS numeric, so the digits-only validator let it through -- and
+  # `tail -n 0` emits nothing, so both captures came back empty and
+  # pane_has_draft returned "no draft" for EVERY pane. The heartbeat would then
+  # paste straight over any unsent operator draft: the exact direction the
+  # validator exists to prevent.
+  jq '.tui_patterns.draft_scan_lines = "0"' "$BATS_TEST_DIRNAME/../_orch/config.json" \
+    > "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  [ "$TUI_DRAFT_SCAN_LINES" -ge 1 ]
+
+  set_pane "$(printf '❯ a real unsent draft that must survive\n%s' "$(footer)")"
+  run pane_has_draft "orch:master"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_draft is false for a placeholder hint separated from the glyph by NBSP (rv142 pass 4)" {
+  # The placeholder allow-list is anchored at the start of the text following
+  # the glyph, and only ONE ASCII space is consumed as the separator -- so on a
+  # build that pads the input box with the same U+00A0 filler an empty box
+  # uses, the hint reads as "<NBSP>for shortcuts", misses the allow-list, and
+  # every idle master reports a permanent false DRAFT (#52's requeue-forever).
+  set_pane "$(printf '❯ %sfor shortcuts\n%s' "$NBSP" "$(footer)")"
+  run pane_has_draft "orch:master"
+  [ "$status" -ne 0 ]
+}
