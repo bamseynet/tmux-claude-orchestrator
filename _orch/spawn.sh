@@ -372,7 +372,24 @@ fi
 #    skill available for later legitimate use — this changes the first message, not
 #    the session config.
 preamble='[Orchestrated task — complete it directly. Do not invoke any skill unless this task explicitly requires one.] '
-send_prompt "$S:$id" "${preamble}${task}"
+
+# Guard 3 (dialog safety, issues #132/#133): never send a paste-with-trailing-Enter
+# (send_prompt) or a bare Enter into a pane showing a dialog. Both the permission
+# and folder-trust dialogs render a page of choices with a highlighted default, and
+# Enter selects it -- it does not "submit the input box". This matters even here,
+# BEFORE the first injection attempt: wait_ready()'s readiness regex includes the
+# bare "❯" glyph, which the trust dialog's highlighted-choice arrow ("❯ No, exit")
+# also matches, so wait_ready can report "ready" while the dialog -- not the REPL
+# prompt -- is actually on screen. That is #133's production repro: the trust
+# dialog's Enter is destructive (exits the session), and --dangerously-skip-permissions
+# does not suppress it. If a dialog is already up, skip this send entirely; the
+# retry loop below will keep polling confirm_inject without ever pressing Enter
+# into it.
+if pane_has_dialog "$S:$id"; then
+  log "worker $id: dialog on screen before first injection attempt; not sending"
+else
+  send_prompt "$S:$id" "${preamble}${task}"
+fi
 
 # Guard 1 (inject verification + retry, hardened by issue #51): a send can land
 # before the REPL is ready and be lost entirely — or the paste can land (visible
@@ -394,17 +411,40 @@ else
   retry=0
   while [ "$retry" -lt "$max_retries" ]; do
     retry=$((retry + 1))
-    log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
-    tmux send-keys -t "$S:$id" Enter
+    if pane_has_dialog "$S:$id"; then
+      # Guard 3 continued: a dialog appeared (or is still there) -- refuse the
+      # bare Enter. A permission dialog already counts as confirmed evidence in
+      # inject_confirmed() above, so this can only be the trust dialog or a
+      # permission dialog inject_confirmed hasn't polled again yet; either way
+      # sending Enter here risks picking a destructive default. Just re-poll.
+      log "worker $id: dialog on screen (retry $retry/$max_retries); refusing bare Enter"
+    else
+      log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
+      tmux send-keys -t "$S:$id" Enter
+    fi
     if confirm_inject "$S:$id" 15; then
       spawn_ok=1
       break
     fi
   done
   if [ "$spawn_ok" -ne 1 ]; then
-    log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
-    send_prompt "$S:$id" "${preamble}${task}"
-    if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    # Last resort only when the text is demonstrably NOT still sitting in the
+    # input box and NOT hidden behind a dialog (issues #132/#133). If the pane
+    # still shows an un-submitted "[Pasted text]" chip, re-pasting would append
+    # a SECOND copy of the task next to the first and submit both -- exactly
+    # the duplication this ladder exists to avoid. If a dialog is on screen,
+    # pasting into it (and its trailing Enter) risks the same destructive
+    # selection Guard 3 exists to prevent. Better a clean spawn-failed the
+    # master can retry than a silently corrupted or destructively-exited spawn.
+    if pane_has_pending_paste "$S:$id"; then
+      log "worker $id: task text still sits unsent in the input box; not re-pasting (would duplicate it)"
+    elif pane_has_dialog "$S:$id"; then
+      log "worker $id: dialog on screen; not re-pasting (would be consumed as a dialog choice)"
+    else
+      log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
+      send_prompt "$S:$id" "${preamble}${task}"
+      if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    fi
   fi
 fi
 
