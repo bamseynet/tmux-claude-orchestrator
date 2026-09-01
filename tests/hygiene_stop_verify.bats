@@ -11,6 +11,9 @@
 # ORCH_ROOT — never the real heartbeat.sh/watchdog.sh loop bodies, and never a
 # real tmux session.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   TOOLKIT="$BATS_TEST_TMPDIR/toolkit"
   mkdir -p "$TOOLKIT/_orch/state"
@@ -91,8 +94,8 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"stopped heartbeat + watchdog."* ]]
 
-  ! kill -0 "$BG_PID" 2>/dev/null
-  ! kill -0 "$BG_PID2" 2>/dev/null
+  refute_alive "$BG_PID"
+  refute_alive "$BG_PID2"
   [ ! -e "$STATE_DIR/heartbeat.pid" ]
   [ ! -e "$STATE_DIR/watchdog.pid" ]
 }

@@ -10,6 +10,9 @@
 # exercised end-to-end via stubs (same technique as models_bootstrap.bats);
 # stop.sh's copy is exercised the same way since it's a similarly flat script.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
@@ -137,6 +140,6 @@ wait_for() { # <predicate...>  -- poll up to 2s
   [ "$status" -eq 0 ]
 
   wait_for bash -c "! kill -0 $BG_PID 2>/dev/null"
-  ! kill -0 "$BG_PID" 2>/dev/null
+  refute_alive "$BG_PID"
   [ ! -e "$STATE_DIR/heartbeat.pid" ]
 }

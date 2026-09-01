@@ -7,6 +7,9 @@
 # or launching `claude`. ORCH_ROOT is redirected to a temp dir so the real repo
 # state is never touched.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
   # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
@@ -109,8 +112,11 @@ setup() {
 
 @test "heartbeat.sh drains atomically and drops the racy cat/truncate pattern" {
   hb="$BATS_TEST_DIRNAME/../_orch/heartbeat.sh"
-  # The old lost-update sequence must be gone.
-  ! grep -Fq 'events="$(cat "$INBOX")"' "$hb"
+  # The old lost-update sequence must be gone. Strip full-line comments first --
+  # the fixed sequence is documented in heartbeat.sh's own header comment, so a
+  # naive grep against the raw file is red on clean main.
+  sed 's/^[[:space:]]*#.*$//' "$hb" > "$BATS_TEST_TMPDIR/hb.nocomments"
+  refute_grep_in_existing 'events="$(cat "$INBOX")"' "$BATS_TEST_TMPDIR/hb.nocomments"
   # The drain must rename the inbox aside.
   grep -Eq 'mv[[:space:]]+"\$INBOX"' "$hb"
 }

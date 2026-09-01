@@ -6,6 +6,9 @@
 # real tmux window is ever touched; intervals are zeroed so the real loop ticks
 # fast enough to observe within the test.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
@@ -101,7 +104,7 @@ wait_for() { # <predicate...>
   touch "$STATE_DIR/.stop"
   wait "$HB_PID" 2>/dev/null || true
 
-  ! grep -q 'draft safety valve tripped' "$LOG"
-  ! grep -q 'unsent draft; requeued events' "$LOG"
+  refute_grep_in_existing 'draft safety valve tripped' "$LOG"
+  refute_grep_in_existing 'unsent draft; requeued events' "$LOG"
   grep -q 'paste-buffer' "$CALLS"
 }

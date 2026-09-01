@@ -10,6 +10,9 @@
 # wait_ready/pane_has_draft, so a noise batch never pays the 45s wait and can
 # never trip the issue-#52 draft safety valve into force-delivering itself.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
@@ -57,14 +60,6 @@ wait_for() { # <predicate...>
     sleep 0.02
   done
   return 1
-}
-
-# `! grep -q ...` asserts NOTHING in bats unless it is the very last line of the
-# test: bash exempts a `!`-negated command from `set -e`, so the test sails past a
-# failing absence check. Verified against bats-core 1.10.0. Use this instead --
-# its failure is a plain non-zero exit that bats does catch.
-refute_grep() { # <pattern> <file>
-  [ "$(grep -c -- "$1" "$2" 2>/dev/null || true)" -eq 0 ]
 }
 
 start_hb() {

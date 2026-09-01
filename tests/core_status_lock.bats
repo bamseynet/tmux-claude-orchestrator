@@ -5,6 +5,9 @@
 # of doing their own unlocked `jq > tmp && mv`. No tmux window and no `claude`
 # process is ever launched.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
   mkdir -p "$ORCH_ROOT/_orch/state/workers"
@@ -58,7 +61,7 @@ setup() {
   grep -Fq 'write_worker_status' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
   grep -Fq 'update_worker_status' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
   # No leftover unlocked `jq ... > tmp && mv` writes to a worker status file.
-  ! grep -E '\$WORKERS_DIR/\$id\.json\.tmp' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
+  refute_grep_in_existing '\$WORKERS_DIR/\$id\.json\.tmp' "$BATS_TEST_DIRNAME/../_orch/spawn.sh"
   ! grep -E '"\$f\.tmp".*mv "\$f\.tmp"' "$BATS_TEST_DIRNAME/../_orch/report.sh"
 }
 
