@@ -69,8 +69,3 @@ refute_alive() { # <pid> -- fails if the pid is still running.
   esac
   ! kill -0 "$1" 2>/dev/null
 }
-
-# TEMPORARY: deliberate shellcheck violation planted to prove the new
-# lint coverage in issue #139 half (b) can actually fail. Reverted in a
-# follow-up commit on this same PR once the red CI run is linked.
-planted_lint_violation() { local x=$1; echo $x; }
