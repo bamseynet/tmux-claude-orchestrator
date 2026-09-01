@@ -845,11 +845,18 @@ _pane_scan_lines() {
 : "${_SEND_PROMPT_SEQ:=0}"
 # Single source of truth for both defaults, so a value edited in one place
 # can't drift out of sync with the "using ..." message that reports it
-# (issue #135 polish item 1).
-: "${_ORCH_SEND_POLL_TRIES_DEFAULT:=50}"
-: "${_ORCH_SEND_POLL_INTERVAL_DEFAULT:=0.1}"
-: "${ORCH_SEND_POLL_TRIES:=$_ORCH_SEND_POLL_TRIES_DEFAULT}"       # poll count cap
-: "${ORCH_SEND_POLL_INTERVAL:=$_ORCH_SEND_POLL_INTERVAL_DEFAULT}" # seconds slept between polls (issue #135)
+# (issue #135 polish item 1). Plain assignments, deliberately NOT `:=`: these
+# are the trusted values the invalid-override fallback resets to and are never
+# themselves re-validated, so an inherited `_ORCH_SEND_POLL_TRIES_DEFAULT=abc`
+# in the environment would turn the fallback into the very unbounded hang the
+# sanitising below exists to prevent.
+_ORCH_SEND_POLL_TRIES_DEFAULT=50
+_ORCH_SEND_POLL_INTERVAL_DEFAULT=0.1
+# `${VAR=...}` (no colon) so an explicitly-empty override survives to the
+# per-call validation below and is reported as invalid, instead of being
+# silently swallowed into the default here (issue #135 polish item 2).
+: "${ORCH_SEND_POLL_TRIES=$_ORCH_SEND_POLL_TRIES_DEFAULT}"       # poll count cap
+: "${ORCH_SEND_POLL_INTERVAL=$_ORCH_SEND_POLL_INTERVAL_DEFAULT}" # seconds slept between polls (issue #135)
 send_prompt() { # <target> <text...>
   local target="$1"; shift
   local text="$*"
@@ -884,13 +891,29 @@ send_prompt() { # <target> <text...>
   # default itself), so "starts with 0" can't be the malformed test here --
   # the real degenerate case is a value that is numerically zero (spins the
   # loop with no delay) or a shape `sleep` can't parse as a plain decimal.
+  # The `.*` arm deliberately rejects the leading-dot spelling (`.5`) even
+  # though `sleep` itself accepts it: `0.5` is the canonical form and is
+  # already accepted, so allowing both buys an operator nothing and widens
+  # the shape this has to keep guaranteeing. A rejected `.5` is not silent --
+  # it warns and falls back to the default like any other malformed value.
+  # The whole-seconds part is capped at two digits for the same reason the poll
+  # count is capped at six: without a magnitude bound the knob reinstates the
+  # unbounded hang the cap exists to prevent. `${#interval} -le 9` bounds only
+  # the *string*, so a shape-valid "999999999" would sleep ~31 years per poll
+  # and 50 polls would never return. <=99s per poll keeps the *default* 50-poll
+  # worst case at ~82min instead of unbounded. Note the two knobs multiply: an
+  # operator who deliberately maxes both (999999 polls x 99s) still buys years,
+  # so this is a guard against an accidentally absurd interval, not a global
+  # ceiling on how long a caller can ask send_prompt to wait.
   local interval="${ORCH_SEND_POLL_INTERVAL-}"
-  local interval_ok=1
+  local interval_ok=1 interval_whole
   case "$interval" in
     ''|*[!0-9.]*|*.*.*|.*|*.) interval_ok=0 ;;
     *)
       [[ "$interval" =~ [1-9] ]] || interval_ok=0
       [ "${#interval}" -le 9 ] || interval_ok=0
+      interval_whole="${interval%%.*}"
+      [ "${#interval_whole}" -le 2 ] || interval_ok=0
       ;;
   esac
   if [ "$interval_ok" -eq 0 ]; then
