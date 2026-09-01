@@ -34,7 +34,7 @@ jobs:
         run: |
           # All tracked shell scripts: every *.sh plus the extensionless `orch`
           # entrypoint (a bare *.sh glob would miss it).
-          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files 'orch'; } | sort -u)
+          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files '*.bash'; git ls-files 'orch'; } | sort -u)
           printf 'Found %d shell scripts:\n' "${#scripts[@]}"
           printf '  %s\n' "${scripts[@]}"
 
@@ -49,7 +49,7 @@ jobs:
       - name: shfmt formatting diff (advisory, non-blocking)
         continue-on-error: true
         run: |
-          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files 'orch'; } | sort -u)
+          mapfile -t scripts < <({ git ls-files '*.sh'; git ls-files '*.bash'; git ls-files 'orch'; } | sort -u)
           # Advisory only: surfaces formatting drift without gating CI. The repo has
           # not adopted a shfmt style, so this never fails the build.
           shfmt -d "${scripts[@]}"
@@ -212,7 +212,7 @@ jobs:
               # fail at runtime, so they are invisible to this layer. Cheap,
               # and covers every tracked script, not just the entrypoints the
               # runtime smoke below exercises.
-              scripts="$(git ls-files "*.sh"; echo orch)"
+              scripts="$(git ls-files "*.sh"; git ls-files "*.bash"; echo orch)"
               # Sanity: if the tar-pipe extraction or the in-container git
               # init/add/commit silently failed or came up short (this
               # script only sets `set -u`, not `-e`, so a failure in that
