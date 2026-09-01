@@ -3,6 +3,7 @@
 # Provides: paths, log(), session_exists(), strip_ansi(), pane_tail(), is_busy(), is_ready(),
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
+#           pane_has_permission_dialog(), pane_has_trust_dialog(), pane_has_dialog() (issues #132/#133),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -430,6 +431,20 @@ TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for
 # The collapsed "[Pasted text ...]" chip the TUI shows for an unsent paste
 # still sitting in the input box (issue #128).
 TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?( \+[0-9]+ lines?)?\]')"
+# The tool-permission dialog ("Do you want to proceed?"). This can only ever
+# render AFTER Claude Code has accepted a prompt and started acting on it, so
+# unlike every other signal above it is POSITIVE evidence an injection landed
+# (issue #133) -- never a reason to distrust the pane.
+TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex 'Do you want to proceed\?')"
+# The startup folder-trust dialog ("Is this a project you created or one you
+# trust?" / "trust this folder"). Unlike the permission dialog, this is a
+# PRE-acceptance gate -- it can appear before any prompt has ever reached
+# Claude Code, so it is never positive evidence of a landed injection (issue
+# #133's production repro: this dialog, not the permission one, cost a whole
+# session). Its highlighted default is the destructive "No, exit" choice, so a
+# bare Enter sent while it is on screen exits the session instead of
+# submitting anything.
+TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex 'trust this folder|created or one you trust')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -494,6 +509,24 @@ pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is vis
   [[ "$input_row" =~ $TUI_PASTE_CHIP_REGEX ]]
 }
 
+# Tool-permission dialog visible? (0 = visible). See TUI_PERMISSION_DIALOG_REGEX:
+# this can only render post-acceptance, so it doubles as positive landed-injection
+# evidence in inject_confirmed() below (issue #133).
+pane_has_permission_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_PERMISSION_DIALOG_REGEX"; }
+
+# Startup folder-trust dialog visible? (0 = visible). See TUI_TRUST_DIALOG_REGEX:
+# unlike the permission dialog this is a PRE-acceptance gate and its default
+# choice is destructive, so it is never positive evidence and must veto any
+# bare Enter (issues #132/#133).
+pane_has_trust_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_TRUST_DIALOG_REGEX"; }
+
+# Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
+# send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --
+# while EITHER dialog is up: Enter is consumed as "select the highlighted
+# choice", not "submit the input box", and for the trust dialog that choice
+# exits the session (issues #132/#133).
+pane_has_dialog() { pane_has_permission_dialog "$1" || pane_has_trust_dialog "$1"; }
+
 # An injected prompt appears to have landed. Requires positive evidence rather than
 # defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn
 # marker, or — with the startup banner already scrolled away and no unsent paste
@@ -517,6 +550,22 @@ inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # unsent, task never dispatched) confirms as "landed" on the banner's own
   # glyph and neither this guard nor pane_has_welcome is ever reached.
   pane_has_pending_paste "$1" && return 1
+  # Checked BEFORE pane_has_welcome (issue #133): the permission dialog can
+  # only render once Claude Code has accepted a prompt and started acting on
+  # it, so it is unambiguous positive evidence -- even if the startup banner
+  # is still within the 25-row capture window alongside it. Without this, the
+  # #128 banner veto below would wrongly report a healthy worker blocked on a
+  # dialog as "not confirmed", triggering a bogus retry/re-inject into the
+  # dialog itself.
+  pane_has_permission_dialog "$1" && return 0
+  # Checked BEFORE pane_active/is_ready (issue #133): the trust dialog's
+  # highlighted-choice arrow ("❯ No, exit") matches TUI_READY_REGEX's bare "❯",
+  # so without an explicit veto here is_ready() would misread the dialog as a
+  # ready input prompt and confirm an injection that was never actually
+  # dispatched -- silently leaving a worker parked on a dialog reported
+  # "working". The trust dialog is a pre-acceptance gate, never evidence of a
+  # landed injection, so it fails toward "not confirmed" like pane_has_welcome.
+  pane_has_trust_dialog "$1" && return 1
   # Checked BEFORE pane_active for the same reason (rv129): the banner's own
   # "✻" is an ACTIVE-glyph match, so with pane_active first this line was
   # unreachable in practice on a real worker pane and ANY shape of
