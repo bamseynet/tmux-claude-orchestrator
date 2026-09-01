@@ -7,6 +7,8 @@
 # process is ever touched.
 
 SPAWN="$BATS_TEST_DIRNAME/../_orch/spawn.sh"
+# shellcheck disable=SC1091
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
 
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
@@ -100,7 +102,7 @@ EOF
 
   grep -Fq 'worker w1: dialog on screen before first injection attempt; not sending' "$ORCH_ROOT/_orch/state/orch.log"
   grep -Fq 'worker w1: dialog on screen; not re-pasting' "$ORCH_ROOT/_orch/state/orch.log"
-  ! grep -q 'sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
+  refute_grep_in_existing 'sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
 }
 
 @test "spawn.sh never sends a bare Enter into a permission dialog and treats it as confirmed (issue #133 healthy-worker case)" {
@@ -145,7 +147,7 @@ EOF
   # The permission-dialog-as-positive-evidence check confirms on the very
   # first poll, so the retry ladder (bare-Enter or otherwise) is never
   # entered at all -- neither log line appears.
-  ! grep -q 'sending bare Enter\|refusing bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
+  refute_grep_in_existing 'sending bare Enter\|refusing bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
 
   # Exactly one paste went out (the initial injection), confirmed on the very
   # first poll once the dialog appears -- the retry ladder is never entered.
