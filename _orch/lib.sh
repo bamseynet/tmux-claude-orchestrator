@@ -843,7 +843,20 @@ _pane_scan_lines() {
 #  - -p -d pastes bracketed then deletes the buffer; Enter is gated on that delete
 #    actually landing (polled via `show-buffer`) instead of a fixed timing guess
 : "${_SEND_PROMPT_SEQ:=0}"
-: "${ORCH_SEND_POLL_TRIES:=50}"   # 50 * 0.1s sleep = 5s cap on waiting for the paste buffer to clear
+# Single source of truth for both defaults, so a value edited in one place
+# can't drift out of sync with the "using ..." message that reports it
+# (issue #135 polish item 1). Plain assignments, deliberately NOT `:=`: these
+# are the trusted values the invalid-override fallback resets to and are never
+# themselves re-validated, so an inherited `_ORCH_SEND_POLL_TRIES_DEFAULT=abc`
+# in the environment would turn the fallback into the very unbounded hang the
+# sanitising below exists to prevent.
+_ORCH_SEND_POLL_TRIES_DEFAULT=50
+_ORCH_SEND_POLL_INTERVAL_DEFAULT=0.1
+# `${VAR=...}` (no colon) so an explicitly-empty override survives to the
+# per-call validation below and is reported as invalid, instead of being
+# silently swallowed into the default here (issue #135 polish item 2).
+: "${ORCH_SEND_POLL_TRIES=$_ORCH_SEND_POLL_TRIES_DEFAULT}"       # poll count cap
+: "${ORCH_SEND_POLL_INTERVAL=$_ORCH_SEND_POLL_INTERVAL_DEFAULT}" # seconds slept between polls (issue #135)
 send_prompt() { # <target> <text...>
   local target="$1"; shift
   local text="$*"
@@ -854,21 +867,58 @@ send_prompt() { # <target> <text...>
   # -d deletes the buffer once the paste is delivered; poll for that instead of
   # a blind sleep, capped so a stuck/renamed buffer can never hang the send.
   # Sanitise the cap into a local first. Anything `[ -ge ]` cannot compare as an
-  # integer (empty, non-numeric, or wider than bash's intmax) makes the test error
-  # out on every iteration so the cap never fires, reinstating exactly the
-  # unbounded hang it exists to prevent; a zero/leading-zero value ("0", "00")
-  # gives up on the very first poll and sends Enter ungated. Demand a plain
-  # positive decimal of at most 6 digits (999999 polls ~= 28h, far past any real
-  # use) and fall back to the default otherwise.
-  local tries="${ORCH_SEND_POLL_TRIES:-50}"
+  # integer (empty or non-numeric) makes the test error out on every iteration
+  # so the cap never fires, reinstating exactly the unbounded hang it exists to
+  # prevent; a zero/leading-zero value ("0", "00") gives up on the very first
+  # poll and sends Enter ungated. Demand a plain positive decimal of at most 6
+  # digits -- a deliberate sanity cap (999999 polls ~= 28h, far past any real
+  # use), not a bash-intmax boundary -- and fall back to the default otherwise.
+  # `${VAR-}` (not `${VAR:-}`) so a caller-supplied *empty* override falls
+  # through to the `''` case arm below as an explicit invalid value, rather
+  # than being silently swallowed into the default (issue #135 polish item 2).
+  local tries="${ORCH_SEND_POLL_TRIES-}"
   local tries_ok=1
   case "$tries" in
     ''|*[!0-9]*|0*) tries_ok=0 ;;
     *) [ "${#tries}" -le 6 ] || tries_ok=0 ;;
   esac
   if [ "$tries_ok" -eq 0 ]; then
-    say "send_prompt: ignoring invalid ORCH_SEND_POLL_TRIES='$tries'; using 50" >&2
-    tries=50
+    say "send_prompt: ignoring invalid ORCH_SEND_POLL_TRIES='$tries'; using $_ORCH_SEND_POLL_TRIES_DEFAULT" >&2
+    tries=$_ORCH_SEND_POLL_TRIES_DEFAULT
+  fi
+  # Same idiom for the sleep interval between polls (issue #135). Unlike the
+  # poll count, a legitimate interval routinely starts with "0" (the "0.1"
+  # default itself), so "starts with 0" can't be the malformed test here --
+  # the real degenerate case is a value that is numerically zero (spins the
+  # loop with no delay) or a shape `sleep` can't parse as a plain decimal.
+  # The `.*` arm deliberately rejects the leading-dot spelling (`.5`) even
+  # though `sleep` itself accepts it: `0.5` is the canonical form and is
+  # already accepted, so allowing both buys an operator nothing and widens
+  # the shape this has to keep guaranteeing. A rejected `.5` is not silent --
+  # it warns and falls back to the default like any other malformed value.
+  # The whole-seconds part is capped at two digits for the same reason the poll
+  # count is capped at six: without a magnitude bound the knob reinstates the
+  # unbounded hang the cap exists to prevent. `${#interval} -le 9` bounds only
+  # the *string*, so a shape-valid "999999999" would sleep ~31 years per poll
+  # and 50 polls would never return. <=99s per poll keeps the *default* 50-poll
+  # worst case at ~82min instead of unbounded. Note the two knobs multiply: an
+  # operator who deliberately maxes both (999999 polls x 99s) still buys years,
+  # so this is a guard against an accidentally absurd interval, not a global
+  # ceiling on how long a caller can ask send_prompt to wait.
+  local interval="${ORCH_SEND_POLL_INTERVAL-}"
+  local interval_ok=1 interval_whole
+  case "$interval" in
+    ''|*[!0-9.]*|*.*.*|.*|*.) interval_ok=0 ;;
+    *)
+      [[ "$interval" =~ [1-9] ]] || interval_ok=0
+      [ "${#interval}" -le 9 ] || interval_ok=0
+      interval_whole="${interval%%.*}"
+      [ "${#interval_whole}" -le 2 ] || interval_ok=0
+      ;;
+  esac
+  if [ "$interval_ok" -eq 0 ]; then
+    say "send_prompt: ignoring invalid ORCH_SEND_POLL_INTERVAL='$interval'; using $_ORCH_SEND_POLL_INTERVAL_DEFAULT" >&2
+    interval=$_ORCH_SEND_POLL_INTERVAL_DEFAULT
   fi
   local i=0
   while tmux show-buffer -b "$buf" >/dev/null 2>&1; do
@@ -877,7 +927,7 @@ send_prompt() { # <target> <text...>
       say "send_prompt: paste buffer $buf still present after $tries polls; sending Enter ungated" >&2
       break
     fi
-    sleep 0.1
+    sleep "$interval"
   done
   tmux send-keys -t "$target" Enter
 }
