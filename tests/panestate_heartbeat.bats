@@ -4,6 +4,9 @@
 # so no real tmux window is ever touched; the "master pane" content is driven by
 # $PANE_TEXT_FILE, read by the tmux stub's capture-pane.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   STUBBIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUBBIN"
@@ -69,6 +72,6 @@ EOF
     send_prompt "$SESSION_NAME:$ORCH_WINDOW" "[orchestrator heartbeat] $events"
   fi
 
-  ! grep -q '"id":"w1"' "$INBOX" 2>/dev/null
+  refute_grep '"id":"w1"' "$INBOX"
   grep -q 'paste-buffer' "$CALLS"
 }

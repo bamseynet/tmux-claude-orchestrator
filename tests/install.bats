@@ -5,6 +5,9 @@
 # touches the real repo tree. No tmux window and no `claude` process is launched
 # (install.sh only copies files and writes JSON).
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 INSTALL="$BATS_TEST_DIRNAME/../install.sh"
 SRC="$BATS_TEST_DIRNAME/.."
 
@@ -95,7 +98,7 @@ setup() {
 
   run "$INSTALL" "$TARGET"
   [ "$status" -eq 0 ]
-  ! grep -q "stale content" "$TARGET/_orch/report.sh"
+  refute_grep_in_existing "stale content" "$TARGET/_orch/report.sh"
   diff -q "$SRC/_orch/report.sh" "$TARGET/_orch/report.sh"
 }
 
