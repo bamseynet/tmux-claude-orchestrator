@@ -162,6 +162,9 @@ EOF
   run "$TOOLKIT/_orch/stop.sh"
   if [ "$status" -eq 0 ]; then
     [[ "$output" == *"stopped heartbeat + watchdog."* ]]
+    # inert-ok: last statement of the `if` branch that is itself the
+    # @test body's final statement, so its exit status becomes the
+    # test's status (issue #134 §2 Group C / #139 §3.3).
     ! kill -0 "$BG_PID" 2>/dev/null
   fi
 }

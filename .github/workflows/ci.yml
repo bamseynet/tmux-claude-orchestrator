@@ -46,6 +46,9 @@ jobs:
           echo "== shellcheck (all scripts; uses .shellcheckrc) =="
           shellcheck "${scripts[@]}"
 
+      - name: Guard against inert absence-assertions (issue #134/#139)
+        run: bash tests/lint/no-inert-assertions.sh
+
       - name: shfmt formatting diff (advisory, non-blocking)
         continue-on-error: true
         run: |
