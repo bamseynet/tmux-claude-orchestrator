@@ -168,18 +168,3 @@ EOF
     ! kill -0 "$BG_PID" 2>/dev/null
   fi
 }
-
-# TEMPORARY: deliberate planted inert assertions to prove the new CI
-# guard (issue #139 half a) can actually fail. Reverted in a follow-up
-# commit on this same PR once the red run is linked in the PR body.
-@test "planted: inert two-space negation" {
-  ! grep -q boom "$BATS_TEST_TMPDIR/nonexistent"
-  [ -e "$BATS_TEST_TMPDIR" ]
-}
-
-@test "planted: inert negation inside a for loop" {
-  for f in a b; do
-    ! grep -q boom "$BATS_TEST_TMPDIR/nonexistent"
-  done
-  [ -e "$BATS_TEST_TMPDIR" ]
-}
