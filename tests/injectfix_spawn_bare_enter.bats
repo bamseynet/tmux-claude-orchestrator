@@ -171,4 +171,7 @@ EOF
   [ "$output" = "waiting-bg" ]
   run grep -q '"event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
   [ "$status" -ne 0 ]
+  # The hook proves the task ran: no bare-Enter retries, and never a re-paste of it.
+  [ "$(grep -c 'paste-buffer' "$CALLS")" -eq 1 ]
+  ! grep -q 'sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log" 2>/dev/null
 }

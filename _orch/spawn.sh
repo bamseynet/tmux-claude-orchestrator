@@ -399,8 +399,20 @@ send_prompt "$S:$id" "${preamble}${task}"
 # full re-inject as a last resort. Bounded throughout — never hangs. Still
 # unconfirmed after all of that => spawn-failed, never a silently-idle
 # "working" worker.
+# A worker hook (Stop/Notification/SubagentStop) that already moved the status off
+# "spawning" proves the task was submitted, even if the pane checks never confirmed
+# it -- checked before every retry so a task that already ran is never re-pasted,
+# and never reported spawn-failed (issue #163 review).
+hook_reported() {
+  case "$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
+    done | waiting-bg | needs-input | subagent-done)
+      log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
+      return 0 ;;
+  esac
+  return 1
+}
 spawn_ok=0
-if confirm_inject "$S:$id" 15; then
+if confirm_inject "$S:$id" 15 || hook_reported; then
   spawn_ok=1
 else
   max_retries="$(jq -r '.thresholds.spawn_inject_retries // 2' "$CONFIG")"
@@ -409,7 +421,7 @@ else
     retry=$((retry + 1))
     log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
     tmux send-keys -t "$S:$id" Enter
-    if confirm_inject "$S:$id" 15; then
+    if confirm_inject "$S:$id" 15 || hook_reported; then
       spawn_ok=1
       break
     fi
@@ -417,19 +429,8 @@ else
   if [ "$spawn_ok" -ne 1 ]; then
     log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
     send_prompt "$S:$id" "${preamble}${task}"
-    if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    if confirm_inject "$S:$id" 15 || hook_reported; then spawn_ok=1; fi
   fi
-fi
-
-# A worker hook (Stop/Notification/SubagentStop) that already moved the status off
-# "spawning" proves the task was submitted, even if the pane checks above never
-# confirmed it -- never report that worker spawn-failed (issue #163 review).
-if [ "$spawn_ok" -ne 1 ]; then
-  case "$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
-    done | waiting-bg | needs-input | subagent-done)
-      log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
-      spawn_ok=1 ;;
-  esac
 fi
 
 if [ "$spawn_ok" -eq 1 ]; then

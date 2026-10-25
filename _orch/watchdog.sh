@@ -218,8 +218,9 @@ liveness_check() { # <w> <pane_text> <now>
       fi
       ;;
     waiting-bg)
-      # Re-alerts back off from background_wait too, not the 90s realert base, so a
-      # legitimately long background job doesn't wake the master every few minutes.
+      # Re-alerts use background_wait as their base (not the 90s realert base), so a
+      # legitimately long background job re-wakes the master at most every
+      # background_wait (with defaults the cap equals the base: a steady 30 min).
       thr="$background_wait"; ev="stalled"; rbase="$background_wait"
       [ "$rmax" -ge "$rbase" ] 2>/dev/null || rmax="$rbase"
       ;;
