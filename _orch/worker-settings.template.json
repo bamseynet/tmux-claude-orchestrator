@@ -3,7 +3,7 @@
   "awaySummaryEnabled": false,
   "hooks": {
     "Stop":         [{"hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> done"}]}],
-    "Notification": [{"hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> needs-input"}]}],
+    "Notification": [{"matcher":"permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt","hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> needs-input"}]}],
     "SubagentStop": [{"hooks":[{"type":"command","command":"/ABS/PATH/_orch/report.sh <id> subagent-done"}]}]
   }
 }

@@ -149,7 +149,7 @@ arbitrary command execution.
 Each worker is spawned with hooks (written to its worktree's `.claude/settings.local.json`):
 
 - **`Stop`** → fires when the worker finishes a turn → `report.sh <id> done`
-- **`Notification`** → fires when it needs input/permission → `report.sh <id> needs-input`
+- **`Notification`** → fires when it is blocked on a human (matcher `permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt`; `idle_prompt` is deliberately excluded, issue #163) → `report.sh <id> needs-input`
 
 `report.sh` appends to `_orch/state/inbox.jsonl` and updates `_orch/state/workers/<id>.json`.
 The **heartbeat** drains the inbox and — only when the master's pane is idle — pastes a single

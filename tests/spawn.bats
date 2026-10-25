@@ -83,6 +83,59 @@ JSON
   [ "$output" = '["Bash(ls:*)","Bash(cat:*)"]' ]
 }
 
+# issue #163 part A: an unmatched Notification hook turned idle_prompt (fires 60 s
+# after every Stop) into a false `needs-input` and overwrote a finished worker's
+# `done`. Pin the matcher to the genuinely-blocking types; bats can't run Claude
+# Code's matcher, so this pins the config (the probe in #163 is the evidence).
+NOTIF_MATCHER='permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt'
+
+@test "spawn.sh scopes the Notification hook to blocking types, --no-worktree file (issue #163 A)" {
+  run "$SPAWN" w1n sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1n.json"
+  run jq -r '.hooks.Notification[0].matcher' "$settings"
+  [ "$output" = "$NOTIF_MATCHER" ]
+  # no Notification entry without a matcher (it would fire on idle_prompt)
+  run jq -e '[.hooks.Notification[] | select((.matcher // "") == "")] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+}
+
+@test "spawn.sh scopes the Notification hook to blocking types, worktree settings.local.json (issue #163 A)" {
+  run "$SPAWN" w1m sonnet "do the thing"
+  [ "$status" -eq 0 ]
+  settings="$(worker_wdir_for w1m)/.claude/settings.local.json"
+  run jq -r '.hooks.Notification[0].matcher' "$settings"
+  [ "$output" = "$NOTIF_MATCHER" ]
+  run jq -e '[.hooks.Notification[] | select((.matcher // "") == "")] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+}
+
+# The string compare above would happily pin a typo that spawn.sh and NOTIF_MATCHER
+# share, and an unknown exact-match value never fires. Check every alternative
+# against Claude Code's notification types, written out independently (hooks
+# reference matcher table + the notification-type enum in CLI 2.1.310), and that
+# the non-blocking types stay excluded.
+@test "Notification matcher names only real blocking notification types (issue #163 A)" {
+  run "$SPAWN" w1t sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  m="$(jq -r '.hooks.Notification[0].matcher' "$ORCH_ROOT/_orch/state/settings/w1t.json")"
+  blocking=" permission_prompt elicitation_dialog elicitation_url_dialog agent_needs_input worker_permission_prompt "
+  nonblocking=" idle_prompt auth_success agent_completed elicitation_complete elicitation_response "
+  # exact-match list: only letters/digits/_/| (anything else flips to regex mode;
+  # Claude Code's own test is /^[a-zA-Z0-9_|]+$/)
+  [[ "$m" =~ ^[a-zA-Z0-9_|]+$ ]]
+  IFS='|' read -ra alts <<<"$m"
+  [ "${#alts[@]}" -ge 1 ]
+  for a in "${alts[@]}"; do
+    [[ "$blocking" == *" $a "* ]] || { echo "not a known blocking type: $a"; return 1; }
+  done
+  for t in $nonblocking; do
+    [[ "|$m|" != *"|$t|"* ]] || { echo "non-blocking type matched: $t"; return 1; }
+  done
+  # the reference template mirrors what spawn.sh writes
+  [ "$(jq -r '.hooks.Notification[0].matcher' "$BATS_TEST_DIRNAME/../_orch/worker-settings.template.json")" = "$m" ]
+}
+
 @test "spawn.sh wraps bare commands as Bash(<cmd>:*) rules (issue #78)" {
   run "$SPAWN" w1b sonnet "do the thing" --no-worktree --allow "git, gh , jq"
   [ "$status" -eq 0 ]

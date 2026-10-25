@@ -320,14 +320,27 @@ fi
 # a "(...)" specifier) so they fail the capitalised-canonical check on their own;
 # they are special-cased through unwrapped rather than being wrapped as a
 # (nonexistent) shell command, which silently dropped the permission (issue #84).
+#
+# issue #163: the Notification hook is scoped to the types that mean the worker is
+# blocked on a human. Unmatched, idle_prompt (60 s after every Stop) and the
+# informational types ran it too, reporting a false needs-input and overwriting a
+# finished worker's `done`. AskUserQuestion and other untyped blocking dialogs
+# (plan approval, sandbox network request) default to permission_prompt;
+# agent_needs_input is a blocking dialog too (auto-mode billing notice, a background
+# agent parked on input) and worker_permission_prompt is an agent-team teammate
+# waiting on this worker's approval. Values are exact-match (code.claude.com hooks
+# reference, Notification matchers) -- a typo silently drops that type.
+# worker-settings.template.json mirrors this list (checked by tests/spawn.bats); README.md quotes it.
+notif_matcher="permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt"
+#
 # issue #144: awaySummaryEnabled is the documented settings key that suppresses
 # the session recap row, belt-and-braces alongside ORCH_GHOST_ENV (lib.sh).
-jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" '
+jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" '
   {
     awaySummaryEnabled: false,
     hooks: {
       Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done"}]}],
-      Notification: [{hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
+      Notification: [{matcher:$nm, hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
       SubagentStop: [{hooks:[{type:"command", command:"\($r) \($id) subagent-done"}]}]
     }
   }
