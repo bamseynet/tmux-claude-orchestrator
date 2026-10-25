@@ -26,8 +26,13 @@ rec="$(printf '%s' "$input" | jq -c '
               elif ($cw | type) == "object" and ($cw | has("current_usage")) then null
               else $cw.total_input_tokens end),
      window: $cw.context_window_size, session_id: .session_id,
-     ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))}
-  | select((.pct // 0) != 0 or (.tokens // 0) != 0)' 2>/dev/null || true)"
+     ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
+     reset: (($u == null) and ($cw | type) == "object" and ($cw | has("current_usage")))}
+  # A present-but-null current_usage (just after a /clear or compaction) is
+  # recorded as unknown rather than skipped, so the pre-compaction usage does
+  # not linger in the file as if it were still current.
+  | select((.pct // 0) != 0 or (.tokens // 0) != 0 or .reset)
+  | del(.reset)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then
   tmp="$out.tmp.$$"
   if printf '%s\n' "$rec" > "$tmp" 2>/dev/null; then mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi

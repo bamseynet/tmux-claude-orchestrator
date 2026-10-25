@@ -315,3 +315,15 @@ run_ss() { # <source> <session_id>
   [[ "$output" == *"read the file $ORCH_ROOT/_orch/CLAUDE.md"* ]]
   grep -F 'master_role_prompt "$here"' "$ORCH_ROOT/_orch/bootstrap.sh"
 }
+
+@test "A1: a post-compaction null current_usage replaces the stale pre-compaction record" {
+  in='{"session_id":"s1","context_window":{"used_percentage":85,"context_window_size":200000,"current_usage":{"input_tokens":170000}}}'
+  run bash -c 'printf "%s" "$1" | "$2"' _ "$in" "$SL"
+  [ "$(jq '.pct' "$STATE/master-context.json")" = "85" ]
+  in='{"session_id":"s1","context_window":{"used_percentage":null,"context_window_size":200000,"current_usage":null}}'
+  run bash -c 'printf "%s" "$1" | "$2"' _ "$in" "$SL"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.pct' "$STATE/master-context.json")" = "null" ]
+  [ "$(jq '.tokens' "$STATE/master-context.json")" = "null" ]
+  [ "$(jq 'has("reset")' "$STATE/master-context.json")" = "false" ]
+}
