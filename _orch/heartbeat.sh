@@ -314,12 +314,18 @@ master_reset_tick() { # <session:window>
   # Confirm it took: the SessionStart hook records the new session_id on every
   # /clear. If it never changes, the /clear did not happen (not submitted, or
   # swallowed) -- do not claim a reset or tell the master it was cleared.
-  local new_sid="" i=0 confirm_s=45
-  [ "$cptimeout" -lt "$confirm_s" ] && confirm_s="$cptimeout"
-  while [ "$i" -lt "$confirm_s" ] && [ ! -e "$STATE_DIR/.stop" ]; do
+  # Independent of checkpoint_timeout_s; env override is for hermetic tests.
+  local new_sid="" i=0 confirm_s="${ORCH_MASTER_CLEAR_CONFIRM_S:-45}"
+  case "$confirm_s" in ''|*[!0-9]*) confirm_s=45 ;; esac
+  # Read the session id at least once before honouring .stop: a stop that lands
+  # right after /clear must not skip the check and report a /clear that took as
+  # unconfirmed.
+  while :; do
     new_sid="$(jq -r '.session_id // empty' "$STATE_DIR/master-session.json" 2>/dev/null || true)"
     [ -n "$new_sid" ] && [ "$new_sid" != "$old_sid" ] && break
-    new_sid=""; sleep 1; i=$((i+1))
+    new_sid=""
+    { [ "$i" -lt "$confirm_s" ] && [ ! -e "$STATE_DIR/.stop" ]; } || break
+    sleep 1; i=$((i+1))
   done
   if [ -z "$new_sid" ]; then
     # Latch backoff: either '/clear' is sitting unsent in the input row (the
@@ -329,7 +335,9 @@ master_reset_tick() { # <session:window>
     # unguarded reset loop. Both need a human; `orch up` re-arms.
     jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" \
       '{ts:$ts, old_session_id:$o, backoff:true, unconfirmed:true}' | _master_reset_write
-    _master_reset_abort "master reset unconfirmed: session id unchanged after /clear ('/clear' may be unsent in the master's input, or the SessionStart hook is not recording) -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
+    local why_unconf="session id unchanged after /clear ('/clear' may be unsent in the master's input, or the SessionStart hook is not recording)"
+    [ -e "$STATE_DIR/.stop" ] && why_unconf="heartbeat stopping before the session id changed (the /clear may still take)"
+    _master_reset_abort "master reset unconfirmed: $why_unconf -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
     return 0
   fi
   wait_ready "$target" 45 || log "master not ready 45s after /clear"

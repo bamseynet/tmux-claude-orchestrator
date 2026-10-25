@@ -27,6 +27,8 @@ setup() {
   export TOUCH_FLAG="$BATS_TEST_TMPDIR/touch_notes_on_checkpoint"
   export DRAFT_FLAG="$BATS_TEST_TMPDIR/draft_after_checkpoint"
   export NO_CLEAR_FLAG="$BATS_TEST_TMPDIR/clear_does_not_take"
+  export ORCH_MASTER_CLEAR_CONFIRM_S=2
+  export STOP_ON_CLEAR_FLAG="$BATS_TEST_TMPDIR/stop_on_clear"
   export NOTES CALLS PANE_TEXT_FILE DRAFT_PANE_FILE
 
   cat > "$STUBBIN/tmux" <<'EOF'
@@ -45,6 +47,7 @@ case "${1:-}" in
         ;;
       /clear)  # what the SessionStart hook does on a real /clear
         [ -e "$NO_CLEAR_FLAG" ] || printf '{"session_id":"cleared-%s","source":"clear"}\n' "$$" > "$(dirname "$NOTES")/master-session.json"
+        [ -e "$STOP_ON_CLEAR_FLAG" ] && touch "$(dirname "$NOTES")/.stop"
         ;;
     esac ;;
   show-buffer)   exit 1 ;;
@@ -463,4 +466,15 @@ S1='{"session_id":"s1"}'
   master_reset_guard "$(cat "$STATE_DIR/master-context.json")" "$(cat "$STATE_DIR/master-reset.json")" 60 0.35
   [ "$(jq .backoff "$STATE_DIR/master-reset.json")" = "true" ]
   grep -q 'reset loop: .*(pct=70 tokens=400000)' "$LOG"
+}
+
+@test "B10: .stop landing right after a /clear that took still confirms the reset" {
+  touch "$TOUCH_FLAG" "$STOP_ON_CLEAR_FLAG"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait "$HB_PID" 2>/dev/null || true
+  grep -q 'master context reset (pct=75 tokens=400000)' "$LOG"
+  refute_grep 'master reset unconfirmed' "$LOG"
+  grep -q '"event":"master-reset"' "$STATE_DIR/events.jsonl"
+  jq -e '.backoff != true' "$STATE_DIR/master-reset.json"
 }
