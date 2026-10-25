@@ -165,7 +165,8 @@ Code's default (`master_context.autocompact_window`, default 400000 tokens).
 `master_context.reset_pct` (60) or `reset_fraction` (0.35) of your *actual*
 window (`window`; an unknown window never triggers), the heartbeat sends you a
 checkpoint prompt: rewrite `master-notes.md` with your current plan and any
-in-flight operation, then stop. Once the file is rewritten and you are idle it
+in-flight operation, ending with the one-off `orch-checkpoint-...` token line
+it gives you, then stop. Once that token is in the file and you are idle it
 sends `/clear`; the SessionStart hook then rehydrates a fresh context. It aborts
 (no `/clear`) if you don't finish within `checkpoint_timeout_s`, or a draft is
 in the input. If the first reading after a reset is still over threshold, resets

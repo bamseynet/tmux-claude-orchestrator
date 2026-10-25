@@ -247,7 +247,7 @@ master_reset_tick() { # <session:window>
   sess="$(cat "$STATE_DIR/master-session.json" 2>/dev/null || true)"
   last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
   if [ -z "$_MASTER_RESET_CFG" ]; then
-    _MASTER_RESET_CFG="$(jq -r '.master_context // {} | [(if .enabled == false then "false" else "true" end), (.reset_pct // ""), (.reset_fraction // ""), (.cooldown_s // ""), (.checkpoint_timeout_s // "")] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _MASTER_RESET_CFG=""; return 0; }
+    _MASTER_RESET_CFG="$(jq -r '.master_context // {} | [(if .enabled == false or .enabled == "false" then "false" else "true" end), (.reset_pct // ""), (.reset_fraction // ""), (.cooldown_s // ""), (.checkpoint_timeout_s // "")] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _MASTER_RESET_CFG=""; return 0; }
   fi
   cfg="$_MASTER_RESET_CFG"
   IFS='|' read -r enabled pct frac cool cptimeout <<<"$cfg"
@@ -255,12 +255,13 @@ master_reset_tick() { # <session:window>
   # A non-numeric knob would make every --argjson below fail, i.e. resets
   # silently off. Say so once and stay off.
   local _k
-  for _k in "$pct" "$frac" "$cool:i" "$cptimeout:i"; do
+  for _k in "$pct" "$frac" "$cool:i" "$cptimeout:p"; do
     case "$_k" in
       *:i) _k="${_k%:i}"; [[ -z "$_k" || "$_k" =~ ^[0-9]+$ ]] && continue ;;   # bash -lt needs integers
+      *:p) _k="${_k%:p}"; [[ -z "$_k" || "$_k" =~ ^[1-9][0-9]*$ ]] && continue ;; # 0 = abort every time
       *)   [[ -z "$_k" || "$_k" =~ ^[0-9]+(\.[0-9]+)?$ ]] && continue ;;
     esac
-    log "master_context: non-numeric setting '$_k' in config.json -- automatic master resets disabled"
+    log "master_context: invalid setting '$_k' in config.json -- automatic master resets disabled"
     _MASTER_RESET_CFG="false||||"
     return 0
   done
@@ -275,23 +276,25 @@ master_reset_tick() { # <session:window>
   pane_has_draft "$target" && return 0
 
   cptimeout="${cptimeout:-300}"
-  local t0 m pre_mtime cpct ctok old_sid notes="$STATE_DIR/master-notes.md" ok=0 why=""
+  local t0 token cpct ctok old_sid notes="$STATE_DIR/master-notes.md" ok=0 why=""
   cpct="$(jq -r '.pct' <<<"$ctx")"; ctok="$(jq -r '.tokens' <<<"$ctx")"
   old_sid="$(jq -r '.session_id' <<<"$ctx")"
-  # mtime has 1s resolution: a notes write from the master's PREVIOUS turn in
-  # the same second as t0 would satisfy ">= t0" before the checkpoint prompt
-  # was even read, and /clear would be typed into a just-submitted turn. Also
-  # require the mtime to have moved since before the prompt was sent.
-  pre_mtime="$(_lock_mtime "$notes" 2>/dev/null || echo none)"
+  # Completion = the notes contain this tick's one-off token. An mtime check
+  # can't tell the checkpoint from a routine notes refresh (or a write from the
+  # master's previous turn in the same second): either would let /clear wipe
+  # a context whose plan was never written down.
   t0="$(date +%s)"
-  send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), then stop. Do not start new work. (If the reset is aborted you will get a master-reset-aborted event: then carry on normally.)"
+  token="orch-checkpoint-$t0-$$-$RANDOM"
+  # orch down kills the heartbeat (TERM) rather than waiting for .stop: still
+  # tell the master, which was just told to stop, that no reset is coming.
+  trap '_master_reset_event master-reset-aborted "$old_sid"; exit 143' TERM
+  send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), end it with the line: $token -- then stop. Do not start new work. (If the reset is aborted you will get a master-reset-aborted event: then carry on normally.)"
   log "master context over threshold (pct=$cpct tokens=$ctok); checkpoint requested"
   while [ "$(( $(date +%s) - t0 ))" -lt "$cptimeout" ]; do
     # This wait blocks the heartbeat loop: honour .stop and a dead master.
     [ -e "$STATE_DIR/.stop" ] && { why="heartbeat stopping"; break; }
     master_window_alive "$target" || { why="master window gone"; break; }
-    m="$(_lock_mtime "$notes" 2>/dev/null || true)"
-    if [ -n "$m" ] && [ "$m" != "$pre_mtime" ] && [ "$m" -ge "$t0" ] && is_ready "$target"; then ok=1; break; fi
+    if grep -qF "$token" "$notes" 2>/dev/null && is_ready "$target"; then ok=1; break; fi
     sleep 1
   done
   if [ -n "$why" ]; then :
@@ -305,6 +308,7 @@ master_reset_tick() { # <session:window>
     if ! is_ready "$target"; then why="master busy again before /clear"
     elif pane_has_draft "$target"; then why="draft appeared"; fi
   fi
+  trap - TERM
   if [ -n "$why" ]; then
     # The master was told to stop; tell it the reset is off so it resumes.
     _master_reset_abort "master reset aborted: $why (no /clear sent)" "$old_sid" "$cool"

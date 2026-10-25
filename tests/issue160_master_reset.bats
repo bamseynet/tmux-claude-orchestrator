@@ -42,7 +42,7 @@ case "${1:-}" in
     printf 'PASTE<<%s>>\n' "$body" >> "$CALLS"
     case "$body" in
       *master-notes.md*)
-        [ -e "$TOUCH_FLAG" ] && touch "$NOTES"
+        [ -e "$TOUCH_FLAG" ] && printf '%s\n' "$body" >> "$NOTES"   # carries the checkpoint token
         [ -e "$DRAFT_FLAG" ] && cp "$DRAFT_PANE_FILE" "$PANE_TEXT_FILE"
         ;;
       /clear)  # what the SessionStart hook does on a real /clear
@@ -348,6 +348,11 @@ S1='{"session_id":"s1"}'
   [ "$status" -eq 0 ]
   [ ! -e "$tk/_orch/state/master-reset.json" ]
   [ ! -e "$tk/_orch/state/master-reset-retry-after" ]
+  # a reset the guard has not judged yet survives orch up
+  jq -nc '{ts:1,old_session_id:"a"}' > "$tk/_orch/state/master-reset.json"
+  PROJECT_ROOT="$BATS_TEST_TMPDIR/proj" ORCH_ROOT="$tk" SESSION_NAME=orch_i160_bs run "$tk/_orch/bootstrap.sh"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .old_session_id "$tk/_orch/state/master-reset.json")" = "a" ]
 }
 
 # ---------------------------------------------------------------- review fixes
@@ -429,10 +434,10 @@ S1='{"session_id":"s1"}'
   touch "$TOUCH_FLAG"
   ctx 75 400000 s1; sess s1
   start_hb
-  wait_for grep -q "non-numeric setting '60%'" "$LOG"
+  wait_for grep -q "invalid setting '60%'" "$LOG"
   sleep 0.3
   stop_hb
-  [ "$(grep -c 'non-numeric setting' "$LOG")" -eq 1 ]
+  [ "$(grep -c 'invalid setting' "$LOG")" -eq 1 ]
   refute_grep 'master-notes.md' "$CALLS"
 }
 
@@ -477,4 +482,36 @@ S1='{"session_id":"s1"}'
   refute_grep 'master reset unconfirmed' "$LOG"
   grep -q '"event":"master-reset"' "$STATE_DIR/events.jsonl"
   jq -e '.backoff != true' "$STATE_DIR/master-reset.json"
+}
+
+@test "B11: a routine notes refresh during the checkpoint wait does not count (token required)" {
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'checkpoint requested' "$LOG"
+  printf 'routine refresh\n' >> "$NOTES"   # fresh mtime, no token
+  wait_for grep -q 'master reset aborted' "$LOG"
+  stop_hb
+  refute_grep '/clear' "$CALLS"
+}
+
+@test "B11: orch down (TERM) during the checkpoint wait still tells the master" {
+  jq '.master_context.checkpoint_timeout_s = 600' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'checkpoint requested' "$LOG"
+  kill -TERM "$HB_PID"
+  wait_for grep -q '"event":"master-reset-aborted"' "$STATE_DIR/events.jsonl"
+  wait "$HB_PID" 2>/dev/null || true
+  refute_grep '/clear' "$CALLS"
+}
+
+@test "B11: checkpoint_timeout_s=0 is rejected (not a checkpoint-then-abort every cooldown)" {
+  jq '.master_context.checkpoint_timeout_s = 0' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q "invalid setting '0'" "$LOG"
+  stop_hb
+  refute_grep 'master-notes.md' "$CALLS"
 }
