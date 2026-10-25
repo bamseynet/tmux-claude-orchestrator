@@ -312,3 +312,27 @@ EOF
   grep -q '"event":"needs-input"' "$INBOX"
   refute_grep '"event":"subagent-done"' "$INBOX"
 }
+
+@test "case12 (#163): a denylisted object concatenated with an actionable one on one line is kept" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n' >> "$INBOX"
+  printf '%s\n' '{"id":"w1","event":"subagent-done"}{"id":"w3","note":"torn append"}' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q 'torn append' "$PASTED"
+}
+
+@test "case13 (#163): denylisted lines plus a whitespace-only line stay suppressed" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n' >> "$INBOX"
+  printf '   \n' >> "$INBOX"
+
+  wait_for grep -q 'noise-only batch' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  refute_grep 'send-keys' "$CALLS"
+}

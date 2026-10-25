@@ -395,6 +395,10 @@ heartbeat_main() {
   while IFS= read -r _idl_line; do
     [ -n "$_idl_line" ] && inject_denylist+=("$_idl_line")
   done < <(jq -r '.heartbeat.inject_denylist // ["subagent-done"] | .[]' "$CONFIG" 2>/dev/null || true)
+  # The same list as a JSON array, built once, for the single-pass jq filter
+  # in the loop below (one fork per tick, not one per event line).
+  local inject_denylist_json='[]'
+  [ "${#inject_denylist[@]}" -eq 0 ] || inject_denylist_json="$(printf '%s\n' "${inject_denylist[@]}" | jq -Rnc '[inputs]')"
 
   # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
   # single misdetection (or a genuinely long-lived operator draft) must never be
@@ -456,24 +460,23 @@ heartbeat_main() {
       # wait_ready wait every tick, and a requeued noise batch could trip the
       # issue #52 safety valve and force-deliver the noise anyway (symptom
       # gone, defect alive).
-      local noise_only=1 _dl_ev_line _dl_ev_type _dl_hit _dl kept=""
+      local noise_only=1 kept
       if [ "${#inject_denylist[@]}" -eq 0 ]; then
         noise_only=0
       else
-        while IFS= read -r _dl_ev_line; do
-          [ -n "$_dl_ev_line" ] || continue
-          # Fail open: unparseable JSON or a missing/empty .event field keeps
-          # the line rather than silently swallowing it.
-          _dl_hit=0
-          if _dl_ev_type="$(jq -r '.event // empty' <<<"$_dl_ev_line" 2>/dev/null)" && [ -n "$_dl_ev_type" ]; then
-            for _dl in "${inject_denylist[@]}"; do
-              [ "$_dl_ev_type" = "$_dl" ] && { _dl_hit=1; break; }
-            done
-          fi
-          [ "$_dl_hit" -eq 1 ] || kept+="${kept:+$'\n'}$_dl_ev_line"
-        done <<<"$events"
-        # Issue #163 part B: a mixed batch is injected (and requeued) with the
-        # denylisted lines stripped; events.jsonl keeps the full record.
+        # Issue #163 part B: one jq pass keeps every line whose .event FIELD
+        # is not denylisted. Fail open: a line that is not exactly one JSON
+        # object with a non-empty string .event (unparseable, concatenated
+        # values, missing/empty .event) is kept rather than silently
+        # swallowed; whitespace-only lines carry nothing and are dropped. If
+        # jq itself fails, the whole batch is kept.
+        kept="$(jq -Rr --argjson dl "$inject_denylist_json" '
+          select(test("\\S")) | . as $l
+          | (try (fromjson | .event) catch null) as $e
+          | if ($e | type) == "string" and $e != "" and any($dl[]; . == $e)
+            then empty else $l end' <<<"$events" 2>/dev/null)" || kept="$events"
+        # A mixed batch is injected (and requeued) with the denylisted lines
+        # stripped; events.jsonl keeps the full record.
         [ -z "$kept" ] || { noise_only=0; events="$kept"; }
       fi
 
