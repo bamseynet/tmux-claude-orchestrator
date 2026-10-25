@@ -226,8 +226,9 @@ fi
 
 # issue #160: an operator `orch up` re-arms automatic master context resets
 # (clears the loop-guard backoff, the reset cooldown and the abort throttle).
-# A reset the loop guard has not judged yet (neither verified nor backed off)
-# is kept: dropping it would lose the guard's only record of that reset.
+# Exception: a reset the loop guard has not judged yet (neither verified nor
+# backed off) is kept, cooldown included -- dropping it would lose the guard's
+# only record of that reset and allow an unguarded second one right away.
 rm -f "$STATE_DIR/master-reset-retry-after"
 if ! jq -e '(.backoff // false) == false and (.verified // false) == false and (.old_session_id // "") != ""' \
      "$STATE_DIR/master-reset.json" >/dev/null 2>&1; then

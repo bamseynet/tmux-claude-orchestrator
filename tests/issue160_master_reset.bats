@@ -549,3 +549,23 @@ S1='{"session_id":"s1"}'
   [ "$paste_line" -lt "$enter_line" ]
   refute_grep '/clear' "$CALLS"
 }
+
+@test "B13: TERM while /clear is being pasted waits for its Enter (never leaves '/clear' unsent)" {
+  touch "$TOUCH_FLAG"
+  export SLOW_PASTE_FLAG="$BATS_TEST_TMPDIR/slow_paste"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'checkpoint requested' "$LOG"
+  touch "$SLOW_PASTE_FLAG"
+  wait_for grep -q 'PASTE<</clear>>' "$CALLS"
+  kill -TERM "$HB_PID"
+  wait "$HB_PID" 2>/dev/null || true
+  # the /clear paste (the last one) was followed by its Enter before the exit
+  paste_line="$(grep -n '^paste-buffer' "$CALLS" | tail -1 | cut -d: -f1)"
+  enter_line="$(grep -n '^send-keys .* Enter' "$CALLS" | tail -1 | cut -d: -f1)"
+  [ -n "$paste_line" ] && [ -n "$enter_line" ]
+  [ "$paste_line" -lt "$enter_line" ]
+  [ "$(grep -c '^send-keys .* Enter' "$CALLS")" -eq 2 ]
+  # the reset is still on record for the loop guard
+  [ "$(jq -r '.old_session_id' "$STATE_DIR/master-reset.json")" = "s1" ]
+}

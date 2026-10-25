@@ -313,14 +313,20 @@ master_reset_tick() { # <session:window>
     if ! is_ready "$target"; then why="master busy again before /clear"
     elif pane_has_draft "$target"; then why="draft appeared"; fi
   fi
-  trap - TERM
+  # Defer TERM again until the abort event is written, or the reset record and
+  # the whole /clear send (paste AND its Enter) are in: a TERM landing mid-send
+  # would otherwise leave '/clear' typed but unsubmitted in the master's input.
+  _mr_term=0
+  trap '_mr_term=1' TERM
   if [ -n "$why" ]; then
     # The master was told to stop; tell it the reset is off so it resumes.
     _master_reset_abort "master reset aborted: $why (no /clear sent)" "$old_sid" "$cool"
+    trap - TERM
+    [ "$_mr_term" -eq 0 ] || exit 143
     return 0
   fi
   # Record the reset BEFORE sending /clear: orch down (stop.sh) touches .stop
-  # and TERMs us at once, and TERM is no longer trapped here, so a record
+  # and TERMs us at once, and TERM is not trapped after the send, so a record
   # written any later (after the confirm loop or the ready-wait) is lost when
   # the TERM lands in between -- and with it the loop guard's and cooldown's
   # only record of a /clear that really happened. If the /clear never takes,
@@ -328,6 +334,9 @@ master_reset_tick() { # <session:window>
   jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
     '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
   send_prompt "$target" "/clear"
+  trap - TERM
+  # A deferred TERM: the record above is kept (unjudged) by the next `orch up`.
+  [ "$_mr_term" -eq 0 ] || exit 143
   # Confirm it took: the SessionStart hook records the new session_id on every
   # /clear. If it never changes, the /clear did not happen (not submitted, or
   # swallowed) -- do not claim a reset or tell the master it was cleared.

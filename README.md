@@ -187,7 +187,7 @@ multi-session work.
 | `master_context.enabled` | `true` | automatic master context reset (checkpoint prompt, then `/clear`; issue #160) |
 | `master_context.reset_pct` | `60` | reset when the status line's `used_percentage` reaches this |
 | `master_context.reset_fraction` | `0.35` | reset when tokens ≥ this × the master's actual context window (so 200k and 1M windows both work); unknown window never resets |
-| `master_context.cooldown_s` | `1800` | minimum seconds between resets |
+| `master_context.cooldown_s` | `1800` | minimum seconds between resets; `orch up` clears it and any loop-guard backoff, except for a reset the guard has not judged yet |
 | `master_context.checkpoint_timeout_s` | `300` | max wait for `master-notes.md` to be rewritten before aborting (no `/clear`) |
 | `output.timestamps` | true | timestamp-prefix human-facing terminal output (`ORCH_TIMESTAMPS` env overrides; see `./orch help`) |
 | `output.timestamp_format` | `iso` | `iso` (UTC, matches `orch.log`) or `short` (local `HH:MM:SS`); `ORCH_TIMESTAMP_FORMAT` env overrides |
