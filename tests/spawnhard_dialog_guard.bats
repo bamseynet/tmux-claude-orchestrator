@@ -213,3 +213,47 @@ EOF
   grep -Fq 'worker w4: dialog on screen before first injection attempt; not sending' "$ORCH_ROOT/_orch/state/orch.log"
   grep -Fq 'worker w4: dialog cleared; sending the task' "$ORCH_ROOT/_orch/state/orch.log"
 }
+
+@test "a late-clearing dialog does not eat the bare-Enter retry the just-sent task needs" {
+  # The trust dialog outlasts the first retry, so the task is first sent on the
+  # LAST retry. Its trailing Enter is lost (the #51 shape: chip left unsent).
+  # The bare-Enter rung must still be available for that paste instead of the
+  # ladder dropping straight to spawn-failed on the unsent chip.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  COUNT_FILE="$BATS_TEST_TMPDIR/captures"; echo 0 > "$COUNT_FILE"
+  ENTER_FILE="$BATS_TEST_TMPDIR/enters"; echo 0 > "$ENTER_FILE"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    n=\$(( \$(cat "$COUNT_FILE") + 1 )); echo "\$n" > "$COUNT_FILE"
+    if [ "\$n" -eq 23 ]; then
+      printf '%s\n' '✻ Welcome to Claude Code!' '╭────────────────────────────────╮' '│ ❯ [Pasted text #1 +31 lines]   │' '╰────────────────────────────────╯' > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  send-keys)
+    if [ "\$#" -eq 4 ] && [ "\$4" = "Enter" ]; then
+      e=\$(( \$(cat "$ENTER_FILE") + 1 )); echo "\$e" > "$ENTER_FILE"
+      [ "\$e" -ge 2 ] && echo 'esc to interrupt' > "$PANE_FILE"
+    fi ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w5 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w5 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  grep -Fq 'worker w5: dialog cleared; sending the task' "$ORCH_ROOT/_orch/state/orch.log"
+  grep -Fq 'worker w5: task injection unconfirmed; sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
+}

@@ -457,10 +457,10 @@ else
     retry=$((retry + 1))
     if pane_has_dialog "$S:$id"; then
       # Guard 3 continued: a dialog appeared (or is still there) -- refuse the
-      # bare Enter. A permission dialog already counts as confirmed evidence in
-      # inject_confirmed() above, so this can only be the trust dialog or a
-      # permission dialog inject_confirmed hasn't polled again yet; either way
-      # sending Enter here risks picking a destructive default. Just re-poll.
+      # bare Enter. Once the task is sent, a permission dialog counts as
+      # confirmed evidence in inject_confirmed(); before then (task_sent=0)
+      # confirm_sent() never consults it. Either way sending Enter here risks
+      # picking a destructive default. Just re-poll.
       log "worker $id: dialog on screen (retry $retry/$max_retries); refusing bare Enter"
     elif [ "$task_sent" -ne 1 ]; then
       # The dialog that blocked the first injection has cleared: nothing is in
@@ -468,6 +468,10 @@ else
       log "worker $id: dialog cleared; sending the task (retry $retry/$max_retries)"
       send_prompt "$S:$id" "${preamble}${task}"
       task_sent=1
+      # This rung is the FIRST send, not a bare-Enter retry: hand its budget
+      # back so the #51 bare-Enter retries stay available for this paste even
+      # when the dialog outlasted earlier rungs. Bounded: task_sent flips once.
+      retry=$((retry - 1))
     else
       log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
       tmux send-keys -t "$S:$id" Enter

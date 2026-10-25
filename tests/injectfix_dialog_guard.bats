@@ -160,3 +160,37 @@ Enter to confirm · Esc to cancel'
   run pane_has_permission_dialog "orch:orchestrator"
   [ "$status" -eq 0 ]
 }
+
+@test "pane_has_trust_dialog is NOT fooled by the trust wording in prose or an echoed task" {
+  # The trust phrases appear mid-line in a submitted task's transcript echo
+  # and in model prose -- never on a line of their own like the real dialog's
+  # header/choice rows. An unanchored match here would veto inject_confirmed
+  # and block every rung of spawn.sh's ladder for a worker whose task merely
+  # mentions the dialog.
+  fake_tmux_set_pane "orch" "orchestrator" '> fix the "Yes, I trust this folder" detection
+● Done: the regex now matches trust the files in this folder and created or one you trust.'
+  run pane_has_trust_dialog "orch:orchestrator"
+  [ "$status" -ne 0 ]
+  run pane_has_dialog "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
+
+@test "inject_confirmed confirms a finished task whose transcript mentions the trust dialog" {
+  fake_tmux_set_pane "orch" "orchestrator" '> fix the "Yes, I trust this folder" detection
+● Done: the regex now matches trust this folder.
+╭────────────────────────────────╮
+│ ❯                              │
+╰────────────────────────────────╯'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -eq 0 ]
+}
+
+@test "pane_has_trust_dialog detects the older 'Do you trust the files in this folder?' dialog" {
+  fake_tmux_set_pane "orch" "orchestrator" '╭──────────────────────────────────────────╮
+│ Do you trust the files in this folder?   │
+│ ❯ 1. Yes, proceed                        │
+│   2. No, exit                            │
+╰──────────────────────────────────────────╯'
+  run pane_has_trust_dialog "orch:orchestrator"
+  [ "$status" -eq 0 ]
+}

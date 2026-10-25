@@ -450,7 +450,12 @@ TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]
 # session). Its highlighted default is the destructive "No, exit" choice, so a
 # bare Enter sent while it is on screen exits the session instead of
 # submitting anything.
-TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex 'trust this folder|trust the files in this folder|created or one you trust')"
+# Anchored to the dialog's own rows (header or "Yes, I trust ..." choice, each
+# alone at line start, optionally behind the box border / highlight arrow) for
+# the same reason as TUI_PERMISSION_DIALOG_REGEX: the same phrases mid-line in
+# a submitted task's transcript echo or in model prose would otherwise veto
+# inject_confirmed and block every rung of spawn.sh's ladder.
+TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\?|Do you trust the files in this folder\?)|^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?Yes, I trust (this folder|the files)')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
