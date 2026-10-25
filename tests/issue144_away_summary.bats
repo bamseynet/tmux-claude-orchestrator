@@ -113,7 +113,7 @@ JSON
   [ "$status" -eq 0 ]
 
   settings_file="$ORCH_ROOT/_orch/state/settings/w3.json"
-  run jq -e '.hooks.Stop[0].hooks[0].command | test("report\\.sh w3 done$")' "$settings_file"
+  run jq -e '.hooks.Stop[0].hooks[0].command | test("report\\.sh w3 done --hook$")' "$settings_file"
   [ "$status" -eq 0 ]
   run jq -e '.hooks.Notification[0].hooks[0].command | test("report\\.sh w3 needs-input$")' "$settings_file"
   [ "$status" -eq 0 ]

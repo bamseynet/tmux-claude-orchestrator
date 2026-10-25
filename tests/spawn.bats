@@ -324,3 +324,18 @@ EOF
   [ "$output" = "queued" ]
   [ ! -d "$(worker_wdir_for w8)" ]
 }
+
+# issue #163 part C: the Stop hook passes --hook so report.sh reads the payload's
+# background_tasks (only with --hook does it touch stdin).
+@test "spawn.sh wires Stop to 'report.sh <id> done --hook', both settings files (issue #163 C)" {
+  run "$SPAWN" w1h sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$ORCH_ROOT/_orch/state/settings/w1h.json"
+  [[ "$output" == *"report.sh w1h done --hook" ]]
+  run "$SPAWN" w1i sonnet "do the thing"
+  [ "$status" -eq 0 ]
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$(worker_wdir_for w1i)/.claude/settings.local.json"
+  [[ "$output" == *"report.sh w1i done --hook" ]]
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$BATS_TEST_DIRNAME/../_orch/worker-settings.template.json"
+  [[ "$output" == *"report.sh <id> done --hook" ]]
+}

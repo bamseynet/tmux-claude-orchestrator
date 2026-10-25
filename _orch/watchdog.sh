@@ -31,6 +31,10 @@ needs_input_realert="$(jq -r '.watchdog.needs_input_realert_seconds // 600' "$cf
 # review_idle: how long ANY idle (pane-unchanged) worker must sit before its
 # worktree is checked for unmerged commits (issue #50 point 3).
 review_idle="$(jq -r '.watchdog.review_idle_seconds // 300' "$cfg")"
+# background_wait: how long a "waiting-bg" worker (Stop with background work still
+# running, issue #163) may sit with an unchanged pane before it is reported
+# "stalled" -- long, so a hung background task or endless Monitor still surfaces.
+background_wait="$(jq -r '.watchdog.background_wait_seconds // 1800' "$cfg")"
 # realert base/cap: bounded exponential backoff shared by every re-alerting signal
 # below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
@@ -205,6 +209,9 @@ liveness_check() { # <w> <pane_text> <now>
         thr="$stall"; ev="stalled"
       fi
       ;;
+    waiting-bg)
+      thr="$background_wait"; ev="stalled"
+      ;;
     needs-input)
       # Abandoned wait, not a fresh input request -> a distinct event name so the
       # master can tell "worker is asking something new" apart from "this ask has
@@ -229,6 +236,8 @@ liveness_check() { # <w> <pane_text> <now>
   # branch gets a "ready-for-review" event even if it never sent a clean "done"
   # (issue #50 point 3, the highest-value check here).
   [ "$age" -ge "$review_idle" ] || return 0
+  # A worker parked on background work is not idle-with-finished-commits (issue #163).
+  [ "$status" != "waiting-bg" ] || return 0
   local ahead rf r_last r_count
   ahead="$(worker_branch_ahead "${PROJECT_ROOT:-$(pwd)}" "$w")" || true
   rf="$STATE_DIR/.review-$w"
