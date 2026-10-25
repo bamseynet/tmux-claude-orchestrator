@@ -35,7 +35,7 @@ for f in "$WORKERS_DIR"/*.json; do
   case "$st" in
     blocked|needs-input|error) c="#[fg=red,bold]" ;;
     done|subagent-done)        c="#[fg=green]" ;;
-    working|spawning)          c="#[fg=yellow]" ;;
+    working|spawning|waiting-bg) c="#[fg=yellow]" ;;
     queued)                    c="#[fg=cyan]" ;;
     *)                         c="#[fg=white]" ;;
   esac

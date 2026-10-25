@@ -69,6 +69,29 @@ BG='{"background_tasks":[{"type":"shell","status":"running"}],"session_crons":[]
   grep -q '"event":"needs-input"' "$INB"
 }
 
+@test "C5d: --hook Stop with non-array / null background_tasks -> done (defensive)" {
+  for p in '{"background_tasks":null}' '{"background_tasks":"abc"}' '{"background_tasks":5}' '{"session_crons":{"a":1}}' '[1,2]'; do
+    rm -f "$WJ"
+    printf '%s' "$p" | "$REPORT" w1 done --hook
+    [ "$(jq -r .status "$WJ")" = "done" ]
+  done
+}
+
+@test "C5e: --hook Stop whose background_tasks are all terminal -> done; unknown status -> waiting-bg" {
+  printf '%s' '{"background_tasks":[{"status":"completed"},{"status":"Killed"}]}' | "$REPORT" w1 done --hook
+  [ "$(jq -r .status "$WJ")" = "done" ]
+  printf '%s' '{"background_tasks":[{"type":"novel","status":"mystery"}]}' | "$REPORT" w1 done --hook
+  [ "$(jq -r .status "$WJ")" = "waiting-bg" ]
+}
+
+@test "C5f: a SubagentStop does not knock a worker out of waiting-bg" {
+  printf '%s' "$BG" | "$REPORT" w1 done --hook
+  "$REPORT" w1 subagent-done </dev/null
+  [ "$(jq -r .status "$WJ")" = "waiting-bg" ]
+  printf '%s' '{"background_tasks":[]}' | "$REPORT" w1 done --hook
+  [ "$(jq -r .status "$WJ")" = "done" ]
+}
+
 # ---- watchdog ----
 
 wd_setup() {
@@ -120,4 +143,13 @@ ahead_commit() {
 
 @test "C3: config.json carries watchdog.background_wait_seconds default 1800" {
   [ "$(jq -r '.watchdog.background_wait_seconds' "$BATS_TEST_DIRNAME/../_orch/config.json")" = "1800" ]
+}
+
+@test "C9: a waiting-bg worker whose window is gone is orphaned (dead sweep reports it)" {
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/watchdog.sh"
+  run worker_is_orphaned $'a\nb' waiting-bg w1
+  [ "$status" -eq 0 ]
+  run worker_is_orphaned $'w1\nb' waiting-bg w1
+  [ "$status" -ne 0 ]
 }

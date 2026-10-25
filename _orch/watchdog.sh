@@ -53,10 +53,12 @@ reap_after="$(jq -r '.watchdog.reap_terminal_after_seconds // 1800' "$cfg")"
 DEAD_CONFIRM_TICKS="${DEAD_CONFIRM_TICKS:-2}"
 
 # Pure predicate (no tmux, no fs): is a worker an orphan? True only when its status
-# is still active (spawning/working) AND its id is not among the live window names.
+# is still active (spawning/working/waiting-bg) AND its id is not among the live window names.
 # <live_windows> is a newline-separated list of tmux window names.
 worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
-  case "$2" in working | spawning) ;; *) return 1 ;; esac
+  # waiting-bg (issue #163) is active too: a window killed while parked on
+  # background work must still be reported dead, not left waiting forever.
+  case "$2" in working | spawning | waiting-bg) ;; *) return 1 ;; esac
   printf '%s\n' "$1" | grep -Fxq "$3" && return 1
   return 0
 }
