@@ -20,16 +20,13 @@ setup() {
   export PROJECT_ROOT="$BATS_TEST_TMPDIR/proj"
   export SESSION_NAME="orch"
   mkdir -p "$PROJECT_ROOT" "$ORCH_ROOT/_orch"
-  cat > "$ORCH_ROOT/_orch/config.json" <<'JSON'
-{
-  "thresholds": { "max_workers": 4, "min_free_mb": 0, "est_worker_mb": 0, "spawn_inject_retries": 2 },
-  "budget": { "enabled": false, "max_usd": 5.0, "est_usd_per_worker": 0.5 },
-  "tui_patterns": {
-    "permission_dialog_regex": "Do you want to proceed\\?",
-    "trust_dialog_regex": "trust this folder|created or one you trust"
-  }
-}
-JSON
+  # tui_patterns come from the SHIPPED config, so these tests exercise the
+  # regexes that actually ship rather than a private copy that can drift.
+  jq '{
+    thresholds: { max_workers: 4, min_free_mb: 0, est_worker_mb: 0, spawn_inject_retries: 2 },
+    budget: { enabled: false, max_usd: 5.0, est_usd_per_worker: 0.5 },
+    tui_patterns: .tui_patterns
+  }' "$BATS_TEST_DIRNAME/../_orch/config.json" > "$ORCH_ROOT/_orch/config.json"
 
   # tmux stub: capture-pane always echoes whatever is currently in PANE_FILE,
   # so each test drives the exact pane shape it wants. Every call is logged
@@ -174,4 +171,45 @@ EOF
   paste_calls="$(grep -c 'paste-buffer' "$CALLS")"
   [ "$paste_calls" -eq 1 ]
   grep -Fq 'worker w3: task text still sits unsent in the input box; not re-pasting' "$ORCH_ROOT/_orch/state/orch.log"
+}
+
+@test "spawn.sh sends the task itself once a pre-injection dialog clears, and never confirms an unsent task" {
+  # The trust dialog is up when the first injection is attempted (so it is
+  # skipped), then clears to a plain ready prompt with no startup banner. A
+  # ready prompt must NOT confirm a task that was never sent, and the ladder
+  # must paste the task rather than press a bare Enter into an empty box.
+  cat > "$PANE_FILE" <<'EOF'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF
+  COUNT_FILE="$BATS_TEST_TMPDIR/captures"
+  echo 0 > "$COUNT_FILE"
+  cat > "$STUBBIN/tmux" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    n=\$(( \$(cat "$COUNT_FILE") + 1 )); echo "\$n" > "$COUNT_FILE"
+    [ "\$n" -gt 5 ] && echo '❯ ' > "$PANE_FILE"
+    cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w4 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w4 (sonnet)"* ]]
+
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  # Exactly one Enter: send_prompt's own trailing Enter for that one paste --
+  # no bare-Enter retry into the empty input box.
+  [ "$(bare_enter_count)" -eq 1 ]
+  grep -Fq 'worker w4: dialog on screen before first injection attempt; not sending' "$ORCH_ROOT/_orch/state/orch.log"
+  grep -Fq 'worker w4: dialog cleared; sending the task' "$ORCH_ROOT/_orch/state/orch.log"
 }

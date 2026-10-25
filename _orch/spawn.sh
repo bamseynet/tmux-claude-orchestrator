@@ -396,12 +396,17 @@ preamble='[Orchestrated task — complete it directly. Do not invoke any skill u
 # prompt -- is actually on screen. That is #133's production repro: the trust
 # dialog's Enter is destructive (exits the session), and --dangerously-skip-permissions
 # does not suppress it. If a dialog is already up, skip this send entirely; the
-# retry loop below will keep polling confirm_inject without ever pressing Enter
-# into it.
+# retry loop below sends the task itself (a paste, not a bare Enter into an
+# empty input box) only once the dialog has cleared, and never presses Enter
+# into it. task_sent records whether the task has gone out at all: until it
+# has, no pane evidence can confirm it -- a ready prompt after the dialog
+# clears would otherwise "confirm" a task that was never sent.
+task_sent=0
 if pane_has_dialog "$S:$id"; then
   log "worker $id: dialog on screen before first injection attempt; not sending"
 else
   send_prompt "$S:$id" "${preamble}${task}"
+  task_sent=1
 fi
 
 # Guard 1 (inject verification + retry, hardened by issue #51): a send can land
@@ -431,8 +436,19 @@ hook_reported() {
   fi
   return 1
 }
+# confirm_inject, but only once the task was actually sent; before that, just
+# give an on-screen dialog the same bounded window to clear, and report
+# "not confirmed".
+confirm_sent() {
+  if [ "$task_sent" -ne 1 ]; then
+    local i=0
+    while [ "$i" -lt 15 ] && pane_has_dialog "$S:$id"; do sleep 1; i=$((i+1)); done
+    return 1
+  fi
+  confirm_inject "$S:$id" 15
+}
 spawn_ok=0
-if confirm_inject "$S:$id" 15 || hook_reported; then
+if confirm_sent || hook_reported; then
   spawn_ok=1
 else
   max_retries="$(jq -r '.thresholds.spawn_inject_retries // 2' "$CONFIG")"
@@ -446,11 +462,17 @@ else
       # permission dialog inject_confirmed hasn't polled again yet; either way
       # sending Enter here risks picking a destructive default. Just re-poll.
       log "worker $id: dialog on screen (retry $retry/$max_retries); refusing bare Enter"
+    elif [ "$task_sent" -ne 1 ]; then
+      # The dialog that blocked the first injection has cleared: nothing is in
+      # the input box for a bare Enter to submit, so send the task itself.
+      log "worker $id: dialog cleared; sending the task (retry $retry/$max_retries)"
+      send_prompt "$S:$id" "${preamble}${task}"
+      task_sent=1
     else
       log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
       tmux send-keys -t "$S:$id" Enter
     fi
-    if confirm_inject "$S:$id" 15 || hook_reported; then
+    if confirm_sent || hook_reported; then
       spawn_ok=1
       break
     fi
@@ -471,7 +493,8 @@ else
     else
       log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
       send_prompt "$S:$id" "${preamble}${task}"
-      if confirm_inject "$S:$id" 15 || hook_reported; then spawn_ok=1; fi
+      task_sent=1
+      if confirm_sent || hook_reported; then spawn_ok=1; fi
     fi
   fi
 fi

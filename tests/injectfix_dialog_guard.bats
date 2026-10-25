@@ -126,11 +126,37 @@ Enter to confirm · Esc to cancel'
 # must survive the new checks being inserted ahead of it.
 
 @test "inject_confirmed still refuses a never-dispatched injection under the banner when no dialog is present (#128 regression guard)" {
+  # Deliberately NO paste chip: a chip is vetoed by pane_has_pending_paste()
+  # BEFORE the new dialog checks, so a chip-shaped pane would pass here even
+  # if the banner veto itself were broken. A short task rendered literally
+  # leaves only the banner veto between this pane and is_ready()'s "❯".
   fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
 ╭────────────────────────────────╮
-│ ❯ [Pasted text #1 +31 lines]   │
+│ ❯ do the thing                 │
 ╰────────────────────────────────╯
   Sonnet 5  energy'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -ne 0 ]
+}
+
+@test "inject_confirmed is NOT fooled by the permission-dialog wording inside an unsent input row" {
+  # A short task that merely CONTAINS the dialog header, rendered literally in
+  # the input box under the banner, was never submitted -- the permission
+  # check (which outranks the banner veto) must not treat it as a dialog.
+  fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
+╭──────────────────────────────────────────────╮
+│ ❯ add a "Do you want to proceed?" prompt     │
+╰──────────────────────────────────────────────╯'
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
+
+@test "pane_has_permission_dialog matches the header inside the dialog's box border" {
+  fake_tmux_set_pane "orch" "orchestrator" '╭──────────────────────────────╮
+│ Bash command                 │
+│ Do you want to proceed?      │
+│ ❯ 1. Yes                     │
+╰──────────────────────────────╯'
+  run pane_has_permission_dialog "orch:orchestrator"
+  [ "$status" -eq 0 ]
 }

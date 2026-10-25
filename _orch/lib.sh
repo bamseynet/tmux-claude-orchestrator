@@ -435,7 +435,13 @@ TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?(
 # render AFTER Claude Code has accepted a prompt and started acting on it, so
 # unlike every other signal above it is POSITIVE evidence an injection landed
 # (issue #133) -- never a reason to distrust the pane.
-TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex 'Do you want to proceed\?')"
+# Anchored to a line of its own (optionally inside the dialog's box border):
+# the header renders alone on its row, while the same words in a short task
+# rendered literally in the input box ("│ ❯ ...Do you want to proceed?..."), in
+# model prose, or in a --resume transcript sit inside other text -- an
+# unanchored match there would confirm a never-submitted task (positive
+# evidence below outranks the banner veto) or gate the injection forever.
+TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]│]*Do you want to proceed\?[[:space:]│]*$')"
 # The startup folder-trust dialog ("Is this a project you created or one you
 # trust?" / "trust this folder"). Unlike the permission dialog, this is a
 # PRE-acceptance gate -- it can appear before any prompt has ever reached
@@ -444,7 +450,7 @@ TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex 'Do you want
 # session). Its highlighted default is the destructive "No, exit" choice, so a
 # bare Enter sent while it is on screen exits the session instead of
 # submitting anything.
-TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex 'trust this folder|created or one you trust')"
+TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex 'trust this folder|trust the files in this folder|created or one you trust')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -525,7 +531,8 @@ pane_has_trust_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_TRUST_DIALOG_REGEX"
 # while EITHER dialog is up: Enter is consumed as "select the highlighted
 # choice", not "submit the input box", and for the trust dialog that choice
 # exits the session (issues #132/#133).
-pane_has_dialog() { pane_has_permission_dialog "$1" || pane_has_trust_dialog "$1"; }
+# One capture, not two: this runs on every rung of the injection ladder.
+pane_has_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_PERMISSION_DIALOG_REGEX|$TUI_TRUST_DIALOG_REGEX"; }
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
 # defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn
