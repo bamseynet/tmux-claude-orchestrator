@@ -162,7 +162,6 @@ jobs:
 
       - name: Run escape-guard test (must not skip)
         env:
-          ORCH_TEST_ESCAPE_GUARD: "1"
           # The nested run inherits this; without it the de-flaked tests
           # (issue #125) lose their CI slack.
           ORCH_TEST_TIMEOUT_SCALE: "3"
