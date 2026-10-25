@@ -273,7 +273,25 @@ else
       say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! git -C "$proj" worktree add -B "$branch" "$wdir" >/dev/null 2>&1; then
+  elif ! { base_ref=""; base_sha=""
+           # Issue #153: branch from the remote base, not the target checkout's HEAD.
+           want="${ORCH_BASE_BRANCH:-main}"
+           if git -C "$proj" remote get-url origin >/dev/null 2>&1 \
+              && ! git -C "$proj" fetch --quiet origin >/dev/null 2>&1; then
+             log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
+           fi
+           for cand in "origin/$want" origin/HEAD "$want" HEAD; do
+             if git -C "$proj" rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1; then
+               base_ref="$cand"; break
+             fi
+           done
+           base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
+           if [ "${base_ref#origin/}" != "$base_ref" ] \
+              && local_main="$(git -C "$proj" rev-parse -q --verify "refs/heads/$want" 2>/dev/null)" \
+              && [ "$local_main" != "$base_sha" ]; then
+             log "spawn $id: local $want ($local_main) differs from $base_ref ($base_sha); basing worker on $base_ref"
+           fi
+           git -C "$proj" worktree add -B "$branch" "$wdir" "$base_ref" >/dev/null 2>&1; }; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
@@ -357,7 +375,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 # compute worker age; report.sh's later writes only ever touch `updated`.
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
-  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}'
+  --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
+  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}
+   + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
