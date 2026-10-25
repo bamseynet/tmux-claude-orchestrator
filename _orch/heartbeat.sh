@@ -178,32 +178,42 @@ master_reset_due() {
     and ($now - ($last.ts // 0)) >= $cool' >/dev/null 2>&1
 }
 
+# Atomically replace master-reset.json with stdin.
+_master_reset_write() {
+  local tmp="$STATE_DIR/master-reset.json.tmp.$$"
+  # -s: a failed upstream jq must not clobber the file with nothing.
+  cat > "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$STATE_DIR/master-reset.json" || rm -f "$tmp"
+}
+
 # Loop guard: the first reading from the post-reset session that is still over
 # threshold means the floor (CLAUDE.md + rehydrate + notes) is itself too big.
 # Latch backoff=true (log once) until `orch up` clears master-reset.json.
 # Judges .first (the status line's first reading of that session), not the
 # current one: by the time this tick runs the resumed master may already have
 # grown well past its floor. Falls back to the current reading if absent.
+# Like master_reset_due, a reading needs numeric tokens: a pct-only record
+# (current_usage null right after /clear) can carry a stale pct, which would
+# latch a spurious backoff -- or "verify" a floor that was never measured.
 master_reset_guard() { # <ctx_json> <last_json> <pct> <fraction>
-  local ctx="$1" last="$2" pct="${3:-60}" frac="${4:-0.35}" verdict
+  local ctx="$1" last="$2" pct="${3:-60}" frac="${4:-0.35}" verdict judged
   [ -n "$last" ] || return 0
   verdict="$(jq -nr --argjson c "${ctx:-null}" --argjson l "$last" --argjson pct "${pct:-60}" --argjson frac "${frac:-0.35}" '
     ($c // {}) as $c0 | ($c0 + ($c0.first // {})) as $c |
     if ($l.backoff // false) == true or ($l.verified // false) == true then "skip"
     elif ($l.old_session_id // "") == "" or ($c.session_id // "") == "" or $c.session_id == $l.old_session_id then "skip"
     elif (($c.window // 0) | type != "number") or ($c.window // 0) <= 0 then "skip"
-    elif ($c.pct == null and $c.tokens == null) then "skip"
+    elif ($c.tokens | type) != "number" then "skip"
     elif (($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $c.window)) then "backoff"
     else "ok" end' 2>/dev/null)" || return 0
   case "$verdict" in
     backoff)
-      jq '.backoff = true' <<<"$last" > "$STATE_DIR/master-reset.json.tmp.$$" \
-        && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
-      log "master context reset loop: first post-reset reading is still over threshold (pct=$(jq -r '.pct' <<<"$ctx") tokens=$(jq -r '.tokens' <<<"$ctx")); the context floor is too large -- automatic resets disabled until 'orch up'"
+      jq -c '.backoff = true' <<<"$last" | _master_reset_write
+      # Report the reading that was judged (.first), not the current one.
+      judged="$(jq -r '(. + (.first // {})) | "pct=\(.pct) tokens=\(.tokens)"' <<<"$ctx" 2>/dev/null)"
+      log "master context reset loop: first post-reset reading is still over threshold ($judged); the context floor is too large -- automatic resets disabled until 'orch up'"
       ;;
     ok)
-      jq '.verified = true' <<<"$last" > "$STATE_DIR/master-reset.json.tmp.$$" \
-        && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
+      jq -c '.verified = true' <<<"$last" | _master_reset_write
       ;;
   esac
   return 0
@@ -223,6 +233,12 @@ _master_reset_event() { # <event> [old_session_id]
   line="$(jq -nc --arg e "$1" --arg ts "$(date -u +%FT%TZ)" --arg o "${2:-}" '{id:"master",event:$e,old_session_id:$o,ts:$ts}')" || return 0
   printf '%s\n' "$line" >> "$STATE_DIR/events.jsonl"
   printf '%s\n' "$line" >> "$INBOX"
+}
+# Abort without /clear: log, throttle retries by the cooldown, tell the master.
+_master_reset_abort() { # <log message> <old_session_id> <cooldown>
+  log "$1"
+  printf '%s\n' "$(( $(date +%s) + ${3:-1800} ))" > "$STATE_DIR/master-reset-retry-after"
+  _master_reset_event master-reset-aborted "$2"
 }
 master_reset_tick() { # <session:window>
   local target="$1" ctx sess last cfg enabled pct frac cool cptimeout now retry_after
@@ -280,12 +296,18 @@ master_reset_tick() { # <session:window>
   done
   if [ -n "$why" ]; then :
   elif [ "$ok" -ne 1 ]; then why="checkpoint not completed within ${cptimeout}s"
-  elif pane_has_draft "$target"; then why="draft appeared"; fi
+  elif pane_has_draft "$target"; then why="draft appeared"
+  else
+    # One is_ready sample can catch a transient frame between tool calls of a
+    # turn that is still running; /clear typed then lands mid-turn. Settle and
+    # re-confirm idle (and still no draft) right before sending it.
+    sleep 1
+    if ! is_ready "$target"; then why="master busy again before /clear"
+    elif pane_has_draft "$target"; then why="draft appeared"; fi
+  fi
   if [ -n "$why" ]; then
-    log "master reset aborted: $why (no /clear sent)"
-    printf '%s\n' "$(( $(date +%s) + ${cool:-1800} ))" > "$STATE_DIR/master-reset-retry-after"
     # The master was told to stop; tell it the reset is off so it resumes.
-    _master_reset_event master-reset-aborted "$old_sid"
+    _master_reset_abort "master reset aborted: $why (no /clear sent)" "$old_sid" "$cool"
     return 0
   fi
   send_prompt "$target" "/clear"
@@ -300,15 +322,19 @@ master_reset_tick() { # <session:window>
     new_sid=""; sleep 1; i=$((i+1))
   done
   if [ -z "$new_sid" ]; then
-    log "master reset unconfirmed: session id unchanged after /clear; treating as aborted"
-    printf '%s\n' "$(( $(date +%s) + ${cool:-1800} ))" > "$STATE_DIR/master-reset-retry-after"
-    _master_reset_event master-reset-aborted "$old_sid"
+    # Latch backoff: either '/clear' is sitting unsent in the input row (the
+    # operator must look; retrying would stack more text on it), or the
+    # SessionStart hook is not recording sessions -- then clears are real but
+    # invisible to the loop guard, and retrying every cooldown would be an
+    # unguarded reset loop. Both need a human; `orch up` re-arms.
+    jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" \
+      '{ts:$ts, old_session_id:$o, backoff:true, unconfirmed:true}' | _master_reset_write
+    _master_reset_abort "master reset unconfirmed: session id unchanged after /clear ('/clear' may be unsent in the master's input, or the SessionStart hook is not recording) -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
     return 0
   fi
   wait_ready "$target" 45 || log "master not ready 45s after /clear"
-  printf '%s\n' "$(jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
-    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}')" > "$STATE_DIR/master-reset.json.tmp.$$" \
-    && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
+  jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
+    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
   log "master context reset (pct=$cpct tokens=$ctok)"
   # Also wakes the freshly cleared master (via the inbox) so it resumes the
   # in-flight work its rehydrated notes describe instead of idling until the

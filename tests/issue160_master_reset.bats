@@ -400,15 +400,17 @@ S1='{"session_id":"s1"}'
   refute_grep '/clear' "$CALLS"
 }
 
-@test "B8: /clear whose session id never changes -> unconfirmed, no master-reset.json, master told" {
+@test "B8: /clear whose session id never changes -> unconfirmed, resets latched off, master told" {
   touch "$TOUCH_FLAG" "$NO_CLEAR_FLAG"
   ctx 75 400000 s1; sess s1
   start_hb
   wait_for grep -q 'master reset unconfirmed' "$LOG"
   stop_hb
   grep -q 'PASTE<</clear>>' "$CALLS"
-  [ ! -e "$STATE_DIR/master-reset.json" ]
-  [ -e "$STATE_DIR/master-reset-retry-after" ]
+  # latched off (no reset recorded as done) until orch up
+  [ "$(jq .backoff "$STATE_DIR/master-reset.json")" = "true" ]
+  jq -e 'has("verified") | not' "$STATE_DIR/master-reset.json"
+  [ "$(grep -c 'PASTE<</clear>>' "$CALLS")" -eq 1 ]
   grep -q '"event":"master-reset-aborted"' "$STATE_DIR/events.jsonl"
   refute_grep '"event":"master-reset"' "$STATE_DIR/events.jsonl"
 }
@@ -440,4 +442,25 @@ S1='{"session_id":"s1"}'
   stop_hb
   grep -q 'master reset aborted: heartbeat stopping' "$LOG"
   refute_grep '/clear' "$CALLS"
+}
+
+@test "B9: a pct-only post-/clear record (tokens null, stale pct) neither backs off nor verifies" {
+  jq -nc '{ts:1,old_session_id:"a",pct:80,tokens:400000}' > "$STATE_DIR/master-reset.json"
+  # stale pct over threshold, no real reading yet (.first null)
+  jq -nc '{pct:75,tokens:null,window:1000000,session_id:"b",first:null}' > "$STATE_DIR/master-context.json"; sess b
+  master_reset_guard "$(cat "$STATE_DIR/master-context.json")" "$(cat "$STATE_DIR/master-reset.json")" 60 0.35
+  [ "$(jq '.backoff // false' "$STATE_DIR/master-reset.json")" = "false" ]
+  [ "$(jq '.verified // false' "$STATE_DIR/master-reset.json")" = "false" ]
+  # stale pct of 0: must not "verify" an unmeasured floor either
+  jq -nc '{pct:0,tokens:null,window:1000000,session_id:"b",first:null}' > "$STATE_DIR/master-context.json"
+  master_reset_guard "$(cat "$STATE_DIR/master-context.json")" "$(cat "$STATE_DIR/master-reset.json")" 60 0.35
+  [ "$(jq '.verified // false' "$STATE_DIR/master-reset.json")" = "false" ]
+}
+
+@test "B9: the loop-guard log reports the judged FIRST reading, not the current one" {
+  jq -nc '{ts:1,old_session_id:"a",pct:80,tokens:400000}' > "$STATE_DIR/master-reset.json"
+  jq -nc '{pct:90,tokens:500000,window:1000000,session_id:"b",first:{pct:70,tokens:400000}}' > "$STATE_DIR/master-context.json"
+  master_reset_guard "$(cat "$STATE_DIR/master-context.json")" "$(cat "$STATE_DIR/master-reset.json")" 60 0.35
+  [ "$(jq .backoff "$STATE_DIR/master-reset.json")" = "true" ]
+  grep -q 'reset loop: .*(pct=70 tokens=400000)' "$LOG"
 }
