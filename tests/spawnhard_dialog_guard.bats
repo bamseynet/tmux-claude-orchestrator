@@ -338,3 +338,41 @@ EOF2
   grep -Fq 'worker w7: dialog cleared after the last retry; sending the task once' "$LOGF"
   grep -Fq 'worker w7: first send unconfirmed; sending one bare Enter' "$LOGF"
 }
+
+@test "a hook status written for the dialog does not confirm the task sent after the dialog clears" {
+  # A Notification hook writes needs-input for the trust dialog itself; the
+  # dialog then clears and the task is sent, but the paste is lost (banner
+  # still up, empty input box). The stale pre-send status must not count as
+  # proof the task was submitted.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  WJ="$ORCH_ROOT/_orch/state/workers/w8.json"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  CLEARED="$BATS_TEST_TMPDIR/cleared"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    if [ ! -f "$CLEARED" ] && grep -q 'not sending' "$LOGF" 2>/dev/null && [ -f "$WJ" ]; then
+      jq '.status = "needs-input"' "$WJ" > "$WJ.t" && mv "$WJ.t" "$WJ"
+      touch "$CLEARED"
+      printf '%s\n' '✻ Welcome to Claude Code!' '│ ❯                              │' > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w8 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawn-failed w8"* ]]
+  run jq -r .status "$WJ"
+  [ "$output" = "spawn-failed" ]
+}

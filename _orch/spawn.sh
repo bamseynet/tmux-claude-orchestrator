@@ -440,6 +440,16 @@ hook_reported() {
   fi
   return 1
 }
+# Send the task and record it as sent. On a FIRST send that a dialog held back,
+# first clear any hook status written in the meantime (e.g. a Notification for
+# the dialog itself): it predates the task, so leaving it would let
+# hook_reported() count a lost paste as submitted (issues #132/#133).
+send_task() {
+  [ "$task_sent" -eq 1 ] || update_worker_status "$id" --argjson hs "$hook_statuses" \
+    ".status = (if ($hook_status_filter) then \"spawning\" else .status end)"
+  send_prompt "$S:$id" "${preamble}${task}"
+  task_sent=1
+}
 # confirm_inject, but only once the task was actually sent; before that, just
 # give an on-screen dialog the same bounded window to clear, and report
 # "not confirmed".
@@ -470,8 +480,7 @@ else
       # The dialog that blocked the first injection has cleared: nothing is in
       # the input box for a bare Enter to submit, so send the task itself.
       log "worker $id: dialog cleared; sending the task (retry $retry/$max_retries)"
-      send_prompt "$S:$id" "${preamble}${task}"
-      task_sent=1
+      send_task
       # This rung is the FIRST send, not a bare-Enter retry: hand its budget
       # back so the #51 bare-Enter retries stay available for this paste even
       # when the dialog outlasted earlier rungs. Bounded: task_sent flips once.
@@ -507,8 +516,7 @@ else
         log "worker $id: dialog cleared after the last retry; sending the task once"
       fi
       first_send=$((1 - task_sent))
-      send_prompt "$S:$id" "${preamble}${task}"
-      task_sent=1
+      send_task
       if confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then
