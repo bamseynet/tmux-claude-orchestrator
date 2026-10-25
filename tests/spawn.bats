@@ -113,7 +113,7 @@ NOTIF_MATCHER='permission_prompt|elicitation_dialog|elicitation_url_dialog|agent
 # The string compare above would happily pin a typo that spawn.sh and NOTIF_MATCHER
 # share, and an unknown exact-match value never fires. Check every alternative
 # against Claude Code's notification types, written out independently (hooks
-# reference matcher table + `notificationType:` strings in CLI 2.1.310), and that
+# reference matcher table + the notification-type enum in CLI 2.1.310), and that
 # the non-blocking types stay excluded.
 @test "Notification matcher names only real blocking notification types (issue #163 A)" {
   run "$SPAWN" w1t sonnet "do the thing" --no-worktree
@@ -121,8 +121,9 @@ NOTIF_MATCHER='permission_prompt|elicitation_dialog|elicitation_url_dialog|agent
   m="$(jq -r '.hooks.Notification[0].matcher' "$ORCH_ROOT/_orch/state/settings/w1t.json")"
   blocking=" permission_prompt elicitation_dialog elicitation_url_dialog agent_needs_input worker_permission_prompt "
   nonblocking=" idle_prompt auth_success agent_completed elicitation_complete elicitation_response "
-  # exact-match list: only letters/digits/_/| (anything else flips to regex mode)
-  [[ "$m" =~ ^[a-z_|]+$ ]]
+  # exact-match list: only letters/digits/_/| (anything else flips to regex mode;
+  # Claude Code's own test is /^[a-zA-Z0-9_|]+$/)
+  [[ "$m" =~ ^[a-zA-Z0-9_|]+$ ]]
   IFS='|' read -ra alts <<<"$m"
   [ "${#alts[@]}" -ge 1 ]
   for a in "${alts[@]}"; do
