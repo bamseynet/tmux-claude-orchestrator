@@ -268,3 +268,88 @@ EOF
   refute_grep 'master window down; requeued events' "$LOG"
   [ ! -s "$INBOX" ]
 }
+
+# --- Issue #163 part B: denylisted lines are stripped from mixed batches --------
+# Each batch is appended with ONE write: the 0s-interval loop could otherwise
+# drain the lines in separate ticks and never exercise the mixed-batch strip.
+
+@test "case11 (#163): a mixed batch is injected without its subagent-done lines" {
+  start_hb
+  printf '%s\n' '{"id":"w1","event":"subagent-done","ts":"2026-10-25T10:00:00Z"}' \
+    '{"id":"w2","event":"done","ts":"2026-10-25T10:00:01Z"}' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q '"event":"done"' "$PASTED"
+  refute_grep '"event":"subagent-done"' "$PASTED"
+}
+
+@test "case12 (#163): non-denylisted reason mentioning subagent-done and a malformed line survive stripping" {
+  start_hb
+  printf '%s\n' '{"id":"w1","event":"subagent-done"}' \
+    '{"id":"w2","event":"merge-blocked","reason":"waiting on subagent-done hook"}' \
+    'not json at all' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q 'waiting on subagent-done hook' "$PASTED"
+  grep -q 'not json at all' "$PASTED"
+  refute_grep '"id":"w1"' "$PASTED"
+}
+
+@test "case13 (#163): a requeued mixed batch keeps its actionable line and drops noise" {
+  printf '❯ draft text\n? for shortcuts' > "$PANE_TEXT_FILE"
+  # Keep the #52 valve from force-delivering (and emptying the inbox) while
+  # the 0s-interval loop requeues before the test can stop it.
+  jq '.heartbeat.max_draft_requeue_ticks = 100000 | .heartbeat.max_draft_requeue_seconds = 3600' \
+    "$ORCH_ROOT/_orch/config.json" > "$ORCH_ROOT/_orch/config.json.tmp"
+  mv "$ORCH_ROOT/_orch/config.json.tmp" "$ORCH_ROOT/_orch/config.json"
+  start_hb
+  printf '%s\n' '{"id":"w1","event":"subagent-done"}' '{"id":"w2","event":"needs-input"}' >> "$INBOX"
+
+  wait_for grep -q 'unsent draft' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q '"event":"needs-input"' "$INBOX"
+  refute_grep '"event":"subagent-done"' "$INBOX"
+}
+
+@test "case14 (#163): a denylisted object concatenated with an actionable one on one line is kept" {
+  start_hb
+  printf '%s\n' '{"id":"w1","event":"subagent-done"}' \
+    '{"id":"w1","event":"subagent-done"}{"id":"w3","note":"torn append"}' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q 'torn append' "$PASTED"
+}
+
+@test "case15 (#163): denylisted lines plus a whitespace-only line stay suppressed" {
+  start_hb
+  printf '%s\n' '{"id":"w1","event":"subagent-done"}' '   ' >> "$INBOX"
+
+  wait_for grep -q 'noise-only batch' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  refute_grep 'send-keys' "$CALLS"
+}
+
+@test "case16 (#163): kept lines are delivered byte-for-byte (invalid UTF-8 is not rewritten)" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n{"id":"w3","event":"done","note":"raw\377byte"}\n' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  LC_ALL=C grep -q $'raw\377byte' "$PASTED"
+  refute_grep 'subagent-done' "$PASTED"
+}
