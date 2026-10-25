@@ -19,13 +19,17 @@
 # recorded and reported instead of hitting the live orchestrator session on
 # this machine (orch-16da41b0) or whatever tmux server the box running CI has.
 #
-# Whole suite vs. a slice: CI (`bats tests/`, which picks this file up like
-# any other) runs the WHOLE suite under the guard -- it's the only place this
-# matters for real, and CI capacity is not this repo's scarce resource. A
-# local/interactive run instead checks the representative slice of files
-# that actually mention tmux (grep -l tmux tests/*.bats; the same set the
-# issue's own audit used) -- same risk surface, without doubling the wall
-# time of every local `bats tests/`.
+# Opt-in, not default (issue #162): the property test below runs a nested
+# `bats` over other test files, which roughly doubles wall time (~9 min on a
+# 4-core dev box). It therefore skips unless ORCH_TEST_ESCAPE_GUARD=1. CI runs
+# it in its own parallel `escape-guard` job (which fails if the test skips);
+# the main `test` job runs plain `bats tests/` and reports it as a skip. Locally:
+#   ORCH_TEST_ESCAPE_GUARD=1 bats tests/issue125_tmux_escape_guard.bats
+# Once opted in, $CI only selects the targets: CI runs the WHOLE suite under
+# the guard; a local opt-in runs the slice of files that mention tmux
+# (grep -l tmux tests/*.bats; the same set the issue's own audit used) -- that
+# slice is nearly the whole suite (67 of 76 files), so expect a long run.
+# The two mechanism self-tests are ungated and run everywhere.
 #
 # No tmux on the box at all: the shim still logs and neutralises destructive
 # verbs; for anything else it would need to forward to a real tmux that
@@ -120,7 +124,11 @@ teardown() {
 
 # --- the property itself -------------------------------------------------------
 
-@test "escape guard: no test in the (CI: whole; local: tmux-touching) suite reaches a real tmux server" {
+@test "escape guard: no test in the suite (opt-in: ORCH_TEST_ESCAPE_GUARD=1) reaches a real tmux server" {
+  if [ "${ORCH_TEST_ESCAPE_GUARD:-}" != "1" ]; then
+    skip "nested escape-guard run is opt-in: set ORCH_TEST_ESCAPE_GUARD=1 (CI runs it in the escape-guard job)"
+  fi
+
   LOG="$BATS_TEST_TMPDIR/suite-escapes.log"
   WRAP="$BATS_TEST_TMPDIR/suite-wrap"
   NESTED_OUT="$BATS_TEST_TMPDIR/nested.out"
