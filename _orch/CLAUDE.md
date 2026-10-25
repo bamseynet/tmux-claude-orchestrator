@@ -169,7 +169,9 @@ in-flight operation, then stop. Once the file is rewritten and you are idle it
 sends `/clear`; the SessionStart hook then rehydrates a fresh context. It aborts
 (no `/clear`) if you don't finish within `checkpoint_timeout_s`, or a draft is
 in the input. If the first reading after a reset is still over threshold, resets
-back off until `orch up`.
+back off until `orch up`. Either way you then get a heartbeat event from id
+`master`: `master-reset` (context was cleared -- resume from the rehydrated
+notes) or `master-reset-aborted` (no reset happened -- carry on normally).
 Still treat every heartbeat you act on as a checkpoint boundary: refresh
 `master-notes.md` and `review-log.jsonl` as the last step of handling it.
 

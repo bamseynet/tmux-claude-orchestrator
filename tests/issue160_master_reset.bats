@@ -296,7 +296,31 @@ S1='{"session_id":"s1"}'
   sleep 0.5
   stop_hb
   [ "$(jq '.backoff // false' "$STATE_DIR/master-reset.json")" = "false" ]
+  # the guard actually ran and judged the reading (not a vacuous no-tick pass)
+  [ "$(jq '.verified' "$STATE_DIR/master-reset.json")" = "true" ]
   refute_grep 'master context reset loop' "$LOG"
+}
+
+@test "B5: guard judges the session's FIRST reading, not growth since the reset" {
+  jq -nc '{ts:1,old_session_id:"a",pct:80,tokens:400000}' > "$STATE_DIR/master-reset.json"
+  # the resumed master is already over threshold, but its post-/clear floor was small
+  jq -nc '{pct:90,tokens:500000,window:1000000,session_id:"b",first:{pct:12,tokens:60000}}' \
+    > "$STATE_DIR/master-context.json"; sess b
+  start_hb
+  wait_for jq -e '.verified == true' "$STATE_DIR/master-reset.json"
+  stop_hb
+  [ "$(jq '.backoff // false' "$STATE_DIR/master-reset.json")" = "false" ]
+  refute_grep 'master context reset loop' "$LOG"
+}
+
+@test "B5: guard backs off when the session's FIRST reading was over threshold" {
+  jq -nc '{ts:1,old_session_id:"a",pct:80,tokens:400000}' > "$STATE_DIR/master-reset.json"
+  jq -nc '{pct:90,tokens:500000,window:1000000,session_id:"b",first:{pct:70,tokens:400000}}' \
+    > "$STATE_DIR/master-context.json"; sess b
+  start_hb
+  wait_for jq -e '.backoff == true' "$STATE_DIR/master-reset.json"
+  stop_hb
+  grep -q 'master context reset loop' "$LOG"
 }
 
 @test "B5: orch up (bootstrap) clears the backoff" {
@@ -311,7 +335,62 @@ S1='{"session_id":"s1"}'
   mkdir -p "$tk/_orch/state"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBBIN/claude"; chmod +x "$STUBBIN/claude"
   jq -nc '{ts:1,old_session_id:"a",backoff:true}' > "$tk/_orch/state/master-reset.json"
+  echo 99999999999 > "$tk/_orch/state/master-reset-retry-after"
   PROJECT_ROOT="$BATS_TEST_TMPDIR/proj" ORCH_ROOT="$tk" SESSION_NAME=orch_i160_bs run "$tk/_orch/bootstrap.sh"
   [ "$status" -eq 0 ]
-  [ "$(jq '.backoff // false' "$tk/_orch/state/master-reset.json" 2>/dev/null || echo false)" = "false" ]
+  [ ! -e "$tk/_orch/state/master-reset.json" ]
+  [ ! -e "$tk/_orch/state/master-reset-retry-after" ]
+}
+
+# ---------------------------------------------------------------- review fixes
+@test "B6: a notes write in the same second as the checkpoint (before it was read) does not count" {
+  # No TOUCH_FLAG: the master never rewrites notes after the prompt. Its
+  # previous turn's write must not count; a future mtime makes ">= t0" true
+  # deterministically, so only the "mtime moved" check can stop the /clear.
+  touch -d "@$(( $(date +%s) + 60 ))" "$NOTES"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'master reset aborted' "$LOG"
+  stop_hb
+  refute_grep '/clear' "$CALLS"
+  [ ! -e "$STATE_DIR/master-reset.json" ]
+}
+
+@test "B6: a successful reset wakes the master with a master-reset event" {
+  touch "$TOUCH_FLAG"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'woke master with.*master-reset' "$LOG"
+  stop_hb
+  clr_line="$(grep -n 'PASTE<</clear>>' "$CALLS" | head -1 | cut -d: -f1)"
+  wake_line="$(grep -n '"event":"master-reset"' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$clr_line" ]
+  [ -n "$wake_line" ]
+  [ "$clr_line" -lt "$wake_line" ]
+}
+
+@test "B6: an aborted reset tells the master (master-reset-aborted event)" {
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'woke master with.*master-reset-aborted' "$LOG"
+  stop_hb
+  grep -q '"event":"master-reset-aborted"' "$STATE_DIR/events.jsonl"
+  refute_grep '/clear' "$CALLS"
+}
+
+@test "B7: the abort throttle is persisted, so a restarted heartbeat does not re-checkpoint" {
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'master reset aborted' "$LOG"
+  stop_hb
+  ra="$(cat "$STATE_DIR/master-reset-retry-after")"
+  [ "$ra" -gt "$(date +%s)" ]
+  : > "$CALLS"; rm -f "$STATE_DIR/.stop"
+  touch "$TOUCH_FLAG"
+  start_hb
+  sleep 0.7
+  stop_hb
+  grep -q 'capture-pane' "$CALLS"   # the heartbeat did tick
+  refute_grep 'master-notes.md' "$CALLS"
+  refute_grep '/clear' "$CALLS"
 }

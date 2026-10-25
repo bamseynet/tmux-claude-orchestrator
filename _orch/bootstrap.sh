@@ -225,8 +225,8 @@ else
 fi
 
 # issue #160: an operator `orch up` re-arms automatic master context resets
-# (clears the loop-guard backoff and the reset cooldown).
-rm -f "$STATE_DIR/master-reset.json"
+# (clears the loop-guard backoff, the reset cooldown and the abort throttle).
+rm -f "$STATE_DIR/master-reset.json" "$STATE_DIR/master-reset-retry-after"
 
 # Background heartbeat
 if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" "$here/heartbeat.sh"; then
