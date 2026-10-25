@@ -13,7 +13,7 @@ ORCH_DIR_SRC="$BATS_TEST_DIRNAME/../_orch"
 LIB="$ORCH_DIR_SRC/lib.sh"
 
 mkrepo() { # <path>
-  git init -q "$1"
+  git init -q -b main "$1"
   git -C "$1" config user.email test@example.com
   git -C "$1" config user.name test
   echo "$1" > "$1/f.txt"
