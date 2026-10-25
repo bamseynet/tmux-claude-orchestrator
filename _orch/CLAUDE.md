@@ -161,6 +161,15 @@ line (`master-statusline.sh`) records context usage to
 `_orch/state/master-context.json`. Auto-compaction fires earlier than Claude
 Code's default (`master_context.autocompact_window`, default 400000 tokens).
 `PreCompact` stays unused: it can only block compaction, not observe it usefully.
+**Automatic reset (issue #160).** When `master-context.json` shows you past
+`master_context.reset_pct` (60) or `reset_fraction` (0.35) of your *actual*
+window (`window`; an unknown window never triggers), the heartbeat sends you a
+checkpoint prompt: rewrite `master-notes.md` with your current plan and any
+in-flight operation, then stop. Once the file is rewritten and you are idle it
+sends `/clear`; the SessionStart hook then rehydrates a fresh context. It aborts
+(no `/clear`) if you don't finish within `checkpoint_timeout_s`, or a draft is
+in the input. If the first reading after a reset is still over threshold, resets
+back off until `orch up`.
 Still treat every heartbeat you act on as a checkpoint boundary: refresh
 `master-notes.md` and `review-log.jsonl` as the last step of handling it.
 

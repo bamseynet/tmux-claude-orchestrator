@@ -145,6 +145,110 @@ master_dead_alert() { # <target> <now> <interval_s>
 # Drop the standing alert once the master window is back.
 master_dead_clear() { rm -f "$STATE_DIR/.master-dead"; }
 
+# --- Master context reset (issue #160, part B of #158) ------------------------
+# The master's context only grows. When master-context.json (written by the
+# status line, #159) says it is too full, heartbeat -- the master's single prompt
+# injector (#55 keeps the watchdog out) -- asks it to checkpoint master-notes.md,
+# then /clear's it; the SessionStart hook re-injects role prompt + rehydrate.
+# Thresholds scale with the window the master actually has (.window), so 200k and
+# 1M masters both reset at a sensible point; an unknown window never resets.
+
+# Pure decision: no tmux, no file IO. Returns 0 only when a reset is due.
+# <ctx_json> <session_json> <now> <last_reset_json> <pct> <fraction> <cooldown> [enabled]
+# pct/fraction/cooldown/enabled fall back to 60 / 0.35 / 1800 / true when empty
+# (a missing master_context block). Freshness is session-id equality, not a
+# timestamp: the status line goes quiet when idle and may not re-run after /clear.
+master_reset_due() {
+  local ctx="$1" sess="$2" now="$3" last="${4:-}" pct="${5:-}" frac="${6:-}" cool="${7:-}" enabled="${8:-}"
+  [ "$enabled" = "false" ] && return 1
+  [ -n "$last" ] || last='{}'
+  jq -ne --argjson ctx "${ctx:-null}" --argjson sess "${sess:-null}" --argjson last "$last"          --argjson now "$now" --argjson pct "${pct:-60}" --argjson frac "${frac:-0.35}"          --argjson cool "${cool:-1800}" '
+    ($ctx // {}) as $c | ($sess // {}) as $s |
+    ($c.window // 0) as $w |
+    ($c.session_id // "") as $cid |
+    ($last.backoff // false) != true
+    and $cid != "" and $cid == ($s.session_id // "")
+    and ($w | type == "number") and $w > 0
+    and ((($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $w)))
+    and ($now - ($last.ts // 0)) >= $cool' >/dev/null 2>&1
+}
+
+# Loop guard: the first reading from the post-reset session that is still over
+# threshold means the floor (CLAUDE.md + rehydrate + notes) is itself too big.
+# Latch backoff=true (log once) until `orch up` clears master-reset.json.
+master_reset_guard() { # <ctx_json> <last_json> <pct> <fraction>
+  local ctx="$1" last="$2" pct="${3:-60}" frac="${4:-0.35}" verdict
+  [ -n "$last" ] || return 0
+  verdict="$(jq -nr --argjson c "${ctx:-null}" --argjson l "$last" --argjson pct "${pct:-60}" --argjson frac "${frac:-0.35}" '
+    ($c // {}) as $c |
+    if ($l.backoff // false) == true or ($l.verified // false) == true then "skip"
+    elif ($l.old_session_id // "") == "" or ($c.session_id // "") == "" or $c.session_id == $l.old_session_id then "skip"
+    elif (($c.window // 0) | type != "number") or ($c.window // 0) <= 0 then "skip"
+    elif ($c.pct == null and $c.tokens == null) then "skip"
+    elif (($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $c.window)) then "backoff"
+    else "ok" end' 2>/dev/null)" || return 0
+  case "$verdict" in
+    backoff)
+      jq '.backoff = true' <<<"$last" > "$STATE_DIR/master-reset.json.tmp.$$" \
+        && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
+      log "master context reset loop: first post-reset reading is still over threshold (pct=$(jq -r '.pct' <<<"$ctx") tokens=$(jq -r '.tokens' <<<"$ctx")); the context floor is too large -- automatic resets disabled until 'orch up'"
+      ;;
+    ok)
+      jq '.verified = true' <<<"$last" > "$STATE_DIR/master-reset.json.tmp.$$" \
+        && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
+      ;;
+  esac
+  return 0
+}
+
+# One tick of the reset machinery. Never forces: any doubt aborts without /clear.
+# $_MASTER_RESET_RETRY_AFTER (epoch) throttles retries after a post-checkpoint abort.
+_MASTER_RESET_RETRY_AFTER=0
+master_reset_tick() { # <session:window>
+  local target="$1" ctx sess last cfg enabled pct frac cool cptimeout now
+  ctx="$(cat "$STATE_DIR/master-context.json" 2>/dev/null || true)"
+  [ -n "$ctx" ] || return 0
+  sess="$(cat "$STATE_DIR/master-session.json" 2>/dev/null || true)"
+  last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
+  cfg="$(jq -r '.master_context // {} | [(if .enabled == false then "false" else "true" end), (.reset_pct // ""), (.reset_fraction // ""), (.cooldown_s // ""), (.checkpoint_timeout_s // "")] | join("|")' "$CONFIG" 2>/dev/null)" || return 0
+  IFS='|' read -r enabled pct frac cool cptimeout <<<"$cfg"
+  [ "$enabled" = "false" ] && return 0
+  master_reset_guard "$ctx" "$last" "$pct" "$frac"
+  last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
+  now="$(date +%s)"
+  [ "$now" -ge "$_MASTER_RESET_RETRY_AFTER" ] || return 0
+  master_reset_due "$ctx" "${sess:-null}" "$now" "$last" "$pct" "$frac" "$cool" "$enabled" || return 0
+  wait_ready "$target" 2 || return 0
+  pane_has_draft "$target" && return 0
+
+  cptimeout="${cptimeout:-300}"
+  local t0 cpct ctok old_sid notes="$STATE_DIR/master-notes.md" ok=0 why=""
+  cpct="$(jq -r '.pct' <<<"$ctx")"; ctok="$(jq -r '.tokens' <<<"$ctx")"
+  old_sid="$(jq -r '.session_id' <<<"$ctx")"
+  t0="$(date +%s)"
+  send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), then stop. Do not start new work."
+  log "master context over threshold (pct=$cpct tokens=$ctok); checkpoint requested"
+  while [ "$(( $(date +%s) - t0 ))" -lt "$cptimeout" ]; do
+    if [ -f "$notes" ] && [ "$(_lock_mtime "$notes")" -ge "$t0" ] && is_ready "$target"; then ok=1; break; fi
+    sleep 1
+  done
+  if [ "$ok" -ne 1 ]; then why="checkpoint not completed within ${cptimeout}s"
+  elif ! is_ready "$target"; then why="pane busy"
+  elif pane_has_draft "$target"; then why="draft appeared"; fi
+  if [ -n "$why" ]; then
+    log "master reset aborted: $why (no /clear sent)"
+    _MASTER_RESET_RETRY_AFTER=$(( $(date +%s) + ${cool:-1800} ))
+    return 0
+  fi
+  send_prompt "$target" "/clear"
+  wait_ready "$target" 45 || log "master not ready 45s after /clear"
+  printf '%s\n' "$(jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
+    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}')" > "$STATE_DIR/master-reset.json.tmp.$$" \
+    && mv -f "$STATE_DIR/master-reset.json.tmp.$$" "$STATE_DIR/master-reset.json"
+  log "master context reset (pct=$cpct tokens=$ctok)"
+  printf '%s\n' "$(jq -nc --arg ts "$(date -u +%FT%TZ)" --arg o "$old_sid" '{id:"master",event:"master-reset",old_session_id:$o,ts:$ts}')" >> "$STATE_DIR/events.jsonl"
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -215,6 +319,7 @@ heartbeat_main() {
 
     if master_window_alive "$S:$ORCH_WINDOW"; then
       master_dead_clear
+      master_reset_tick "$S:$ORCH_WINDOW"
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi
