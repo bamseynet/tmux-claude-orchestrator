@@ -20,14 +20,15 @@ rec="$(printf '%s' "$input" | jq -c '
   select(type == "object")
   | (.context_window // {}) as $cw
   | ($cw.current_usage // null) as $u
+  | (($cw | type) == "object" and ($cw | has("current_usage"))) as $has_cu
   | {pct: $cw.used_percentage,
      tokens: (if ($u | type) == "object"
               then (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0))
-              elif ($cw | type) == "object" and ($cw | has("current_usage")) then null
+              elif $has_cu then null
               else $cw.total_input_tokens end),
      window: $cw.context_window_size, session_id: .session_id,
      ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
-     reset: (($u == null) and ($cw | type) == "object" and ($cw | has("current_usage")))}
+     reset: (($u == null) and $has_cu)}
   # A present-but-null current_usage (just after a /clear or compaction) is
   # recorded as unknown rather than skipped, so the pre-compaction usage does
   # not linger in the file as if it were still current.
