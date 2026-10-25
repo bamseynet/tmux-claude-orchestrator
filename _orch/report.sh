@@ -30,7 +30,8 @@ if [ "${3:-}" = "--hook" ] && [ "$event" = "done" ]; then
   # shellcheck disable=SC2016
   bg_filter='def live: [ (.[]? // empty)
       | select((type != "object") or (((.status // "") | tostring | ascii_downcase)
-          | IN("completed","complete","done","finished","failed","error","killed","stopped","cancelled","canceled","exited") | not)) ];
+          | . as $st | ["completed","complete","done","finished","failed","error","killed","stopped","cancelled","canceled","exited"]
+          | map(. == $st) | any | not)) ];
     (type == "object")
     and ((((.background_tasks | arrays) // []) | live | length > 0)
       or (((.session_crons | arrays) // []) | live | length > 0))'
@@ -48,12 +49,15 @@ printf '%s\n' "$line" >> "$STATE_DIR/events.jsonl"
 # A SubagentStop (e.g. a background agent finishing after the turn) only refines an
 # in-progress status. It must not overwrite waiting-bg (issue #163) nor a status that
 # drives a consumer -- done (--after deps, reap), needs-input (re-alert), dead/merged/
-# blocked/spawn-failed -- since subagent-done has no watchdog/dead-sweep/reap coverage
-# and would leave the worker unreported, unreaped and its dependents queued forever.
+# blocked/spawn-failed -- since subagent-done is only watched like "working" (stall +
+# dead sweep), never reaped, and would leave dependents queued forever.
+# (No jq IN(): it is jq >= 1.6, and a compile error here would drop every status write.)
 update_worker_status "$id" --arg id "$id" --arg s "$event" --arg t "$ts" \
   '.id = (.id // $id)
    | .status = (if $s == "subagent-done"
-                   and ((.status // "") | IN("waiting-bg","done","needs-input","dead","merged","blocked","spawn-failed"))
+                   and ((.status // "") as $cur
+                        | ["waiting-bg","done","needs-input","dead","merged","blocked","spawn-failed"]
+                        | map(. == $cur) | any)
                 then .status else $s end)
    | .updated=$t' || true
 exit 0

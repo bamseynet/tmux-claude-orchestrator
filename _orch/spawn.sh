@@ -422,7 +422,9 @@ else
 fi
 
 if [ "$spawn_ok" -eq 1 ]; then
-  update_worker_status "$id" '.status="working"'
+  # Only promote "spawning": a fast first Stop/Notification (done, waiting-bg,
+  # needs-input) that already landed under the lock must not be clobbered.
+  update_worker_status "$id" '.status = (if (.status // "spawning") == "spawning" then "working" else .status end)'
   record_spend
   log "spawned $id ($model) in $wdir"
   say "spawned $id ($model)  ->  window $S:$id   dir $wdir"

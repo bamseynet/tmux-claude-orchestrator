@@ -165,3 +165,24 @@ ahead_commit() {
   run worker_is_orphaned $'w1\nb' waiting-bg w1
   [ "$status" -ne 0 ]
 }
+
+@test "C10: waiting-bg re-alerts back off from background_wait, not the 90s realert base" {
+  wd_setup
+  mkworker w1 waiting-bg
+  background_wait=1800
+  liveness_check w1 "idle" 1000
+  liveness_check w1 "idle" 2800     # first stalled alert
+  [ "$(grep -c '"event":"stalled"' "$INBOX")" -eq 1 ]
+  liveness_check w1 "idle" 2900     # +100s: a 90s base would re-alert here
+  liveness_check w1 "idle" 4000
+  [ "$(grep -c '"event":"stalled"' "$INBOX")" -eq 1 ]
+  liveness_check w1 "idle" 4600     # +1800s
+  [ "$(grep -c '"event":"stalled"' "$INBOX")" -eq 2 ]
+}
+
+@test "C11: a subagent-done worker whose window is gone is orphaned" {
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/watchdog.sh"
+  run worker_is_orphaned $'a\nb' subagent-done w1
+  [ "$status" -eq 0 ]
+}

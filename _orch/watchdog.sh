@@ -53,12 +53,13 @@ reap_after="$(jq -r '.watchdog.reap_terminal_after_seconds // 1800' "$cfg")"
 DEAD_CONFIRM_TICKS="${DEAD_CONFIRM_TICKS:-2}"
 
 # Pure predicate (no tmux, no fs): is a worker an orphan? True only when its status
-# is still active (spawning/working/waiting-bg) AND its id is not among the live window names.
+# is still active (spawning/working/subagent-done/waiting-bg) AND its id is not among the live window names.
 # <live_windows> is a newline-separated list of tmux window names.
 worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
   # waiting-bg (issue #163) is active too: a window killed while parked on
   # background work must still be reported dead, not left waiting forever.
-  case "$2" in working | spawning | waiting-bg) ;; *) return 1 ;; esac
+  # subagent-done is mid-turn (a SubagentStop refining "working"), so active too.
+  case "$2" in working | spawning | subagent-done | waiting-bg) ;; *) return 1 ;; esac
   printf '%s\n' "$1" | grep -Fxq "$3" && return 1
   return 0
 }
@@ -200,11 +201,11 @@ liveness_check() { # <w> <pane_text> <now>
     return 0
   fi
 
-  local age status thr="" ev=""
+  local age status thr="" ev="" rbase="$realert_base" rmax="$realert_max"
   age=$(( now - first ))
   status="$(jq -r '.status // ""' "$WORKERS_DIR/$w.json" 2>/dev/null || echo "")"
   case "$status" in
-    spawning | working)
+    spawning | working | subagent-done)
       # Idle if no spinner, or still parked on the startup Welcome banner.
       if ! printf '%s\n' "$pane" | grep -qiE 'esc to interrupt|Running…|Compacting' \
          || printf '%s\n' "$pane" | grep -qi 'Welcome'; then
@@ -212,7 +213,10 @@ liveness_check() { # <w> <pane_text> <now>
       fi
       ;;
     waiting-bg)
-      thr="$background_wait"; ev="stalled"
+      # Re-alerts back off from background_wait too, not the 90s realert base, so a
+      # legitimately long background job doesn't wake the master every few minutes.
+      thr="$background_wait"; ev="stalled"; rbase="$background_wait"
+      [ "$rmax" -ge "$rbase" ] 2>/dev/null || rmax="$rbase"
       ;;
     needs-input)
       # Abandoned wait, not a fresh input request -> a distinct event name so the
@@ -223,7 +227,7 @@ liveness_check() { # <w> <pane_text> <now>
   esac
 
   if [ -n "$thr" ] && [ "$age" -ge "$thr" ] \
-     && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$realert_base" "$realert_max" "$now"; }; then
+     && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$rbase" "$rmax" "$now"; }; then
     ev_line="$(printf '{"id":"%s","event":"%s","ts":"%s"}' "$w" "$ev" "$(date -u +%FT%TZ)")"
     printf '%s\n' "$ev_line" >> "$INBOX"
     printf '%s\n' "$ev_line" >> "$STATE_DIR/events.jsonl"
