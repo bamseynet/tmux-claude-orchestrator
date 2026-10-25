@@ -444,11 +444,32 @@ hook_reported() {
 # first clear any hook status written in the meantime (e.g. a Notification for
 # the dialog itself): it predates the task, so leaving it would let
 # hook_reported() count a lost paste as submitted (issues #132/#133).
+# A held-back first send also waits for the REPL prompt: the dialog vanishing
+# only means it unmounted, and Claude Code may still be initialising -- a paste
+# sent into that gap is the #51 lost-send shape.
+# Returns 1 WITHOUT sending when the pane is back at a shell: "dialog gone" also
+# covers claude having exited (e.g. "No, exit" picked on the trust dialog), and
+# a paste+Enter there would run the task text as shell commands.
 send_task() {
-  [ "$task_sent" -eq 1 ] || update_worker_status "$id" --argjson hs "$hook_statuses" \
-    ".status = (if ($hook_status_filter) then \"spawning\" else .status end)"
+  if [ "$task_sent" -ne 1 ]; then
+    wait_ready "$S:$id" 15 || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
+  fi
+  if pane_runs_shell; then
+    log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"
+    return 1
+  fi
+  if [ "$task_sent" -ne 1 ]; then
+    update_worker_status "$id" --argjson hs "$hook_statuses" \
+      ".status = (if ($hook_status_filter) then \"spawning\" else .status end)"
+  fi
   send_prompt "$S:$id" "${preamble}${task}"
   task_sent=1
+}
+pane_runs_shell() {
+  case "$(tmux display-message -p -t "$S:$id" '#{pane_current_command}' 2>/dev/null)" in
+    sh|bash|zsh|dash|ksh|fish|-sh|-bash|-zsh) return 0 ;;
+  esac
+  return 1
 }
 # confirm_inject, but only once the task was actually sent; before that, just
 # give an on-screen dialog the same bounded window to clear, and report
@@ -480,7 +501,7 @@ else
       # The dialog that blocked the first injection has cleared: nothing is in
       # the input box for a bare Enter to submit, so send the task itself.
       log "worker $id: dialog cleared; sending the task (retry $retry/$max_retries)"
-      send_task
+      send_task || break
       # This rung is the FIRST send, not a bare-Enter retry: hand its budget
       # back so the #51 bare-Enter retries stay available for this paste even
       # when the dialog outlasted earlier rungs. Bounded: task_sent flips once.
@@ -516,8 +537,9 @@ else
         log "worker $id: dialog cleared after the last retry; sending the task once"
       fi
       first_send=$((1 - task_sent))
-      send_task
-      if confirm_sent || hook_reported; then
+      if ! send_task; then
+        : # claude exited; nothing was sent -> spawn-failed below
+      elif confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then
         # A first send gets the same one bare-Enter follow-up the #51 ladder

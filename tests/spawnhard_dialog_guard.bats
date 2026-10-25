@@ -376,3 +376,82 @@ EOF2
   run jq -r .status "$WJ"
   [ "$output" = "spawn-failed" ]
 }
+
+@test "the held-back first send waits for the REPL prompt after the dialog clears, not just for the dialog to vanish" {
+  # Accepting the trust dialog unmounts it before the REPL input is drawn
+  # (Claude Code is still initialising). A paste sent into that gap is the
+  # #51 lost-send shape, so the held-back send must wait for a ready prompt.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  BLANK="$BATS_TEST_TMPDIR/blank"; EARLY="$BATS_TEST_TMPDIR/early"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    if [ ! -f "$BLANK" ] && grep -q 'not sending' "$LOGF" 2>/dev/null; then
+      echo 0 > "$BLANK"; : > "$PANE_FILE"
+    elif [ -f "$BLANK" ] && [ ! -s "$PANE_FILE" ]; then
+      b=\$(( \$(cat "$BLANK") + 1 )); echo "\$b" > "$BLANK"
+      [ "\$b" -ge 6 ] && echo '❯ ' > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  paste-buffer)
+    grep -q '❯' "$PANE_FILE" || touch "$EARLY"
+    echo 'esc to interrupt' > "$PANE_FILE" ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w9 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w9 (sonnet)"* ]]
+  [ ! -e "$EARLY" ]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+}
+
+@test "a dialog that 'clears' because claude exited never gets the task pasted into the shell" {
+  # "No, exit" picked on the trust dialog: the dialog disappears and the pane
+  # falls back to the login shell. The held-back first send must not paste the
+  # task (and its Enter) into that shell.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  GONE="$BATS_TEST_TMPDIR/gone"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message)
+    case "\$*" in *pane_current_command*) [ -f "$GONE" ] && echo zsh || echo claude ;; esac ;;
+  capture-pane)
+    if [ ! -f "$GONE" ] && grep -q 'not sending' "$LOGF" 2>/dev/null; then
+      touch "$GONE"; echo 'peter@host ~/proj ❯ ' > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w9 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawn-failed w9"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 0 ]
+  grep -Fq 'worker w9: claude is no longer running in the pane (shell prompt); not sending the task' "$LOGF"
+}
