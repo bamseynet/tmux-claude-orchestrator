@@ -50,6 +50,7 @@ case "${1:-}" in
         [ -e "$STOP_ON_CLEAR_FLAG" ] && touch "$(dirname "$NOTES")/.stop"
         ;;
     esac ;;
+  paste-buffer)  [ -e "${SLOW_PASTE_FLAG:-/nonexistent}" ] && sleep 1 ;;
   show-buffer)   exit 1 ;;
 esac
 exit 0
@@ -175,7 +176,7 @@ S1='{"session_id":"s1"}'
   touch "$TOUCH_FLAG"
   ctx 75 400000 s1; sess s1
   start_hb
-  wait_for test -f "$STATE_DIR/master-reset.json"
+  wait_for grep -q "master context reset (" "$LOG"
   stop_hb
 
   cp_line="$(grep -n 'PASTE<<.*master-notes.md' "$CALLS" | head -1 | cut -d: -f1)"
@@ -200,7 +201,7 @@ S1='{"session_id":"s1"}'
   sleep 0.7
   refute_grep 'master-notes.md' "$CALLS"
   ctx 10 80000 s1 200000
-  wait_for test -f "$STATE_DIR/master-reset.json"
+  wait_for grep -q "master context reset (" "$LOG"
   stop_hb
   grep -q 'PASTE<</clear>>' "$CALLS"
   grep -q 'master context reset (pct=10 tokens=80000)' "$LOG"
@@ -530,4 +531,21 @@ S1='{"session_id":"s1"}'
   wait_for grep -q "invalid setting '0'" "$LOG"
   stop_hb
   refute_grep 'master-notes.md' "$CALLS"
+}
+
+@test "B13: TERM while the checkpoint is being pasted waits for its Enter, then tells the master" {
+  export SLOW_PASTE_FLAG="$BATS_TEST_TMPDIR/slow_paste"
+  touch "$SLOW_PASTE_FLAG"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'PASTE<<.*master-notes.md' "$CALLS"
+  kill -TERM "$HB_PID"
+  wait_for grep -q '"event":"master-reset-aborted"' "$STATE_DIR/events.jsonl"
+  wait "$HB_PID" 2>/dev/null || true
+  # the checkpoint paste was followed by its Enter before the heartbeat exited
+  paste_line="$(grep -n '^paste-buffer' "$CALLS" | head -1 | cut -d: -f1)"
+  enter_line="$(grep -n '^send-keys .* Enter' "$CALLS" | head -1 | cut -d: -f1)"
+  [ -n "$paste_line" ] && [ -n "$enter_line" ]
+  [ "$paste_line" -lt "$enter_line" ]
+  refute_grep '/clear' "$CALLS"
 }

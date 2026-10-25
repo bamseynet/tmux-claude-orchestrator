@@ -287,8 +287,13 @@ master_reset_tick() { # <session:window>
   token="orch-checkpoint-$t0-$$-$RANDOM"
   # orch down kills the heartbeat (TERM) rather than waiting for .stop: still
   # tell the master, which was just told to stop, that no reset is coming.
-  trap '_master_reset_event master-reset-aborted "$old_sid"; exit 143' TERM
+  # A TERM mid-send_prompt is deferred until the paste and its Enter are both
+  # in, so it can never leave the checkpoint text unsent in the input row.
+  local _mr_term=0
+  trap '_mr_term=1' TERM
   send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), end it with the line: $token -- then stop. Do not start new work. (If the reset is aborted you will get a master-reset-aborted event: then carry on normally.)"
+  trap '_master_reset_event master-reset-aborted "$old_sid"; exit 143' TERM
+  [ "$_mr_term" -eq 0 ] || { _master_reset_event master-reset-aborted "$old_sid"; exit 143; }
   log "master context over threshold (pct=$cpct tokens=$ctok); checkpoint requested"
   while [ "$(( $(date +%s) - t0 ))" -lt "$cptimeout" ]; do
     # This wait blocks the heartbeat loop: honour .stop and a dead master.
@@ -314,6 +319,14 @@ master_reset_tick() { # <session:window>
     _master_reset_abort "master reset aborted: $why (no /clear sent)" "$old_sid" "$cool"
     return 0
   fi
+  # Record the reset BEFORE sending /clear: orch down (stop.sh) touches .stop
+  # and TERMs us at once, and TERM is no longer trapped here, so a record
+  # written any later (after the confirm loop or the ready-wait) is lost when
+  # the TERM lands in between -- and with it the loop guard's and cooldown's
+  # only record of a /clear that really happened. If the /clear never takes,
+  # the unconfirmed path below overwrites this with a backoff latch.
+  jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
+    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
   send_prompt "$target" "/clear"
   # Confirm it took: the SessionStart hook records the new session_id on every
   # /clear. If it never changes, the /clear did not happen (not submitted, or
@@ -344,11 +357,6 @@ master_reset_tick() { # <session:window>
     _master_reset_abort "master reset unconfirmed: $why_unconf -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
     return 0
   fi
-  # Record the reset BEFORE the 45s ready-wait: a TERM (orch down) landing in
-  # that wait would otherwise lose the loop guard's and cooldown's only record
-  # of a /clear that really happened.
-  jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
-    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
   wait_ready "$target" 45 || log "master not ready 45s after /clear"
   log "master context reset (pct=$cpct tokens=$ctok)"
   # Also wakes the freshly cleared master (via the inbox) so it resumes the
