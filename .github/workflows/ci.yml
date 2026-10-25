@@ -134,9 +134,8 @@ jobs:
     # #162: the issue125 escape-guard property test (nested whole-suite bats
     # under a logging tmux shim) is opt-in via ORCH_TEST_ESCAPE_GUARD=1 and
     # runs here, in parallel with `test`, instead of doubling that job.
-    # Measured: 8m56s locally for this file (whole-suite nested pass is about
-    # half of the 16m17s `test` run 33530142707, i.e. ~8m on CI). 20m is ~2x
-    # that, not a blank check; revisit with the PR's own CI timing.
+    # Measured: 8m02s on CI for this job's run step (run 40214025191); 8m56s
+    # locally. 20m is ~2.5x the CI number -- headroom, not a blank check.
     name: bats (issue125 tmux escape guard, whole suite)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -170,9 +169,15 @@ jobs:
           set -o pipefail
           bats --tap tests/issue125_tmux_escape_guard.bats | tee escape-guard.tap
           # A skipped guard in the only place it runs would be an inert test
-          # (#134/#138/#139): require test 3 to be a plain `ok`, no skip.
-          if ! grep -qE '^ok 3 ' escape-guard.tap || grep -qE '^ok 3 .*# skip' escape-guard.tap; then
-            echo "FATAL: escape-guard test 3 did not run (missing or skipped) -- the guard is inert" >&2
+          # (#134/#138/#139): require the property test -- matched by NAME,
+          # not TAP position, so adding/reordering tests can't make some
+          # other test's plain `ok` stand in for it -- to report exactly one
+          # plain `ok`, no skip.
+          guard_re='^(not )?ok [0-9]+ escape guard: no test in the suite '
+          if [ "$(grep -cE "$guard_re" escape-guard.tap)" -ne 1 ] \
+            || ! grep -E "$guard_re" escape-guard.tap | grep -qE '^ok ' \
+            || grep -E "$guard_re" escape-guard.tap | grep -qE ' # skip'; then
+            echo "FATAL: escape-guard property test did not run (missing, duplicated or skipped) -- the guard is inert" >&2
             exit 1
           fi
 

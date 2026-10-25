@@ -152,7 +152,7 @@ teardown() {
 
   # Sanity: the nested run actually executed tests -- an empty log must mean
   # "no escapes", never "nothing ran".
-  grep -qE '^1\.\.[0-9]+' "$NESTED_OUT"
+  grep -qE '^1\.\.[1-9][0-9]*' "$NESTED_OUT"
 
   if [ "$nested_status" -ne 0 ]; then
     echo "note: nested bats run exited $nested_status for reasons unrelated to tmux escapes (see below); this test only asserts on $LOG" >&2
