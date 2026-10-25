@@ -206,6 +206,11 @@ export PROJECT_ROOT="$target_repo"
 export SESSION_NAME="${SESSION_NAME:-orch}"
 
 cmd="${1:-help}"; shift || true
+# issue #148: an explicit --repo lets per-worker ops refuse a repo that contradicts
+# the one the worker was spawned against. Not for up/bootstrap: the loops it starts
+# inherit this environment and must keep using each worker's recorded repo.
+unset ORCH_REPO_EXPLICIT
+case "$cmd" in up|bootstrap) ;; *) [ -z "$repo_flag" ] || export ORCH_REPO_EXPLICIT=1 ;; esac
 case "$cmd" in
   up|bootstrap) exec "$here/_orch/bootstrap.sh" "$@" ;;
   spawn)        exec "$here/_orch/spawn.sh" "$@" ;;

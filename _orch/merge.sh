@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$id" ] || { say "usage: merge.sh <id> [--auto] [--base <branch>]" >&2; exit 1; }
 
-proj="${PROJECT_ROOT:-$(pwd)}"
+proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
 branch="$(worker_branch "$id")"
 # Back-compat (issue #86): fall back to the pre-#86 orch/<id> branch for a
 # worker spawned before this install upgraded to the namespaced layout, so an

@@ -41,7 +41,7 @@ done
 
 require_valid_session_name
 S="$SESSION_NAME"
-proj="${PROJECT_ROOT:-$(pwd)}"
+proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
 wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)
 branch="$(worker_branch "$id")"
 legacy_wdir="$(legacy_worker_wdir "$proj" "$id")"     # pre-#86 layout, see above
