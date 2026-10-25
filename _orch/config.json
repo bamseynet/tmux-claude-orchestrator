@@ -55,6 +55,9 @@
       "synthesis": "opus"
     }
   },
+  "master_context": {
+    "autocompact_window": 400000
+  },
   "output": {
     "timestamps": true,
     "timestamp_format": "iso"

@@ -182,6 +182,7 @@ multi-session work.
 | `watchdog.cooldown_seconds` | 65 | wait before retry (API limits ~60s) |
 | `models.orchestrator` | `opus` | model for the master session |
 | `models.default_worker` | `sonnet` | model when `spawn` gets no explicit model/`--role` |
+| `master_context.autocompact_window` | `400000` | tokens at which the master auto-compacts (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`); bare integer 100000–1000000, omitted if invalid. After a compaction or `/clear` a `SessionStart` hook re-injects the role prompt + rehydrate summary; context usage is recorded to `_orch/state/master-context.json` |
 | `models.roles` | *(unset)* | optional `{role: model}` matrix for `spawn --role <name>` (see [Model roles](#model-roles)) |
 | `output.timestamps` | true | timestamp-prefix human-facing terminal output (`ORCH_TIMESTAMPS` env overrides; see `./orch help`) |
 | `output.timestamp_format` | `iso` | `iso` (UTC, matches `orch.log`) or `short` (local `HH:MM:SS`); `ORCH_TIMESTAMP_FORMAT` env overrides |

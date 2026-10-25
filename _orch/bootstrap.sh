@@ -164,9 +164,31 @@ if ! session_exists "$S"; then
   # issue #140: ORCH_GHOST_ENV (lib.sh) is the env-var route -- not the disproved
   # prompt-suggestions CLI flag -- that suppresses the prompt-suggestion ghost
   # row; belt-and-braces alongside pane_has_draft().
-  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}claude --dangerously-skip-permissions${master_model:+ --model $master_model}" Enter
+  # issue #159: master-only settings (status-line capture + SessionStart
+  # rehydrate). NOT under $STATE_DIR/settings/ -- that dir is per-worker and
+  # `orch clean master` would delete it.
+  master_settings="$STATE_DIR/master-settings.json"
+  _sl="$here/master-statusline.sh"; _ss="$here/master-session-start.sh"
+  jq -n --arg sl "${_sl// /\\ }" --arg ss "${_ss// /\\ }" \
+    '{statusLine:{type:"command",command:$sl}, hooks:{SessionStart:[{hooks:[{type:"command",command:$ss}]}]}}' \
+    > "$master_settings.tmp" && mv -f "$master_settings.tmp" "$master_settings"
+  # master_context.autocompact_window: bare integer 100000-1000000 only (the
+  # "400k" form fails on CLIs older than v2.1.304; a bare 400 means 400 tokens).
+  compact_env=""
+  acw="$(jq -r '.master_context.autocompact_window // empty' "$here/config.json" 2>/dev/null || true)"
+  if [ -n "$acw" ]; then
+    case "$acw" in
+      *[!0-9]*|0*) acw="" ;;
+    esac
+    if [ -n "$acw" ] && [ "$acw" -ge 100000 ] && [ "$acw" -le 1000000 ]; then
+      compact_env="CLAUDE_CODE_AUTO_COMPACT_WINDOW=$acw "
+    else
+      log "WARNING: master_context.autocompact_window invalid (want integer 100000-1000000); ignoring"
+    fi
+  fi
+  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model} --settings $(printf '%q' "$master_settings")" Enter
   if wait_ready "$S:$ORCH_WINDOW" 90; then
-    send_prompt "$S:$ORCH_WINDOW" "You are the ORCHESTRATOR for this project. First read the file $here/CLAUDE.md and follow it exactly. Your control CLI is $ORCH_ROOT/orch (e.g. '$ORCH_ROOT/orch spawn w1 sonnet \"task\"', '$ORCH_ROOT/orch status', '$ORCH_ROOT/orch send w1 \"msg\"'). Worker completion and blocked events arrive automatically, prefixed [orchestrator heartbeat]. Acknowledge briefly, then wait for my tasks."
+    send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt)"
   else
     log "master not ready in 90s; open the window and read $here/CLAUDE.md manually"
   fi

@@ -1300,3 +1300,9 @@ queue_pop() {
   tail -n +2 "$QUEUE" > "$QUEUE.tmp" && mv "$QUEUE.tmp" "$QUEUE"
   printf '%s\n' "$first"
 }
+
+# The master's role prompt (issue #159): sent by bootstrap.sh at launch and
+# re-injected by master-session-start.sh after a /clear or compaction.
+master_role_prompt() {
+  printf '%s' "You are the ORCHESTRATOR for this project. First read the file $ORCH_DIR/CLAUDE.md and follow it exactly. Your control CLI is $ORCH_ROOT/orch (e.g. '$ORCH_ROOT/orch spawn w1 sonnet \"task\"', '$ORCH_ROOT/orch status', '$ORCH_ROOT/orch send w1 \"msg\"'). Worker completion and blocked events arrive automatically, prefixed [orchestrator heartbeat]. Acknowledge briefly, then wait for my tasks."
+}
