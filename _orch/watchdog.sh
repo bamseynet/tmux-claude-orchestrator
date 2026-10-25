@@ -31,6 +31,10 @@ needs_input_realert="$(jq -r '.watchdog.needs_input_realert_seconds // 600' "$cf
 # review_idle: how long ANY idle (pane-unchanged) worker must sit before its
 # worktree is checked for unmerged commits (issue #50 point 3).
 review_idle="$(jq -r '.watchdog.review_idle_seconds // 300' "$cfg")"
+# background_wait: how long a "waiting-bg" worker (Stop with background work still
+# running, issue #163) may sit with an unchanged pane before it is reported
+# "stalled" -- long, so a hung background task or endless Monitor still surfaces.
+background_wait="$(jq -r '.watchdog.background_wait_seconds // 1800' "$cfg")"
 # realert base/cap: bounded exponential backoff shared by every re-alerting signal
 # below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
@@ -49,10 +53,13 @@ reap_after="$(jq -r '.watchdog.reap_terminal_after_seconds // 1800' "$cfg")"
 DEAD_CONFIRM_TICKS="${DEAD_CONFIRM_TICKS:-2}"
 
 # Pure predicate (no tmux, no fs): is a worker an orphan? True only when its status
-# is still active (spawning/working) AND its id is not among the live window names.
+# is still active (spawning/working/subagent-done/waiting-bg) AND its id is not among the live window names.
 # <live_windows> is a newline-separated list of tmux window names.
 worker_is_orphaned() { # <live_windows> <status> <id>  -> 0 if orphaned
-  case "$2" in working | spawning) ;; *) return 1 ;; esac
+  # waiting-bg (issue #163) is active too: a window killed while parked on
+  # background work must still be reported dead, not left waiting forever.
+  # subagent-done is mid-turn (a SubagentStop refining "working"), so active too.
+  case "$2" in working | spawning | subagent-done | waiting-bg) ;; *) return 1 ;; esac
   printf '%s\n' "$1" | grep -Fxq "$3" && return 1
   return 0
 }
@@ -100,9 +107,14 @@ rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
 realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  -> 0 if due
   local last="$1" count="$2" base="$3" max="$4" now="$5"
   [ "$count" -le 0 ] && return 0
-  local mult=$((1 << (count - 1)))
-  local wait=$((base * mult))
-  [ "$wait" -gt "$max" ] && wait="$max"
+  # Clamp the exponent: a long-lived alert episode (e.g. a waiting-bg worker on a
+  # session cron, issue #163) reaches count ~55, where base * 2^(count-1) overflows
+  # 64-bit arithmetic to <= 0 and would re-alert on every tick.
+  local wait="$max"
+  if [ "$count" -le 20 ]; then
+    wait=$((base * (1 << (count - 1))))
+    [ "$wait" -gt "$max" ] && wait="$max"
+  fi
   [ "$now" -ge $((last + wait)) ]
 }
 
@@ -194,16 +206,23 @@ liveness_check() { # <w> <pane_text> <now>
     return 0
   fi
 
-  local age status thr="" ev=""
+  local age status thr="" ev="" rbase="$realert_base" rmax="$realert_max"
   age=$(( now - first ))
   status="$(jq -r '.status // ""' "$WORKERS_DIR/$w.json" 2>/dev/null || echo "")"
   case "$status" in
-    spawning | working)
+    spawning | working | subagent-done)
       # Idle if no spinner, or still parked on the startup Welcome banner.
       if ! printf '%s\n' "$pane" | grep -qiE 'esc to interrupt|Running…|Compacting' \
          || printf '%s\n' "$pane" | grep -qi 'Welcome'; then
         thr="$stall"; ev="stalled"
       fi
+      ;;
+    waiting-bg)
+      # Re-alerts use background_wait as their base (not the 90s realert base), so a
+      # legitimately long background job re-wakes the master at most every
+      # background_wait (with defaults the cap equals the base: a steady 30 min).
+      thr="$background_wait"; ev="stalled"; rbase="$background_wait"
+      [ "$rmax" -ge "$rbase" ] 2>/dev/null || rmax="$rbase"
       ;;
     needs-input)
       # Abandoned wait, not a fresh input request -> a distinct event name so the
@@ -214,7 +233,7 @@ liveness_check() { # <w> <pane_text> <now>
   esac
 
   if [ -n "$thr" ] && [ "$age" -ge "$thr" ] \
-     && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$realert_base" "$realert_max" "$now"; }; then
+     && { [ "$alert_count" -eq 0 ] || realert_due "$last_alert" "$alert_count" "$rbase" "$rmax" "$now"; }; then
     ev_line="$(printf '{"id":"%s","event":"%s","ts":"%s"}' "$w" "$ev" "$(date -u +%FT%TZ)")"
     printf '%s\n' "$ev_line" >> "$INBOX"
     printf '%s\n' "$ev_line" >> "$STATE_DIR/events.jsonl"
@@ -229,6 +248,8 @@ liveness_check() { # <w> <pane_text> <now>
   # branch gets a "ready-for-review" event even if it never sent a clean "done"
   # (issue #50 point 3, the highest-value check here).
   [ "$age" -ge "$review_idle" ] || return 0
+  # A worker parked on background work is not idle-with-finished-commits (issue #163).
+  [ "$status" != "waiting-bg" ] || return 0
   local ahead rf r_last r_count
   ahead="$(worker_branch_ahead "${PROJECT_ROOT:-$(pwd)}" "$w")" || true
   rf="$STATE_DIR/.review-$w"
@@ -315,7 +336,13 @@ dead_sweep() { # <live_windows>
       if [ "$misses" -ge "$DEAD_CONFIRM_TICKS" ]; then
         "$here/report.sh" "$id" dead >/dev/null 2>&1 || true
         rm -f "$dm"
-        prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id"
+        # Only a mid-turn worker's worktree is pruned. waiting-bg / subagent-done
+        # (issue #163) are reported dead too, but their turn may have ended with
+        # finished, unmerged commits (e.g. waiting-bg on a session cron, or a legacy
+        # subagent-done left after the final Stop) -- keep them for the master.
+        case "$status" in
+          spawning | working) prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id" ;;
+        esac
         log "watchdog: worker '$id' dead (no live window, was $status); notified master"
       else
         printf '%s\n' "$misses" > "$dm"

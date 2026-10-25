@@ -23,6 +23,11 @@ Run these with Bash (paths are relative to the repo root where `./orch` lives):
   decide, and dispatch. You do not need to poll.
 - **On demand**: read `_orch/state/workers/*.json` (fields: `status`, `task`, `model`,
   `updated`) or run `./orch status`.
+- **`waiting-bg`** status: the worker ended its turn with background work (shell,
+  Monitor, agent, session cron) still running; no event is sent, and it reports `done`
+  on its own when that work finishes. Don't nudge it. A `stalled` event for a
+  `waiting-bg` worker means the background work has been quiet for
+  `watchdog.background_wait_seconds` (default 30 min).
 
 ## Rules
 

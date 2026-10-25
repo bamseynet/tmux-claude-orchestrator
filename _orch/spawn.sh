@@ -339,7 +339,7 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
   {
     awaySummaryEnabled: false,
     hooks: {
-      Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done"}]}],
+      Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done --hook"}]}],
       Notification: [{matcher:$nm, hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
       SubagentStop: [{hooks:[{type:"command", command:"\($r) \($id) subagent-done"}]}]
     }
@@ -399,8 +399,23 @@ send_prompt "$S:$id" "${preamble}${task}"
 # full re-inject as a last resort. Bounded throughout — never hangs. Still
 # unconfirmed after all of that => spawn-failed, never a silently-idle
 # "working" worker.
+# A worker hook (Stop/Notification/SubagentStop) that already moved the status off
+# "spawning" proves the task was submitted, even if the pane checks never confirmed
+# it -- checked before every retry so a task that already ran is never re-pasted,
+# and never reported spawn-failed (issue #163 review).
+# One list, shared by hook_reported() and the locked spawn-failed write below.
+hook_statuses='["done","waiting-bg","needs-input","subagent-done"]'
+# shellcheck disable=SC2016  # $c/$hs are jq variables, not shell
+hook_status_filter='(.status // "") as $c | $hs | map(. == $c) | any'
+hook_reported() {
+  if jq -e --argjson hs "$hook_statuses" "$hook_status_filter" "$WORKERS_DIR/$id.json" >/dev/null 2>&1; then
+    log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
+    return 0
+  fi
+  return 1
+}
 spawn_ok=0
-if confirm_inject "$S:$id" 15; then
+if confirm_inject "$S:$id" 15 || hook_reported; then
   spawn_ok=1
 else
   max_retries="$(jq -r '.thresholds.spawn_inject_retries // 2' "$CONFIG")"
@@ -409,7 +424,7 @@ else
     retry=$((retry + 1))
     log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
     tmux send-keys -t "$S:$id" Enter
-    if confirm_inject "$S:$id" 15; then
+    if confirm_inject "$S:$id" 15 || hook_reported; then
       spawn_ok=1
       break
     fi
@@ -417,18 +432,29 @@ else
   if [ "$spawn_ok" -ne 1 ]; then
     log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
     send_prompt "$S:$id" "${preamble}${task}"
-    if confirm_inject "$S:$id" 15; then spawn_ok=1; fi
+    if confirm_inject "$S:$id" 15 || hook_reported; then spawn_ok=1; fi
   fi
 fi
 
+if [ "$spawn_ok" -ne 1 ]; then
+  # Mark spawn-failed in the same locked read-modify-write that re-checks for a hook
+  # status: a Stop/Notification landing after the last hook_reported() check must
+  # not be clobbered into spawn-failed (and reaped) while the worker is running.
+  update_worker_status "$id" --argjson hs "$hook_statuses" \
+    ".status = (if ($hook_status_filter) then .status else \"spawn-failed\" end)"
+  hook_reported && spawn_ok=1
+fi
+
 if [ "$spawn_ok" -eq 1 ]; then
-  update_worker_status "$id" '.status="working"'
+  # Only promote "spawning": a fast first Stop/Notification (done, waiting-bg,
+  # needs-input) that already landed under the lock must not be clobbered.
+  update_worker_status "$id" '.status = (if (.status // "spawning") == "spawning" then "working" else .status end)'
   record_spend
   log "spawned $id ($model) in $wdir"
   say "spawned $id ($model)  ->  window $S:$id   dir $wdir"
 else
-  # Never-started worker: record it and tell the master so the spawn is not lost.
-  update_worker_status "$id" '.status="spawn-failed"'
+  # Never-started worker (status already set to spawn-failed above): tell the
+  # master so the spawn is not lost.
   sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
   printf '%s\n' "$sf_line" >> "$INBOX"
   printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
