@@ -515,3 +515,19 @@ S1='{"session_id":"s1"}'
   stop_hb
   refute_grep 'master-notes.md' "$CALLS"
 }
+
+@test "B12: cumulative (total_input_tokens fallback) tokens never trigger by fraction; pct still does" {
+  run due '{"pct":10,"tokens":900000,"cumulative":true,"window":1000000,"session_id":"s1"}' "$S1" '{}' 60 0.35 1800
+  [ "$status" -eq 1 ]
+  due '{"pct":70,"tokens":900000,"cumulative":true,"window":1000000,"session_id":"s1"}' "$S1" '{}' 60 0.35 1800
+}
+
+@test "B12: reset_fraction=0 is rejected (would make every reading due)" {
+  jq '.master_context.reset_fraction = 0' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  ctx 10 1000 s1; sess s1
+  start_hb
+  wait_for grep -q "invalid setting '0'" "$LOG"
+  stop_hb
+  refute_grep 'master-notes.md' "$CALLS"
+}

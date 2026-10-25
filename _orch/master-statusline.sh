@@ -20,7 +20,8 @@ out="$here/state/master-context.json"
 # post-/clear floor the #160 loop guard judges) survives later refreshes. A
 # present-but-null current_usage record (.reset) is not a real reading: its pct
 # can be 0 or stale, and latching it would let the guard "verify" a floor that
-# was never measured.
+# was never measured. Same for a reading without numeric tokens (pct only):
+# the guard skips those, so latching one would leave the reset unjudged forever.
 prev="$(jq -c 'select(type == "object")' "$out" 2>/dev/null || true)"
 rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
   select(type == "object")
@@ -33,6 +34,9 @@ rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
               elif $has_cu then null
               else $cw.total_input_tokens end),
      window: $cw.context_window_size, session_id: .session_id,
+     # #160: the total_input_tokens fallback is cumulative, not "in the window
+     # now" -- the reset logic must not judge window fullness by it.
+     cumulative: ((($u | type) != "object") and ($has_cu | not)),
      ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
      reset: (($u == null) and $has_cu)}
   # A present-but-null current_usage (just after a /clear or compaction) is
@@ -41,7 +45,7 @@ rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
   | select((.pct // 0) != 0 or (.tokens // 0) != 0 or .reset)
   | .first = (if ($prev | type) == "object" and $prev.session_id == .session_id and $prev.first != null
               then $prev.first
-              elif (.reset | not) and (.tokens != null or .pct != null) then {pct, tokens}
+              elif (.reset | not) and (.tokens | type) == "number" then {pct, tokens}
               else null end)
   | del(.reset)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then

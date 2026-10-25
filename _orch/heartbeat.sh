@@ -174,7 +174,7 @@ master_reset_due() {
     and $cid != "" and $cid == ($s.session_id // "")
     and ($w | type == "number") and $w > 0
     and ($c.tokens | type == "number")
-    and ((($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $w)))
+    and ((($c.pct // 0) >= $pct) or (($c.cumulative // false) != true and ($c.tokens // 0) >= ($frac * $w)))
     and ($now - ($last.ts // 0)) >= $cool' >/dev/null 2>&1
 }
 
@@ -203,7 +203,7 @@ master_reset_guard() { # <ctx_json> <last_json> <pct> <fraction>
     elif ($l.old_session_id // "") == "" or ($c.session_id // "") == "" or $c.session_id == $l.old_session_id then "skip"
     elif (($c.window // 0) | type != "number") or ($c.window // 0) <= 0 then "skip"
     elif ($c.tokens | type) != "number" then "skip"
-    elif (($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $c.window)) then "backoff"
+    elif (($c.pct // 0) >= $pct) or (($c.cumulative // false) != true and ($c.tokens // 0) >= ($frac * $c.window)) then "backoff"
     else "ok" end' 2>/dev/null)" || return 0
   case "$verdict" in
     backoff)
@@ -255,11 +255,11 @@ master_reset_tick() { # <session:window>
   # A non-numeric knob would make every --argjson below fail, i.e. resets
   # silently off. Say so once and stay off.
   local _k
-  for _k in "$pct" "$frac" "$cool:i" "$cptimeout:p"; do
+  for _k in "$pct:f" "$frac:f" "$cool:i" "$cptimeout:p"; do
     case "$_k" in
+      *:f) _k="${_k%:f}"; [[ -z "$_k" || ( "$_k" =~ ^[0-9]+(\.[0-9]+)?$ && "$_k" =~ [1-9] ) ]] && continue ;; # 0 = always due
       *:i) _k="${_k%:i}"; [[ -z "$_k" || "$_k" =~ ^[0-9]+$ ]] && continue ;;   # bash -lt needs integers
       *:p) _k="${_k%:p}"; [[ -z "$_k" || "$_k" =~ ^[1-9][0-9]*$ ]] && continue ;; # 0 = abort every time
-      *)   [[ -z "$_k" || "$_k" =~ ^[0-9]+(\.[0-9]+)?$ ]] && continue ;;
     esac
     log "master_context: invalid setting '$_k' in config.json -- automatic master resets disabled"
     _MASTER_RESET_CFG="false||||"
@@ -344,9 +344,12 @@ master_reset_tick() { # <session:window>
     _master_reset_abort "master reset unconfirmed: $why_unconf -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
     return 0
   fi
-  wait_ready "$target" 45 || log "master not ready 45s after /clear"
+  # Record the reset BEFORE the 45s ready-wait: a TERM (orch down) landing in
+  # that wait would otherwise lose the loop guard's and cooldown's only record
+  # of a /clear that really happened.
   jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
     '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
+  wait_ready "$target" 45 || log "master not ready 45s after /clear"
   log "master context reset (pct=$cpct tokens=$ctok)"
   # Also wakes the freshly cleared master (via the inbox) so it resumes the
   # in-flight work its rehydrated notes describe instead of idling until the
