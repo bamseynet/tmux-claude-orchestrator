@@ -46,3 +46,12 @@ setup() {
   run realert_due 1000 10 90 1800 2800
   [ "$status" -eq 0 ]
 }
+
+@test "realert_due: a huge alert count never overflows into every-tick re-alerts (issue #163)" {
+  for c in 21 55 63 64 65 100; do
+    run realert_due 1000 "$c" 1800 1800 1100
+    [ "$status" -ne 0 ]
+    run realert_due 1000 "$c" 1800 1800 2800
+    [ "$status" -eq 0 ]
+  done
+}

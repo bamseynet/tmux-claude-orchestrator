@@ -57,6 +57,14 @@ case "\${1:-}" in
     done
     ;;
   show-buffer) exit 1 ;;
+  paste-buffer)
+    # Optional: simulate a worker hook landing as soon as the task is pasted.
+    if [ -s "$BATS_TEST_TMPDIR/hook_status" ]; then
+      for f in "$ORCH_ROOT/_orch/state/workers/"*.json; do
+        jq --arg s "\$(cat "$BATS_TEST_TMPDIR/hook_status")" '.status=\$s' "\$f" > "\$f.t" && mv "\$f.t" "\$f"
+      done
+    fi
+    ;;
 esac
 exit 0
 EOF
@@ -140,4 +148,27 @@ EOF
   run jq -r .status "$ORCH_ROOT/_orch/state/workers/w3.json"
   [ "$output" = "working" ]
   ! grep -q 'sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log" 2>/dev/null
+}
+
+# issue #163 review: a Stop/Notification that lands under the lock before spawn.sh's
+# final status write must survive it -- on the success path (no "working" clobber)
+# and on the unconfirmed path (the hook proves the task ran: never spawn-failed).
+@test "spawn.sh keeps a fast first hook status instead of promoting to working (issue #163)" {
+  printf '0' > "$READY_AFTER_FILE"
+  printf 'done' > "$BATS_TEST_TMPDIR/hook_status"
+  run "$SPAWN" w4 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  run jq -r .status "$ORCH_ROOT/_orch/state/workers/w4.json"
+  [ "$output" = "done" ]
+}
+
+@test "spawn.sh does not mark spawn-failed when a hook already reported (issue #163)" {
+  printf '999999' > "$READY_AFTER_FILE"
+  printf 'waiting-bg' > "$BATS_TEST_TMPDIR/hook_status"
+  run "$SPAWN" w5 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawned w5"* ]]
+  run jq -r .status "$ORCH_ROOT/_orch/state/workers/w5.json"
+  [ "$output" = "waiting-bg" ]
+  run grep -q '"event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
+  [ "$status" -ne 0 ]
 }

@@ -107,9 +107,14 @@ rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
 realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  -> 0 if due
   local last="$1" count="$2" base="$3" max="$4" now="$5"
   [ "$count" -le 0 ] && return 0
-  local mult=$((1 << (count - 1)))
-  local wait=$((base * mult))
-  [ "$wait" -gt "$max" ] && wait="$max"
+  # Clamp the exponent: a long-lived alert episode (e.g. a waiting-bg worker on a
+  # session cron, issue #163) reaches count ~55, where base * 2^(count-1) overflows
+  # 64-bit arithmetic to <= 0 and would re-alert on every tick.
+  local wait="$max"
+  if [ "$count" -le 20 ]; then
+    wait=$((base * (1 << (count - 1))))
+    [ "$wait" -gt "$max" ] && wait="$max"
+  fi
   [ "$now" -ge $((last + wait)) ]
 }
 

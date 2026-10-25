@@ -421,6 +421,17 @@ else
   fi
 fi
 
+# A worker hook (Stop/Notification/SubagentStop) that already moved the status off
+# "spawning" proves the task was submitted, even if the pane checks above never
+# confirmed it -- never report that worker spawn-failed (issue #163 review).
+if [ "$spawn_ok" -ne 1 ]; then
+  case "$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
+    done | waiting-bg | needs-input | subagent-done)
+      log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
+      spawn_ok=1 ;;
+  esac
+fi
+
 if [ "$spawn_ok" -eq 1 ]; then
   # Only promote "spawning": a fast first Stop/Notification (done, waiting-bg,
   # needs-input) that already landed under the lock must not be clobbered.
