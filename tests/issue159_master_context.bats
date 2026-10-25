@@ -59,6 +59,8 @@ STUB
     > "$ORCH_ROOT/_orch/config.json"
   SL="$ORCH_ROOT/_orch/master-statusline.sh"
   SS="$ORCH_ROOT/_orch/master-session-start.sh"
+  # the status line reads $PWD/.claude/settings*.json: never the repo checkout's
+  cd "$BATS_TEST_TMPDIR"
 }
 
 # ---------------------------------------------------------------- A1
@@ -275,4 +277,22 @@ run_ss() { # <source> <session_id>
   [[ "$output" == *"Running"* ]]
   run bash -c 'printf "%s" "$1" | grep -ciE "esc to interrupt|Running…|Compacting"' _ "$output"
   [ "$output" = "0" ]
+}
+
+@test "A1: present-but-null current_usage does not fall back to cumulative total_input_tokens" {
+  in='{"session_id":"s1","context_window":{"used_percentage":12,"total_input_tokens":999999,"context_window_size":200000,"current_usage":null}}'
+  run bash -c 'printf "%s" "$1" | "$2"' _ "$in" "$SL"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.tokens' "$STATE/master-context.json")" = "null" ]
+  [ "$(jq '.pct' "$STATE/master-context.json")" = "12" ]
+}
+
+@test "A2: status line chains to a project-level statusLine.command before the user one" {
+  mkdir -p "$HOME/.claude" "$PROJECT_ROOT/.claude"
+  jq -n '{statusLine:{type:"command",command:"echo USER-BAR"}}' > "$HOME/.claude/settings.json"
+  jq -n '{statusLine:{type:"command",command:"echo PROJECT-BAR"}}' > "$PROJECT_ROOT/.claude/settings.json"
+  run bash -c 'cd "$1" && printf "%s" "{}" | "$2"' _ "$PROJECT_ROOT" "$SL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"PROJECT-BAR"* ]]
+  [[ "$output" != *"USER-BAR"* ]]
 }

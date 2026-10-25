@@ -13,15 +13,19 @@ out="$here/state/master-context.json"
 
 # tokens = what is in the window NOW (current_usage, the last API call), not
 # total_input_tokens, which is cumulative across the session and overshoots the
-# window after a few turns; fall back to it only on CLIs without current_usage.
+# window after a few turns; fall back to it only on CLIs that lack the
+# current_usage KEY -- a present-but-null current_usage (no API call yet since a
+# /clear or compaction) means "unknown", not "use the cumulative total".
 rec="$(printf '%s' "$input" | jq -c '
   select(type == "object")
-  | (.context_window.current_usage // null) as $u
-  | {pct: .context_window.used_percentage,
+  | (.context_window // {}) as $cw
+  | ($cw.current_usage // null) as $u
+  | {pct: $cw.used_percentage,
      tokens: (if ($u | type) == "object"
               then (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0))
-              else .context_window.total_input_tokens end),
-     window: .context_window.context_window_size, session_id: .session_id,
+              elif ($cw | type) == "object" and ($cw | has("current_usage")) then null
+              else $cw.total_input_tokens end),
+     window: $cw.context_window_size, session_id: .session_id,
      ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))}
   | select((.pct // 0) != 0 or (.tokens // 0) != 0)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then
@@ -29,7 +33,14 @@ if [ -n "$rec" ]; then
   if printf '%s\n' "$rec" > "$tmp" 2>/dev/null; then mv -f "$tmp" "$out" 2>/dev/null || rm -f "$tmp"; else rm -f "$tmp"; fi
 fi
 
-user_cmd="$(jq -r '.statusLine.command // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
+# --settings outranks every other layer, so chain to the operator's bar from the
+# highest-precedence layer that defines one: project-local, project, then user.
+user_cmd=""
+for _f in "$PWD/.claude/settings.local.json" "$PWD/.claude/settings.json" \
+          "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do
+  user_cmd="$(jq -r '.statusLine.command // empty' "$_f" 2>/dev/null || true)"
+  [ -n "$user_cmd" ] && break
+done
 # Never chain to ourselves (an operator who copied this into their own settings).
 case "$user_cmd" in *master-statusline.sh*) user_cmd="" ;; esac
 if [ -n "$user_cmd" ]; then
