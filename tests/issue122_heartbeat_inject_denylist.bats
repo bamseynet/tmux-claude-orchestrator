@@ -336,3 +336,16 @@ EOF
 
   refute_grep 'send-keys' "$CALLS"
 }
+
+@test "case14 (#163): kept lines are delivered byte-for-byte (invalid UTF-8 is not rewritten)" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n' >> "$INBOX"
+  printf '{"id":"w3","event":"done","note":"raw\377byte"}\n' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  LC_ALL=C grep -q $'raw\377byte' "$PASTED"
+  refute_grep 'subagent-done' "$PASTED"
+}

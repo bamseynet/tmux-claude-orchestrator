@@ -388,17 +388,13 @@ heartbeat_main() {
   # subagent-done fires on every worker turn) and must not wake the master at
   # all. Read once here, like normal/idle above -- not per tick. Denylist,
   # never allowlist: an unrecognized/future event type is always actionable,
-  # so a new event class can never go silently missing. Portable bash 3.2
-  # array build (no mapfile/readarray), same pattern as merge.sh's
-  # required_checks.
-  local inject_denylist=() _idl_line
-  while IFS= read -r _idl_line; do
-    [ -n "$_idl_line" ] && inject_denylist+=("$_idl_line")
-  done < <(jq -r '.heartbeat.inject_denylist // ["subagent-done"] | .[]' "$CONFIG" 2>/dev/null || true)
-  # The same list as a JSON array, built once, for the single-pass jq filter
-  # in the loop below (one fork per tick, not one per event line).
-  local inject_denylist_json='[]'
-  [ "${#inject_denylist[@]}" -eq 0 ] || inject_denylist_json="$(printf '%s\n' "${inject_denylist[@]}" | jq -Rnc '[inputs]')"
+  # so a new event class can never go silently missing. Kept as a compact
+  # JSON array of non-empty strings for the single-pass jq filter in the loop
+  # below (one fork per tick, not one per event line); an unreadable config
+  # or a non-array value yields '[]' (filtering off, full-fidelity delivery).
+  local inject_denylist_json
+  inject_denylist_json="$(jq -c '[.heartbeat.inject_denylist // ["subagent-done"] | .[] | tostring | select(. != "")]' "$CONFIG" 2>/dev/null)" || inject_denylist_json='[]'
+  [ -n "$inject_denylist_json" ] || inject_denylist_json='[]'
 
   # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
   # single misdetection (or a genuinely long-lived operator draft) must never be
@@ -461,27 +457,43 @@ heartbeat_main() {
       # issue #52 safety valve and force-deliver the noise anyway (symptom
       # gone, defect alive).
       local noise_only=1 kept
-      if [ "${#inject_denylist[@]}" -eq 0 ]; then
+      if [ "$inject_denylist_json" = '[]' ]; then
         noise_only=0
       else
-        # Issue #163 part B: one jq pass keeps every line whose .event FIELD
-        # is not denylisted. Fail open: a line that is not exactly one JSON
-        # object with a non-empty string .event (unparseable, concatenated
-        # values, missing/empty .event) is kept rather than silently
-        # swallowed; whitespace-only lines carry nothing and are dropped. If
-        # jq itself fails, the whole batch is kept.
-        kept="$(jq -Rr --argjson dl "$inject_denylist_json" '
-          select(test("\\S")) | . as $l
-          | (try (fromjson | .event) catch null) as $e
-          | if ($e | type) == "string" and $e != "" and any($dl[]; . == $e)
-            then empty else $l end' <<<"$events" 2>/dev/null)" || kept="$events"
+        # Issue #163 part B: one jq pass emits a keep(1)/drop(0) flag per
+        # line; a line is dropped only when its .event FIELD is denylisted.
+        # Fail open: a line that is not exactly one JSON object with a
+        # non-empty string .event (unparseable, concatenated values,
+        # missing/empty .event) is kept rather than silently swallowed;
+        # whitespace-only lines carry nothing and are dropped. Kept lines are
+        # copied from $events itself, never from jq's output (jq -R rewrites
+        # invalid UTF-8). If jq fails or its flag count does not match the
+        # line count, the whole batch is kept.
+        local _dl_flags _dl_line _dl_flag _dl_n=0 _dl_lines=0
+        kept=""
+        if _dl_flags="$(jq -Rr --argjson dl "$inject_denylist_json" '
+          if test("\\S") | not then 0
+          else (try (fromjson | .event) catch null) as $e
+            | if ($e | type) == "string" and $e != "" and any($dl[]; . == $e)
+              then 0 else 1 end
+          end' <<<"$events" 2>/dev/null)"; then
+          while IFS= read -r _dl_line <&3 && IFS= read -r _dl_flag <&4; do
+            _dl_n=$((_dl_n + 1))
+            [ "$_dl_flag" = 0 ] || kept+="${kept:+$'\n'}$_dl_line"
+          done 3<<<"$events" 4<<<"$_dl_flags"
+          _dl_lines="$(printf '%s\n' "$events" | wc -l | tr -d ' ')"
+          [ "$_dl_n" -eq "$_dl_lines" ] || { kept="$events"; log "denylist filter: flag/line count mismatch ($_dl_n/$_dl_lines); delivering batch unfiltered"; }
+        else
+          kept="$events"
+          log "denylist filter: jq failed; delivering batch unfiltered"
+        fi
         # A mixed batch is injected (and requeued) with the denylisted lines
         # stripped; events.jsonl keeps the full record.
         [ -z "$kept" ] || { noise_only=0; events="$kept"; }
       fi
 
       if [ "$noise_only" -eq 1 ]; then
-        # Every line matched heartbeat.inject_denylist on the .event FIELD
+        # Every non-blank line matched heartbeat.inject_denylist on the .event FIELD
         # (never a raw-line substring -- a denylisted name appearing only in
         # another event's free-text `reason`, e.g. merge.sh's merge-blocked,
         # must never suppress that event). Drop the batch: no send_prompt, no
