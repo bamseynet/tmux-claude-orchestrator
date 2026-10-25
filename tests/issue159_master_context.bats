@@ -257,3 +257,22 @@ run_ss() { # <source> <session_id>
   [ "$(jq -r .session_id "$STATE/master-context.json")" = "pin2" ]
   [ ! -e "$other/_orch/state/master-context.json" ]
 }
+
+@test "A1: tokens come from current_usage (context now), not cumulative total_input_tokens" {
+  in='{"session_id":"s1","context_window":{"used_percentage":30,"total_input_tokens":999999,"context_window_size":200000,"current_usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":59890}}}'
+  run bash -c 'printf "%s" "$1" | "$2"' _ "$in" "$SL"
+  [ "$status" -eq 0 ]
+  [ "$(jq '.tokens' "$STATE/master-context.json")" = "60000" ]
+}
+
+@test "A2: chained operator status line cannot match TUI_BUSY_REGEX" {
+  mkdir -p "$HOME/.claude"
+  printf '#!/usr/bin/env bash\necho "Running… compacting ESC TO INTERRUPT"\n' > "$BATS_TEST_TMPDIR/userbar.sh"
+  chmod +x "$BATS_TEST_TMPDIR/userbar.sh"
+  jq -n --arg c "$BATS_TEST_TMPDIR/userbar.sh" '{statusLine:{type:"command",command:$c}}' > "$HOME/.claude/settings.json"
+  run bash -c 'printf "%s" "{}" | "$1"' _ "$SL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Running"* ]]
+  run bash -c 'printf "%s" "$1" | grep -ciE "esc to interrupt|Running…|Compacting"' _ "$output"
+  [ "$output" = "0" ]
+}

@@ -11,10 +11,18 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 input="$(cat 2>/dev/null || true)"
 out="$here/state/master-context.json"
 
-rec="$(printf '%s' "$input" | jq -c --arg ts "$(date -u +%FT%TZ)" '
+# tokens = what is in the window NOW (current_usage, the last API call), not
+# total_input_tokens, which is cumulative across the session and overshoots the
+# window after a few turns; fall back to it only on CLIs without current_usage.
+rec="$(printf '%s' "$input" | jq -c '
   select(type == "object")
-  | {pct: .context_window.used_percentage, tokens: .context_window.total_input_tokens,
-     window: .context_window.context_window_size, session_id: .session_id, ts: $ts}
+  | (.context_window.current_usage // null) as $u
+  | {pct: .context_window.used_percentage,
+     tokens: (if ($u | type) == "object"
+              then (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0))
+              else .context_window.total_input_tokens end),
+     window: .context_window.context_window_size, session_id: .session_id,
+     ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))}
   | select((.pct // 0) != 0 or (.tokens // 0) != 0)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then
   tmp="$out.tmp.$$"
@@ -27,10 +35,15 @@ case "$user_cmd" in *master-statusline.sh*) user_cmd="" ;; esac
 if [ -n "$user_cmd" ]; then
   # The operator's bar may print prompt/box glyphs (❯ > │ ...) that
   # TUI_READY_REGEX / pane_has_draft would match, or spinner glyphs
-  # (✻ ✽ ✳ ✶) that TUI_ACTIVE_GLYPH_REGEX reads as "busy"; neutralise them.
+  # (✻ ✽ ✳ ✶) that TUI_ACTIVE_GLYPH_REGEX reads as "busy", or the words
+  # is_busy() greps for case-insensitively (TUI_BUSY_REGEX: "esc to interrupt",
+  # "Running…", "Compacting") -- any of those would pin the master as busy
+  # forever; neutralise them. Character classes, not sed's GNU-only I flag.
   printf '%s' "$input" | bash -c "$user_cmd" 2>/dev/null \
     | sed -e 's/❯/-/g' -e 's/>/-/g' -e 's/│/|/g' -e 's/┃/|/g' -e 's/╭/+/g' -e 's/╮/+/g' -e 's/╰/+/g' -e 's/╯/+/g' \
-        -e 's/✻/*/g' -e 's/✽/*/g' -e 's/✳/*/g' -e 's/✶/*/g' || true
+        -e 's/✻/*/g' -e 's/✽/*/g' -e 's/✳/*/g' -e 's/✶/*/g' -e 's/…/.../g' \
+        -e 's/\([Cc][Oo][Mm][Pp][Aa][Cc][Tt]\)\([Ii][Nn][Gg]\)/\1-\2/g' \
+        -e 's/\([Ee][Ss][Cc]\) \([Tt][Oo] [Ii][Nn][Tt][Ee][Rr][Rr][Uu][Pp][Tt]\)/\1-\2/g' || true
 else
   pct="$(printf '%s' "$rec" | jq -r '.pct // empty' 2>/dev/null || true)"
   if [ -n "$pct" ]; then printf 'orch master ctx %s%%\n' "$pct"; else printf 'orch master\n'; fi

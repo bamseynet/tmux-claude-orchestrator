@@ -35,7 +35,7 @@ case "$src" in
     # Fed on stdin, not --arg: master-notes.md grows without bound and a single
     # argv string over 128 KiB fails execve (E2BIG), which would drop the
     # role prompt along with the summary.
-    printf '%s\n(Re-injected after a context %s: if you were mid-task, resume it rather than waiting.)\n\n%s' \
+    printf '%s\n(Re-injected after a context %s: this overrides \"wait for my tasks\" above -- if you were mid-task, resume it rather than waiting.)\n\n%s' \
         "$(master_role_prompt)" "$src" "$summary" \
       | jq -Rsc '. as $c | {hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:
          (if ($c | length) > 9500 then $c[0:7900] + "\n[... truncated ...]\n" + $c[-1500:] else $c end)}}' 2>/dev/null || true
