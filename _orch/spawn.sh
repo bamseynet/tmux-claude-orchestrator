@@ -430,6 +430,10 @@ hook_statuses='["done","waiting-bg","needs-input","subagent-done"]'
 # shellcheck disable=SC2016  # $c/$hs are jq variables, not shell
 hook_status_filter='(.status // "") as $c | $hs | map(. == $c) | any'
 hook_reported() {
+  # A hook status only proves submission once the task has actually gone out:
+  # while a dialog is still holding the first send back, a Notification hook can
+  # fire for the dialog itself (issues #132/#133).
+  [ "$task_sent" -eq 1 ] || return 1
   if jq -e --argjson hs "$hook_statuses" "$hook_status_filter" "$WORKERS_DIR/$id.json" >/dev/null 2>&1; then
     log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
     return 0
@@ -495,10 +499,25 @@ else
     elif pane_has_dialog "$S:$id"; then
       log "worker $id: dialog on screen; not re-pasting (would be consumed as a dialog choice)"
     else
-      log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
+      if [ "$task_sent" -eq 1 ]; then
+        log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
+      else
+        # The dialog only cleared during the final rung's wait: this is the
+        # FIRST send, not a re-inject.
+        log "worker $id: dialog cleared after the last retry; sending the task once"
+      fi
+      first_send=$((1 - task_sent))
       send_prompt "$S:$id" "${preamble}${task}"
       task_sent=1
-      if confirm_sent || hook_reported; then spawn_ok=1; fi
+      if confirm_sent || hook_reported; then
+        spawn_ok=1
+      elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then
+        # A first send gets the same one bare-Enter follow-up the #51 ladder
+        # gives every other paste: its trailing Enter may have been lost.
+        log "worker $id: first send unconfirmed; sending one bare Enter"
+        tmux send-keys -t "$S:$id" Enter
+        if confirm_sent || hook_reported; then spawn_ok=1; fi
+      fi
     fi
   fi
 fi
@@ -507,8 +526,9 @@ if [ "$spawn_ok" -ne 1 ]; then
   # Mark spawn-failed in the same locked read-modify-write that re-checks for a hook
   # status: a Stop/Notification landing after the last hook_reported() check must
   # not be clobbered into spawn-failed (and reaped) while the worker is running.
-  update_worker_status "$id" --argjson hs "$hook_statuses" \
-    ".status = (if ($hook_status_filter) then .status else \"spawn-failed\" end)"
+  # A task that never went out is spawn-failed whatever a hook reported.
+  update_worker_status "$id" --argjson hs "$hook_statuses" --argjson sent "$task_sent" \
+    ".status = (if \$sent == 1 and ($hook_status_filter) then .status else \"spawn-failed\" end)"
   hook_reported && spawn_ok=1
 fi
 

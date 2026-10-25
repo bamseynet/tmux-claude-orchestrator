@@ -257,3 +257,84 @@ EOF2
   grep -Fq 'worker w5: dialog cleared; sending the task' "$ORCH_ROOT/_orch/state/orch.log"
   grep -Fq 'worker w5: task injection unconfirmed; sending bare Enter' "$ORCH_ROOT/_orch/state/orch.log"
 }
+
+@test "a hook status written while a dialog holds back the first send does not count as spawned" {
+  # The trust dialog never clears, but a Notification hook writes needs-input
+  # (e.g. for the dialog itself). The task never went out, so this must still
+  # end spawn-failed with zero pastes -- not a "spawned" worker with no task.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  WJ="$ORCH_ROOT/_orch/state/workers/w6.json"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    if grep -q 'not sending' "$LOGF" 2>/dev/null && [ -f "$WJ" ]; then
+      jq '.status = "needs-input"' "$WJ" > "$WJ.t" && mv "$WJ.t" "$WJ"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w6 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawn-failed w6"* ]]
+  run jq -r .status "$WJ"
+  [ "$output" = "spawn-failed" ]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 0 ]
+}
+
+@test "a first send made by the last resort still gets one bare-Enter follow-up" {
+  # No retry rungs: the dialog clears during the initial wait, so the last
+  # resort makes the FIRST send. Its trailing Enter is lost (chip left unsent);
+  # one bare Enter must follow instead of dropping straight to spawn-failed.
+  jq '.thresholds.spawn_inject_retries = 0' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  CLEARED="$BATS_TEST_TMPDIR/cleared"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  capture-pane)
+    if [ ! -f "$CLEARED" ] && grep -q 'not sending' "$LOGF" 2>/dev/null; then
+      touch "$CLEARED"; echo '❯ ' > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  paste-buffer)
+    printf '%s\n' '✻ Welcome to Claude Code!' '╭────────────────────────────────╮' '│ ❯ [Pasted text #1 +31 lines]   │' '╰────────────────────────────────╯' > "$PANE_FILE" ;;
+  send-keys)
+    if [ "\$#" -eq 4 ] && [ "\$4" = "Enter" ] && grep -q 'first send unconfirmed' "$LOGF" 2>/dev/null; then
+      echo 'esc to interrupt' > "$PANE_FILE"
+    fi ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w7 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w7 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  grep -Fq 'worker w7: dialog cleared after the last retry; sending the task once' "$LOGF"
+  grep -Fq 'worker w7: first send unconfirmed; sending one bare Enter' "$LOGF"
+}

@@ -456,6 +456,16 @@ TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]
 # a submitted task's transcript echo or in model prose would otherwise veto
 # inject_confirmed and block every rung of spawn.sh's ladder.
 TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\?|Do you trust the files in this folder\?)|^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?Yes, I trust (this folder|the files)')"
+# Each dialog needs TWO rows of evidence, not one: a header-shaped row above
+# can still turn up on its own -- a short multi-line task rendered literally in
+# the input box ("│ Do you want to proceed? │"), or a numbered list in model
+# prose / a --resume transcript ("1. Yes, I trust this folder"). Requiring the
+# dialog's choice row as well makes a false positive need a near-verbatim copy
+# of the whole dialog. The trust dialog's destructive "No, exit" choice is
+# present in every known version of it; the permission dialog always offers
+# "1. Yes" as its first choice.
+TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
+TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -520,16 +530,19 @@ pane_has_pending_paste() { # <target>  -> 0 if an un-submitted paste chip is vis
   [[ "$input_row" =~ $TUI_PASTE_CHIP_REGEX ]]
 }
 
+# <capture> <header_regex> <choice_regex>  -> 0 if BOTH rows are in the capture.
+_dialog_in() { printf '%s\n' "$1" | grep -qE "$2" && printf '%s\n' "$1" | grep -qE "$3"; }
+
 # Tool-permission dialog visible? (0 = visible). See TUI_PERMISSION_DIALOG_REGEX:
 # this can only render post-acceptance, so it doubles as positive landed-injection
 # evidence in inject_confirmed() below (issue #133).
-pane_has_permission_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_PERMISSION_DIALOG_REGEX"; }
+pane_has_permission_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX"; }
 
 # Startup folder-trust dialog visible? (0 = visible). See TUI_TRUST_DIALOG_REGEX:
 # unlike the permission dialog this is a PRE-acceptance gate and its default
 # choice is destructive, so it is never positive evidence and must veto any
 # bare Enter (issues #132/#133).
-pane_has_trust_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_TRUST_DIALOG_REGEX"; }
+pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"; }
 
 # Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
 # send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --
@@ -537,7 +550,11 @@ pane_has_trust_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_TRUST_DIALOG_REGEX"
 # choice", not "submit the input box", and for the trust dialog that choice
 # exits the session (issues #132/#133).
 # One capture, not two: this runs on every rung of the injection ladder.
-pane_has_dialog() { pane_tail "$1" 25 | grep -qE "$TUI_PERMISSION_DIALOG_REGEX|$TUI_TRUST_DIALOG_REGEX"; }
+pane_has_dialog() {
+  local p; p="$(pane_tail "$1" 25)"
+  _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"
+}
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
 # defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn

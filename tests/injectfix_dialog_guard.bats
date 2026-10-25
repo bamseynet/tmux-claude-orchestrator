@@ -194,3 +194,28 @@ Enter to confirm · Esc to cancel'
   run pane_has_trust_dialog "orch:orchestrator"
   [ "$status" -eq 0 ]
 }
+
+@test "pane_has_dialog is NOT fooled by a numbered 'Yes, I trust' list item without the dialog's 'No, exit' row" {
+  # A --resume transcript or model prose quoting one choice as a list item.
+  fake_tmux_set_pane "orch" "orchestrator" '● The dialog offers:
+  1. Yes, I trust this folder
+  and the session continues.'
+  run pane_has_trust_dialog "orch:orchestrator"
+  [ "$status" -ne 0 ]
+  run pane_has_dialog "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
+
+@test "inject_confirmed is NOT fooled by a permission header on its own continuation row of an unsent task" {
+  # A short two-line task shown literally in the input box under the banner:
+  # its second line is the bare header, but there is no "1. Yes" choice row.
+  fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
+╭──────────────────────────────────────────────╮
+│ ❯ add a confirm step                         │
+│   Do you want to proceed?                    │
+╰──────────────────────────────────────────────╯'
+  run pane_has_permission_dialog "orch:orchestrator"
+  [ "$status" -ne 0 ]
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}
