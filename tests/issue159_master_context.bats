@@ -296,3 +296,22 @@ run_ss() { # <source> <session_id>
   [[ "$output" == *"PROJECT-BAR"* ]]
   [[ "$output" != *"USER-BAR"* ]]
 }
+
+@test "A2: chained operator status line cannot match TUI_READY_REGEX words or TUI_WELCOME_REGEX" {
+  mkdir -p "$HOME/.claude"
+  printf '#!/usr/bin/env bash\necho "Welcome back | ? for shortcuts | Try \\"x\\" | WELCOME"\n' > "$BATS_TEST_TMPDIR/userbar.sh"
+  chmod +x "$BATS_TEST_TMPDIR/userbar.sh"
+  jq -n --arg c "$BATS_TEST_TMPDIR/userbar.sh" '{statusLine:{type:"command",command:$c}}' > "$HOME/.claude/settings.json"
+  run bash -c 'printf "%s" "{}" | "$1"' _ "$SL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"back"* ]]
+  ! printf '%s' "$output" | grep -qE 'for shortcuts|Try "'
+  ! printf '%s' "$output" | grep -qi 'welcome'
+}
+
+@test "role prompt sent at launch names bootstrap's own CLAUDE.md, not an inherited ORCH_ROOT's" {
+  # shellcheck disable=SC1091
+  run bash -c 'ORCH_ROOT="$1" source "$2/_orch/lib.sh" >/dev/null 2>&1; master_role_prompt "$3"' _ "$BATS_TEST_TMPDIR/elsewhere" "$ORCH_ROOT" "$ORCH_ROOT/_orch"
+  [[ "$output" == *"read the file $ORCH_ROOT/_orch/CLAUDE.md"* ]]
+  grep -F 'master_role_prompt "$here"' "$ORCH_ROOT/_orch/bootstrap.sh"
+}

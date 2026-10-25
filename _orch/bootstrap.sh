@@ -194,7 +194,7 @@ if ! session_exists "$S"; then
   fi
   tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}" Enter
   if wait_ready "$S:$ORCH_WINDOW" 90; then
-    send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt)"
+    send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt "$here")"
   else
     log "master not ready in 90s; open the window and read $here/CLAUDE.md manually"
   fi

@@ -49,12 +49,17 @@ if [ -n "$user_cmd" ]; then
   # (✻ ✽ ✳ ✶) that TUI_ACTIVE_GLYPH_REGEX reads as "busy", or the words
   # is_busy() greps for case-insensitively (TUI_BUSY_REGEX: "esc to interrupt",
   # "Running…", "Compacting") -- any of those would pin the master as busy
-  # forever; neutralise them. Character classes, not sed's GNU-only I flag.
+  # forever -- or TUI_READY_REGEX's words ("for shortcuts", 'Try "') that fake
+  # an input box, or "Welcome" (TUI_WELCOME_REGEX, -i) that makes
+  # inject_confirmed() read a landed prompt as dropped; neutralise them.
+  # Character classes, not sed's GNU-only I flag.
   printf '%s' "$input" | bash -c "$user_cmd" 2>/dev/null \
     | sed -e 's/❯/-/g' -e 's/>/-/g' -e 's/│/|/g' -e 's/┃/|/g' -e 's/╭/+/g' -e 's/╮/+/g' -e 's/╰/+/g' -e 's/╯/+/g' \
         -e 's/✻/*/g' -e 's/✽/*/g' -e 's/✳/*/g' -e 's/✶/*/g' -e 's/…/.../g' \
         -e 's/\([Cc][Oo][Mm][Pp][Aa][Cc][Tt]\)\([Ii][Nn][Gg]\)/\1-\2/g' \
-        -e 's/\([Ee][Ss][Cc]\) \([Tt][Oo] [Ii][Nn][Tt][Ee][Rr][Rr][Uu][Pp][Tt]\)/\1-\2/g' || true
+        -e 's/\([Ee][Ss][Cc]\) \([Tt][Oo] [Ii][Nn][Tt][Ee][Rr][Rr][Uu][Pp][Tt]\)/\1-\2/g' \
+        -e 's/for shortcuts/for-shortcuts/g' -e 's/Try "/Try-"/g' \
+        -e 's/\([Ww][Ee][Ll]\)\([Cc][Oo][Mm][Ee]\)/\1-\2/g' || true
 else
   pct="$(printf '%s' "$rec" | jq -r '.pct // empty' 2>/dev/null || true)"
   if [ -n "$pct" ]; then printf 'orch master ctx %s%%\n' "$pct"; else printf 'orch master\n'; fi
