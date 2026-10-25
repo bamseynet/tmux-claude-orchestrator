@@ -16,7 +16,14 @@ out="$here/state/master-context.json"
 # window after a few turns; fall back to it only on CLIs that lack the
 # current_usage KEY -- a present-but-null current_usage (no API call yet since a
 # /clear or compaction) means "unknown", not "use the cumulative total".
-rec="$(printf '%s' "$input" | jq -c '
+# The previous record, so .first (this session's FIRST real reading -- the
+# post-/clear floor the #160 loop guard judges) survives later refreshes. A
+# present-but-null current_usage record (.reset) is not a real reading: its pct
+# can be 0 or stale, and latching it would let the guard "verify" a floor that
+# was never measured. Same for a reading without numeric tokens (pct only):
+# the guard skips those, so latching one would leave the reset unjudged forever.
+prev="$(jq -c 'select(type == "object")' "$out" 2>/dev/null || true)"
+rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
   select(type == "object")
   | (.context_window // {}) as $cw
   | ($cw.current_usage // null) as $u
@@ -27,12 +34,19 @@ rec="$(printf '%s' "$input" | jq -c '
               elif $has_cu then null
               else $cw.total_input_tokens end),
      window: $cw.context_window_size, session_id: .session_id,
+     # #160: the total_input_tokens fallback is cumulative, not "in the window
+     # now" -- the reset logic must not judge window fullness by it.
+     cumulative: ((($u | type) != "object") and ($has_cu | not)),
      ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
      reset: (($u == null) and $has_cu)}
   # A present-but-null current_usage (just after a /clear or compaction) is
   # recorded as unknown rather than skipped, so the pre-compaction usage does
   # not linger in the file as if it were still current.
   | select((.pct // 0) != 0 or (.tokens // 0) != 0 or .reset)
+  | .first = (if ($prev | type) == "object" and $prev.session_id == .session_id and $prev.first != null
+              then $prev.first
+              elif (.reset | not) and (.tokens | type) == "number" then {pct, tokens}
+              else null end)
   | del(.reset)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then
   tmp="$out.tmp.$$"
