@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$id" ] || { say "usage: collect.sh <id> [--base <branch>]" >&2; exit 1; }
 
-proj="${PROJECT_ROOT:-$(pwd)}"
+proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
 branch="$(worker_branch "$id")"
 # Back-compat (issue #86): a worker spawned before this install upgraded past
 # the namespaced layout lives on the pre-#86 branch orch/<id>. Read-only

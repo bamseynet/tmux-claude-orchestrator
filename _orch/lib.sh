@@ -197,6 +197,37 @@ worker_branch() { # <id> -> this install's branch name for <id>
   printf 'orch/%s/%s' "$ORCH_HASH" "$1"
 }
 
+# --- Per-worker target repo (issue #148) --------------------------------------------
+# spawn.sh records the resolved, absolute target repo as `target_repo` in the
+# worker's status file and queue record; every later operation (clean, reap, prune,
+# collect, merge, the queue drain) reads it back instead of re-resolving from its
+# own environment. Status files written before #148 have no field: fall back to
+# the caller's PROJECT_ROOT/cwd, i.e. the old behaviour.
+worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
+  local f="$WORKERS_DIR/$1.json"
+  [ -f "$f" ] || return 0
+  jq -r '.target_repo // empty' "$f" 2>/dev/null || true
+}
+
+# resolve_worker_proj <id>: the repo to operate on for worker <id>. Prints the
+# recorded repo when it still exists, else PROJECT_ROOT/cwd. An EXPLICIT --repo
+# (orch exports ORCH_REPO_EXPLICIT=1 for it) that names a different repo than the
+# recorded one is refused (rc 1) rather than silently picking either side.
+resolve_worker_proj() {
+  local id="$1" cur="${PROJECT_ROOT:-$(pwd)}" rec
+  rec="$(worker_target_repo "$id")"
+  if [ -z "$rec" ] || [ ! -d "$rec" ]; then
+    printf '%s' "$cur"; return 0
+  fi
+  if [ "${ORCH_REPO_EXPLICIT:-}" = "1" ] \
+     && [ "$(cd "$rec" && pwd -P)" != "$(cd "$cur" 2>/dev/null && pwd -P)" ]; then
+    say "worker '$id' was spawned against $rec, not $cur; refusing (re-run with --repo $rec, or without --repo)" >&2
+    log "refused: --repo $cur disagrees with worker '$id' recorded target repo $rec"
+    return 1
+  fi
+  printf '%s' "$rec"
+}
+
 # Pre-#86 layout, kept only so clean.sh/prune can sweep up leftovers from before
 # this install upgraded (see the "Back-compat" note in lib.sh's header comment).
 legacy_worker_wdir() { printf '%s/../wt/%s' "$1" "$2"; } # <project_root> <id>

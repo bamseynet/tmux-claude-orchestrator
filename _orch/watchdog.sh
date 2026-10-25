@@ -251,7 +251,7 @@ liveness_check() { # <w> <pane_text> <now>
   # A worker parked on background work is not idle-with-finished-commits (issue #163).
   [ "$status" != "waiting-bg" ] || return 0
   local ahead rf r_last r_count
-  ahead="$(worker_branch_ahead "${PROJECT_ROOT:-$(pwd)}" "$w")" || true
+  ahead="$(worker_branch_ahead "$(resolve_worker_proj "$w")" "$w")" || true
   rf="$STATE_DIR/.review-$w"
   r_last=0; r_count=0
   [ -f "$rf" ] && { IFS= read -r r_last; IFS= read -r r_count; } < "$rf" || true
@@ -341,7 +341,7 @@ dead_sweep() { # <live_windows>
         # finished, unmerged commits (e.g. waiting-bg on a session cron, or a legacy
         # subagent-done left after the final Stop) -- keep them for the master.
         case "$status" in
-          spawning | working) prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id" ;;
+          spawning | working) prune_dead_worktree "$(resolve_worker_proj "$id")" "$id" ;;
         esac
         log "watchdog: worker '$id' dead (no live window, was $status); notified master"
       else
