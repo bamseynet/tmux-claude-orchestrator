@@ -156,7 +156,9 @@ master_dead_clear() { rm -f "$STATE_DIR/.master-dead"; }
 # Pure decision: no tmux, no file IO. Returns 0 only when a reset is due.
 # <ctx_json> <session_json> <now> <last_reset_json> <pct> <fraction> <cooldown> [enabled]
 # pct/fraction/cooldown/enabled fall back to 60 / 0.35 / 1800 / true when empty
-# (a missing master_context block). Freshness is session-id equality, not a
+# (a missing master_context block). A reading needs numeric tokens: a pct-only
+# record (current_usage null, just after /clear or a compaction) can carry a
+# stale pct. Freshness is session-id equality, not a
 # timestamp: the status line goes quiet when idle and may not re-run after /clear.
 master_reset_due() {
   local ctx="$1" sess="$2" now="$3" last="${4:-}" pct="${5:-}" frac="${6:-}" cool="${7:-}" enabled="${8:-}"
@@ -171,6 +173,7 @@ master_reset_due() {
     ($last.backoff // false) != true
     and $cid != "" and $cid == ($s.session_id // "")
     and ($w | type == "number") and $w > 0
+    and ($c.tokens | type == "number")
     and ((($c.pct // 0) >= $pct) or (($c.tokens // 0) >= ($frac * $w)))
     and ($now - ($last.ts // 0)) >= $cool' >/dev/null 2>&1
 }
@@ -233,6 +236,18 @@ master_reset_tick() { # <session:window>
   cfg="$_MASTER_RESET_CFG"
   IFS='|' read -r enabled pct frac cool cptimeout <<<"$cfg"
   [ "$enabled" = "false" ] && return 0
+  # A non-numeric knob would make every --argjson below fail, i.e. resets
+  # silently off. Say so once and stay off.
+  local _k
+  for _k in "$pct" "$frac" "$cool:i" "$cptimeout:i"; do
+    case "$_k" in
+      *:i) _k="${_k%:i}"; [[ -z "$_k" || "$_k" =~ ^[0-9]+$ ]] && continue ;;   # bash -lt needs integers
+      *)   [[ -z "$_k" || "$_k" =~ ^[0-9]+(\.[0-9]+)?$ ]] && continue ;;
+    esac
+    log "master_context: non-numeric setting '$_k' in config.json -- automatic master resets disabled"
+    _MASTER_RESET_CFG="false||||"
+    return 0
+  done
   master_reset_guard "$ctx" "$last" "$pct" "$frac"
   last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
   now="$(date +%s)"
@@ -256,12 +271,15 @@ master_reset_tick() { # <session:window>
   send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), then stop. Do not start new work. (If the reset is aborted you will get a master-reset-aborted event: then carry on normally.)"
   log "master context over threshold (pct=$cpct tokens=$ctok); checkpoint requested"
   while [ "$(( $(date +%s) - t0 ))" -lt "$cptimeout" ]; do
+    # This wait blocks the heartbeat loop: honour .stop and a dead master.
+    [ -e "$STATE_DIR/.stop" ] && { why="heartbeat stopping"; break; }
+    master_window_alive "$target" || { why="master window gone"; break; }
     m="$(_lock_mtime "$notes" 2>/dev/null || true)"
     if [ -n "$m" ] && [ "$m" != "$pre_mtime" ] && [ "$m" -ge "$t0" ] && is_ready "$target"; then ok=1; break; fi
     sleep 1
   done
-  if [ "$ok" -ne 1 ]; then why="checkpoint not completed within ${cptimeout}s"
-  elif ! is_ready "$target"; then why="pane busy"
+  if [ -n "$why" ]; then :
+  elif [ "$ok" -ne 1 ]; then why="checkpoint not completed within ${cptimeout}s"
   elif pane_has_draft "$target"; then why="draft appeared"; fi
   if [ -n "$why" ]; then
     log "master reset aborted: $why (no /clear sent)"
@@ -271,6 +289,22 @@ master_reset_tick() { # <session:window>
     return 0
   fi
   send_prompt "$target" "/clear"
+  # Confirm it took: the SessionStart hook records the new session_id on every
+  # /clear. If it never changes, the /clear did not happen (not submitted, or
+  # swallowed) -- do not claim a reset or tell the master it was cleared.
+  local new_sid="" i=0 confirm_s=45
+  [ "$cptimeout" -lt "$confirm_s" ] && confirm_s="$cptimeout"
+  while [ "$i" -lt "$confirm_s" ] && [ ! -e "$STATE_DIR/.stop" ]; do
+    new_sid="$(jq -r '.session_id // empty' "$STATE_DIR/master-session.json" 2>/dev/null || true)"
+    [ -n "$new_sid" ] && [ "$new_sid" != "$old_sid" ] && break
+    new_sid=""; sleep 1; i=$((i+1))
+  done
+  if [ -z "$new_sid" ]; then
+    log "master reset unconfirmed: session id unchanged after /clear; treating as aborted"
+    printf '%s\n' "$(( $(date +%s) + ${cool:-1800} ))" > "$STATE_DIR/master-reset-retry-after"
+    _master_reset_event master-reset-aborted "$old_sid"
+    return 0
+  fi
   wait_ready "$target" 45 || log "master not ready 45s after /clear"
   printf '%s\n' "$(jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
     '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}')" > "$STATE_DIR/master-reset.json.tmp.$$" \

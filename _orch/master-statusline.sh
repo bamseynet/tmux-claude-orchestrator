@@ -17,7 +17,10 @@ out="$here/state/master-context.json"
 # current_usage KEY -- a present-but-null current_usage (no API call yet since a
 # /clear or compaction) means "unknown", not "use the cumulative total".
 # The previous record, so .first (this session's FIRST real reading -- the
-# post-/clear floor the #160 loop guard judges) survives later refreshes.
+# post-/clear floor the #160 loop guard judges) survives later refreshes. A
+# present-but-null current_usage record (.reset) is not a real reading: its pct
+# can be 0 or stale, and latching it would let the guard "verify" a floor that
+# was never measured.
 prev="$(jq -c 'select(type == "object")' "$out" 2>/dev/null || true)"
 rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
   select(type == "object")
@@ -38,7 +41,7 @@ rec="$(printf '%s' "$input" | jq -c --argjson prev "${prev:-null}" '
   | select((.pct // 0) != 0 or (.tokens // 0) != 0 or .reset)
   | .first = (if ($prev | type) == "object" and $prev.session_id == .session_id and $prev.first != null
               then $prev.first
-              elif .tokens != null or .pct != null then {pct, tokens}
+              elif (.reset | not) and (.tokens != null or .pct != null) then {pct, tokens}
               else null end)
   | del(.reset)' 2>/dev/null || true)"
 if [ -n "$rec" ]; then

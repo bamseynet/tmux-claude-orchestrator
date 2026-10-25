@@ -26,6 +26,7 @@ setup() {
   # Knobs the tmux stub reads on a load-buffer carrying the checkpoint prompt.
   export TOUCH_FLAG="$BATS_TEST_TMPDIR/touch_notes_on_checkpoint"
   export DRAFT_FLAG="$BATS_TEST_TMPDIR/draft_after_checkpoint"
+  export NO_CLEAR_FLAG="$BATS_TEST_TMPDIR/clear_does_not_take"
   export NOTES CALLS PANE_TEXT_FILE DRAFT_PANE_FILE
 
   cat > "$STUBBIN/tmux" <<'EOF'
@@ -41,6 +42,9 @@ case "${1:-}" in
       *master-notes.md*)
         [ -e "$TOUCH_FLAG" ] && touch "$NOTES"
         [ -e "$DRAFT_FLAG" ] && cp "$DRAFT_PANE_FILE" "$PANE_TEXT_FILE"
+        ;;
+      /clear)  # what the SessionStart hook does on a real /clear
+        [ -e "$NO_CLEAR_FLAG" ] || printf '{"session_id":"cleared-%s","source":"clear"}\n' "$$" > "$(dirname "$NOTES")/master-session.json"
         ;;
     esac ;;
   show-buffer)   exit 1 ;;
@@ -242,6 +246,7 @@ S1='{"session_id":"s1"}'
   start_hb
   sleep 1
   stop_hb
+  grep -q 'capture-pane' "$CALLS"   # the reset path did look at the pane
   refute_grep 'master-notes.md' "$CALLS"
   refute_grep '/clear' "$CALLS"
   [ ! -e "$STATE_DIR/master-reset.json" ]
@@ -392,5 +397,47 @@ S1='{"session_id":"s1"}'
   stop_hb
   grep -q 'capture-pane' "$CALLS"   # the heartbeat did tick
   refute_grep 'master-notes.md' "$CALLS"
+  refute_grep '/clear' "$CALLS"
+}
+
+@test "B8: /clear whose session id never changes -> unconfirmed, no master-reset.json, master told" {
+  touch "$TOUCH_FLAG" "$NO_CLEAR_FLAG"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'master reset unconfirmed' "$LOG"
+  stop_hb
+  grep -q 'PASTE<</clear>>' "$CALLS"
+  [ ! -e "$STATE_DIR/master-reset.json" ]
+  [ -e "$STATE_DIR/master-reset-retry-after" ]
+  grep -q '"event":"master-reset-aborted"' "$STATE_DIR/events.jsonl"
+  refute_grep '"event":"master-reset"' "$STATE_DIR/events.jsonl"
+}
+
+@test "B8: a pct-only reading (tokens null, possibly stale) is never due" {
+  run due '{"pct":75,"tokens":null,"window":1000000,"session_id":"s1"}' "$S1" '{}' 60 0.35 1800
+  [ "$status" -eq 1 ]
+}
+
+@test "B8: a non-numeric master_context knob disables resets and says so" {
+  jq '.master_context.reset_pct = "60%"' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  touch "$TOUCH_FLAG"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q "non-numeric setting '60%'" "$LOG"
+  sleep 0.3
+  stop_hb
+  [ "$(grep -c 'non-numeric setting' "$LOG")" -eq 1 ]
+  refute_grep 'master-notes.md' "$CALLS"
+}
+
+@test "B8: .stop during the checkpoint wait ends it promptly without /clear" {
+  jq '.master_context.checkpoint_timeout_s = 600' "$ORCH_ROOT/_orch/config.json" > "$BATS_TEST_TMPDIR/c.json"
+  mv "$BATS_TEST_TMPDIR/c.json" "$ORCH_ROOT/_orch/config.json"
+  ctx 75 400000 s1; sess s1
+  start_hb
+  wait_for grep -q 'checkpoint requested' "$LOG"
+  stop_hb
+  grep -q 'master reset aborted: heartbeat stopping' "$LOG"
   refute_grep '/clear' "$CALLS"
 }
