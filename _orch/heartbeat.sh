@@ -391,9 +391,11 @@ heartbeat_main() {
   # so a new event class can never go silently missing. Kept as a compact
   # JSON array of non-empty strings for the single-pass jq filter in the loop
   # below (one fork per tick, not one per event line); an unreadable config
-  # or a non-array value yields '[]' (filtering off, full-fidelity delivery).
+  # or a non-iterable value (e.g. a bare string) yields '[]' (filtering off,
+  # full-fidelity delivery) and is logged so the misconfig is visible.
   local inject_denylist_json
-  inject_denylist_json="$(jq -c '[.heartbeat.inject_denylist // ["subagent-done"] | .[] | tostring | select(. != "")]' "$CONFIG" 2>/dev/null)" || inject_denylist_json='[]'
+  inject_denylist_json="$(jq -c '[.heartbeat.inject_denylist // ["subagent-done"] | .[] | tostring | select(. != "")]' "$CONFIG" 2>/dev/null)" \
+    || { inject_denylist_json='[]'; log "heartbeat.inject_denylist unreadable or not an array; denylist filtering disabled"; }
   [ -n "$inject_denylist_json" ] || inject_denylist_json='[]'
 
   # Issue #52 safety valve: pane_has_draft() is a best-effort heuristic, so a
@@ -481,7 +483,9 @@ heartbeat_main() {
             _dl_n=$((_dl_n + 1))
             [ "$_dl_flag" = 0 ] || kept+="${kept:+$'\n'}$_dl_line"
           done 3<<<"$events" 4<<<"$_dl_flags"
-          _dl_lines="$(printf '%s\n' "$events" | wc -l | tr -d ' ')"
+          # Line count without forking (printf|wc|tr every tick): newlines + 1.
+          _dl_lines="${events//[!$'\n']/}"
+          _dl_lines=$(( ${#_dl_lines} + 1 ))
           [ "$_dl_n" -eq "$_dl_lines" ] || { kept="$events"; log "denylist filter: flag/line count mismatch ($_dl_n/$_dl_lines); delivering batch unfiltered"; }
         else
           kept="$events"
