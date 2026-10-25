@@ -145,6 +145,235 @@ master_dead_alert() { # <target> <now> <interval_s>
 # Drop the standing alert once the master window is back.
 master_dead_clear() { rm -f "$STATE_DIR/.master-dead"; }
 
+# --- Master context reset (issue #160, part B of #158) ------------------------
+# The master's context only grows. When master-context.json (written by the
+# status line, #159) says it is too full, heartbeat -- the master's single prompt
+# injector (#55 keeps the watchdog out) -- asks it to checkpoint master-notes.md,
+# then /clear's it; the SessionStart hook re-injects role prompt + rehydrate.
+# Thresholds scale with the window the master actually has (.window), so 200k and
+# 1M masters both reset at a sensible point; an unknown window never resets.
+
+# Pure decision: no tmux, no file IO. Returns 0 only when a reset is due.
+# <ctx_json> <session_json> <now> <last_reset_json> <pct> <fraction> <cooldown> [enabled]
+# pct/fraction/cooldown/enabled fall back to 60 / 0.35 / 1800 / true when empty
+# (a missing master_context block). A reading needs numeric tokens: a pct-only
+# record (current_usage null, just after /clear or a compaction) can carry a
+# stale pct. Freshness is session-id equality, not a
+# timestamp: the status line goes quiet when idle and may not re-run after /clear.
+master_reset_due() {
+  local ctx="$1" sess="$2" now="$3" last="${4:-}" pct="${5:-}" frac="${6:-}" cool="${7:-}" enabled="${8:-}"
+  [ "$enabled" = "false" ] && return 1
+  [ -n "$last" ] || last='{}'
+  jq -ne --argjson ctx "${ctx:-null}" --argjson sess "${sess:-null}" --argjson last "$last" \
+    --argjson now "$now" --argjson pct "${pct:-60}" --argjson frac "${frac:-0.35}" \
+    --argjson cool "${cool:-1800}" '
+    ($ctx // {}) as $c | ($sess // {}) as $s |
+    ($c.window // 0) as $w |
+    ($c.session_id // "") as $cid |
+    ($last.backoff // false) != true
+    and $cid != "" and $cid == ($s.session_id // "")
+    and ($w | type == "number") and $w > 0
+    and ($c.tokens | type == "number")
+    and ((($c.pct // 0) >= $pct) or (($c.cumulative // false) != true and ($c.tokens // 0) >= ($frac * $w)))
+    and ($now - ($last.ts // 0)) >= $cool' >/dev/null 2>&1
+}
+
+# Atomically replace master-reset.json with stdin.
+_master_reset_write() {
+  local tmp="$STATE_DIR/master-reset.json.tmp.$$"
+  # -s: a failed upstream jq must not clobber the file with nothing.
+  cat > "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$STATE_DIR/master-reset.json" || rm -f "$tmp"
+}
+
+# Loop guard: the first reading from the post-reset session that is still over
+# threshold means the floor (CLAUDE.md + rehydrate + notes) is itself too big.
+# Latch backoff=true (log once) until `orch up` clears master-reset.json.
+# Judges .first (the status line's first reading of that session), not the
+# current one: by the time this tick runs the resumed master may already have
+# grown well past its floor. Falls back to the current reading if absent.
+# Like master_reset_due, a reading needs numeric tokens: a pct-only record
+# (current_usage null right after /clear) can carry a stale pct, which would
+# latch a spurious backoff -- or "verify" a floor that was never measured.
+master_reset_guard() { # <ctx_json> <last_json> <pct> <fraction>
+  local ctx="$1" last="$2" pct="${3:-60}" frac="${4:-0.35}" verdict judged
+  [ -n "$last" ] || return 0
+  verdict="$(jq -nr --argjson c "${ctx:-null}" --argjson l "$last" --argjson pct "${pct:-60}" --argjson frac "${frac:-0.35}" '
+    ($c // {}) as $c0 | ($c0 + ($c0.first // {})) as $c |
+    if ($l.backoff // false) == true or ($l.verified // false) == true then "skip"
+    elif ($l.old_session_id // "") == "" or ($c.session_id // "") == "" or $c.session_id == $l.old_session_id then "skip"
+    elif (($c.window // 0) | type != "number") or ($c.window // 0) <= 0 then "skip"
+    elif ($c.tokens | type) != "number" then "skip"
+    elif (($c.pct // 0) >= $pct) or (($c.cumulative // false) != true and ($c.tokens // 0) >= ($frac * $c.window)) then "backoff"
+    else "ok" end' 2>/dev/null)" || return 0
+  case "$verdict" in
+    backoff)
+      jq -c '.backoff = true' <<<"$last" | _master_reset_write
+      # Report the reading that was judged (.first), not the current one.
+      judged="$(jq -r '(. + (.first // {})) | "pct=\(.pct) tokens=\(.tokens)"' <<<"$ctx" 2>/dev/null)"
+      log "master context reset loop: first post-reset reading is still over threshold ($judged); the context floor is too large -- automatic resets disabled until 'orch up'"
+      ;;
+    ok)
+      jq -c '.verified = true' <<<"$last" | _master_reset_write
+      ;;
+  esac
+  return 0
+}
+
+# One tick of the reset machinery. Never forces: any doubt aborts without /clear.
+# $STATE_DIR/master-reset-retry-after (epoch) throttles retries after a
+# post-checkpoint abort; a file, not a variable, so `orch up` can clear it.
+# $_MASTER_RESET_CFG caches the master_context knobs: read once, not per tick
+# (same convention as heartbeat_main's other knobs).
+_MASTER_RESET_CFG=""
+# Dual-write an event to events.jsonl AND the inbox (like every other emitter),
+# so the heartbeat's normal delivery path -- busy/draft guards included --
+# wakes the master with it.
+_master_reset_event() { # <event> [old_session_id]
+  local line
+  line="$(jq -nc --arg e "$1" --arg ts "$(date -u +%FT%TZ)" --arg o "${2:-}" '{id:"master",event:$e,old_session_id:$o,ts:$ts}')" || return 0
+  printf '%s\n' "$line" >> "$STATE_DIR/events.jsonl"
+  printf '%s\n' "$line" >> "$INBOX"
+}
+# Abort without /clear: log, throttle retries by the cooldown, tell the master.
+_master_reset_abort() { # <log message> <old_session_id> <cooldown>
+  log "$1"
+  printf '%s\n' "$(( $(date +%s) + ${3:-1800} ))" > "$STATE_DIR/master-reset-retry-after"
+  _master_reset_event master-reset-aborted "$2"
+}
+master_reset_tick() { # <session:window>
+  local target="$1" ctx sess last cfg enabled pct frac cool cptimeout now retry_after
+  ctx="$(cat "$STATE_DIR/master-context.json" 2>/dev/null || true)"
+  [ -n "$ctx" ] || return 0
+  sess="$(cat "$STATE_DIR/master-session.json" 2>/dev/null || true)"
+  last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
+  if [ -z "$_MASTER_RESET_CFG" ]; then
+    _MASTER_RESET_CFG="$(jq -r '.master_context // {} | [(if .enabled == false or .enabled == "false" then "false" else "true" end), (.reset_pct // ""), (.reset_fraction // ""), (.cooldown_s // ""), (.checkpoint_timeout_s // "")] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _MASTER_RESET_CFG=""; return 0; }
+  fi
+  cfg="$_MASTER_RESET_CFG"
+  IFS='|' read -r enabled pct frac cool cptimeout <<<"$cfg"
+  [ "$enabled" = "false" ] && return 0
+  # A non-numeric knob would make every --argjson below fail, i.e. resets
+  # silently off. Say so once and stay off.
+  local _k
+  for _k in "$pct:f" "$frac:f" "$cool:i" "$cptimeout:p"; do
+    case "$_k" in
+      *:f) _k="${_k%:f}"; [[ -z "$_k" || ( "$_k" =~ ^[0-9]+(\.[0-9]+)?$ && "$_k" =~ [1-9] ) ]] && continue ;; # 0 = always due
+      *:i) _k="${_k%:i}"; [[ -z "$_k" || "$_k" =~ ^[0-9]+$ ]] && continue ;;   # bash -lt needs integers
+      *:p) _k="${_k%:p}"; [[ -z "$_k" || "$_k" =~ ^[1-9][0-9]*$ ]] && continue ;; # 0 = abort every time
+    esac
+    log "master_context: invalid setting '$_k' in config.json -- automatic master resets disabled"
+    _MASTER_RESET_CFG="false||||"
+    return 0
+  done
+  master_reset_guard "$ctx" "$last" "$pct" "$frac"
+  last="$(cat "$STATE_DIR/master-reset.json" 2>/dev/null || true)"
+  now="$(date +%s)"
+  retry_after="$(cat "$STATE_DIR/master-reset-retry-after" 2>/dev/null || true)"
+  case "$retry_after" in ''|*[!0-9]*) retry_after=0 ;; esac
+  [ "$now" -ge "$retry_after" ] || return 0
+  master_reset_due "$ctx" "${sess:-null}" "$now" "$last" "$pct" "$frac" "$cool" "$enabled" || return 0
+  wait_ready "$target" 2 || return 0
+  pane_has_draft "$target" && return 0
+
+  cptimeout="${cptimeout:-300}"
+  local t0 token cpct ctok old_sid notes="$STATE_DIR/master-notes.md" ok=0 why=""
+  cpct="$(jq -r '.pct' <<<"$ctx")"; ctok="$(jq -r '.tokens' <<<"$ctx")"
+  old_sid="$(jq -r '.session_id' <<<"$ctx")"
+  # Completion = the notes contain this tick's one-off token. An mtime check
+  # can't tell the checkpoint from a routine notes refresh (or a write from the
+  # master's previous turn in the same second): either would let /clear wipe
+  # a context whose plan was never written down.
+  t0="$(date +%s)"
+  token="orch-checkpoint-$t0-$$-$RANDOM"
+  # orch down kills the heartbeat (TERM) rather than waiting for .stop: still
+  # tell the master, which was just told to stop, that no reset is coming.
+  # A TERM mid-send_prompt is deferred until the paste and its Enter are both
+  # in, so it can never leave the checkpoint text unsent in the input row.
+  local _mr_term=0
+  trap '_mr_term=1' TERM
+  send_prompt "$target" "[orchestrator heartbeat] Your context is nearly full and will be cleared automatically. Rewrite $notes with your current plan and any in-flight operation (what is running, what you were about to do next), end it with the line: $token -- then stop. Do not start new work. (If the reset is aborted you will get a master-reset-aborted event: then carry on normally.)"
+  trap '_master_reset_event master-reset-aborted "$old_sid"; exit 143' TERM
+  [ "$_mr_term" -eq 0 ] || { _master_reset_event master-reset-aborted "$old_sid"; exit 143; }
+  log "master context over threshold (pct=$cpct tokens=$ctok); checkpoint requested"
+  while [ "$(( $(date +%s) - t0 ))" -lt "$cptimeout" ]; do
+    # This wait blocks the heartbeat loop: honour .stop and a dead master.
+    [ -e "$STATE_DIR/.stop" ] && { why="heartbeat stopping"; break; }
+    master_window_alive "$target" || { why="master window gone"; break; }
+    if grep -qF "$token" "$notes" 2>/dev/null && is_ready "$target"; then ok=1; break; fi
+    sleep 1
+  done
+  if [ -n "$why" ]; then :
+  elif [ "$ok" -ne 1 ]; then why="checkpoint not completed within ${cptimeout}s"
+  elif pane_has_draft "$target"; then why="draft appeared"
+  else
+    # One is_ready sample can catch a transient frame between tool calls of a
+    # turn that is still running; /clear typed then lands mid-turn. Settle and
+    # re-confirm idle (and still no draft) right before sending it.
+    sleep 1
+    if ! is_ready "$target"; then why="master busy again before /clear"
+    elif pane_has_draft "$target"; then why="draft appeared"; fi
+  fi
+  # Defer TERM again until the abort event is written, or the reset record and
+  # the whole /clear send (paste AND its Enter) are in: a TERM landing mid-send
+  # would otherwise leave '/clear' typed but unsubmitted in the master's input.
+  _mr_term=0
+  trap '_mr_term=1' TERM
+  if [ -n "$why" ]; then
+    # The master was told to stop; tell it the reset is off so it resumes.
+    _master_reset_abort "master reset aborted: $why (no /clear sent)" "$old_sid" "$cool"
+    trap - TERM
+    [ "$_mr_term" -eq 0 ] || exit 143
+    return 0
+  fi
+  # Record the reset BEFORE sending /clear: orch down (stop.sh) touches .stop
+  # and TERMs us at once, and TERM is not trapped after the send, so a record
+  # written any later (after the confirm loop or the ready-wait) is lost when
+  # the TERM lands in between -- and with it the loop guard's and cooldown's
+  # only record of a /clear that really happened. If the /clear never takes,
+  # the unconfirmed path below overwrites this with a backoff latch.
+  jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" --argjson p "${cpct:-null}" --argjson t "${ctok:-null}" \
+    '{ts:$ts, old_session_id:$o, pct:$p, tokens:$t}' | _master_reset_write
+  send_prompt "$target" "/clear"
+  trap - TERM
+  # A deferred TERM: the record above is kept (unjudged) by the next `orch up`.
+  [ "$_mr_term" -eq 0 ] || exit 143
+  # Confirm it took: the SessionStart hook records the new session_id on every
+  # /clear. If it never changes, the /clear did not happen (not submitted, or
+  # swallowed) -- do not claim a reset or tell the master it was cleared.
+  # Independent of checkpoint_timeout_s; env override is for hermetic tests.
+  local new_sid="" i=0 confirm_s="${ORCH_MASTER_CLEAR_CONFIRM_S:-45}"
+  case "$confirm_s" in ''|*[!0-9]*) confirm_s=45 ;; esac
+  # Read the session id at least once before honouring .stop: a stop that lands
+  # right after /clear must not skip the check and report a /clear that took as
+  # unconfirmed.
+  while :; do
+    new_sid="$(jq -r '.session_id // empty' "$STATE_DIR/master-session.json" 2>/dev/null || true)"
+    [ -n "$new_sid" ] && [ "$new_sid" != "$old_sid" ] && break
+    new_sid=""
+    { [ "$i" -lt "$confirm_s" ] && [ ! -e "$STATE_DIR/.stop" ]; } || break
+    sleep 1; i=$((i+1))
+  done
+  if [ -z "$new_sid" ]; then
+    # Latch backoff: either '/clear' is sitting unsent in the input row (the
+    # operator must look; retrying would stack more text on it), or the
+    # SessionStart hook is not recording sessions -- then clears are real but
+    # invisible to the loop guard, and retrying every cooldown would be an
+    # unguarded reset loop. Both need a human; `orch up` re-arms.
+    jq -nc --argjson ts "$(date +%s)" --arg o "$old_sid" \
+      '{ts:$ts, old_session_id:$o, backoff:true, unconfirmed:true}' | _master_reset_write
+    local why_unconf="session id unchanged after /clear ('/clear' may be unsent in the master's input, or the SessionStart hook is not recording)"
+    [ -e "$STATE_DIR/.stop" ] && why_unconf="heartbeat stopping before the session id changed (the /clear may still take)"
+    _master_reset_abort "master reset unconfirmed: $why_unconf -- automatic resets disabled until 'orch up'" "$old_sid" "$cool"
+    return 0
+  fi
+  wait_ready "$target" 45 || log "master not ready 45s after /clear"
+  log "master context reset (pct=$cpct tokens=$ctok)"
+  # Also wakes the freshly cleared master (via the inbox) so it resumes the
+  # in-flight work its rehydrated notes describe instead of idling until the
+  # next worker event.
+  _master_reset_event master-reset "$old_sid"
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -215,6 +444,7 @@ heartbeat_main() {
 
     if master_window_alive "$S:$ORCH_WINDOW"; then
       master_dead_clear
+      master_reset_tick "$S:$ORCH_WINDOW"
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi

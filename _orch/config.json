@@ -56,7 +56,12 @@
     }
   },
   "master_context": {
-    "autocompact_window": 400000
+    "autocompact_window": 400000,
+    "enabled": true,
+    "reset_pct": 60,
+    "reset_fraction": 0.35,
+    "cooldown_s": 1800,
+    "checkpoint_timeout_s": 300
   },
   "output": {
     "timestamps": true,
