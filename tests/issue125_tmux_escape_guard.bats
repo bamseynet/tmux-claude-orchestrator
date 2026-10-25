@@ -28,7 +28,8 @@
 # Once opted in, $CI only selects the targets: CI runs the WHOLE suite under
 # the guard; a local opt-in runs the slice of files that mention tmux
 # (grep -l tmux tests/*.bats; the same set the issue's own audit used) -- that
-# slice is nearly the whole suite (67 of 76 files), so expect a long run.
+# slice is nearly the whole suite (most test files mention tmux), so expect a
+# long run.
 # The two mechanism self-tests are ungated and run everywhere.
 #
 # No tmux on the box at all: the shim still logs and neutralises destructive
