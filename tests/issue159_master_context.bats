@@ -305,8 +305,9 @@ run_ss() { # <source> <session_id>
   run bash -c 'printf "%s" "{}" | "$1"' _ "$SL"
   [ "$status" -eq 0 ]
   [[ "$output" == *"back"* ]]
-  ! printf '%s' "$output" | grep -qE 'for shortcuts|Try "'
-  ! printf '%s' "$output" | grep -qi 'welcome'
+  [[ "$output" != *"for shortcuts"* ]]
+  [[ "$output" != *'Try "'* ]]
+  [ "$(printf '%s' "$output" | grep -ci 'welcome')" -eq 0 ]
 }
 
 @test "role prompt sent at launch names bootstrap's own CLAUDE.md, not an inherited ORCH_ROOT's" {
