@@ -403,12 +403,15 @@ send_prompt "$S:$id" "${preamble}${task}"
 # "spawning" proves the task was submitted, even if the pane checks never confirmed
 # it -- checked before every retry so a task that already ran is never re-pasted,
 # and never reported spawn-failed (issue #163 review).
+# One list, shared by hook_reported() and the locked spawn-failed write below.
+hook_statuses='["done","waiting-bg","needs-input","subagent-done"]'
+# shellcheck disable=SC2016  # $c/$hs are jq variables, not shell
+hook_status_filter='(.status // "") as $c | $hs | map(. == $c) | any'
 hook_reported() {
-  case "$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
-    done | waiting-bg | needs-input | subagent-done)
-      log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
-      return 0 ;;
-  esac
+  if jq -e --argjson hs "$hook_statuses" "$hook_status_filter" "$WORKERS_DIR/$id.json" >/dev/null 2>&1; then
+    log "worker $id: injection unconfirmed by pane, but a hook already reported; treating as spawned"
+    return 0
+  fi
   return 1
 }
 spawn_ok=0
@@ -437,10 +440,8 @@ if [ "$spawn_ok" -ne 1 ]; then
   # Mark spawn-failed in the same locked read-modify-write that re-checks for a hook
   # status: a Stop/Notification landing after the last hook_reported() check must
   # not be clobbered into spawn-failed (and reaped) while the worker is running.
-  # shellcheck disable=SC2016  # $c is a jq variable, not shell
-  update_worker_status "$id" '.status = (if ((.status // "") as $c
-      | ["done","waiting-bg","needs-input","subagent-done"] | map(. == $c) | any)
-    then .status else "spawn-failed" end)'
+  update_worker_status "$id" --argjson hs "$hook_statuses" \
+    ".status = (if ($hook_status_filter) then .status else \"spawn-failed\" end)"
   hook_reported && spawn_ok=1
 fi
 
