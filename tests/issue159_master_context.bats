@@ -328,3 +328,40 @@ run_ss() { # <source> <session_id>
   [ "$(jq '.tokens' "$STATE/master-context.json")" = "null" ]
   [ "$(jq 'has("reset")' "$STATE/master-context.json")" = "false" ]
 }
+
+@test "A1: .first keeps the session's first real reading across refreshes, and restarts per session" {
+  feed() { printf '%s' "$1" | "$SL" >/dev/null; }
+  feed '{"session_id":"s1","context_window":{"used_percentage":null,"context_window_size":200000,"current_usage":null}}'
+  [ "$(jq '.first' "$STATE/master-context.json")" = "null" ]
+  feed '{"session_id":"s1","context_window":{"used_percentage":12,"context_window_size":200000,"current_usage":{"input_tokens":24000}}}'
+  feed '{"session_id":"s1","context_window":{"used_percentage":50,"context_window_size":200000,"current_usage":{"input_tokens":100000}}}'
+  [ "$(jq -c '.first' "$STATE/master-context.json")" = '{"pct":12,"tokens":24000}' ]
+  [ "$(jq '.tokens' "$STATE/master-context.json")" = "100000" ]
+  feed '{"session_id":"s2","context_window":{"used_percentage":9,"context_window_size":200000,"current_usage":{"input_tokens":18000}}}'
+  [ "$(jq -c '.first' "$STATE/master-context.json")" = '{"pct":9,"tokens":18000}' ]
+}
+
+@test "A1: .first never latches a null-current_usage (reset) record, even with a pct" {
+  feed() { printf '%s' "$1" | "$SL" >/dev/null; }
+  feed '{"session_id":"s1","context_window":{"used_percentage":0,"context_window_size":200000,"current_usage":null}}'
+  [ "$(jq '.first' "$STATE/master-context.json")" = "null" ]
+  feed '{"session_id":"s1","context_window":{"used_percentage":70,"context_window_size":200000,"current_usage":{"input_tokens":140000}}}'
+  [ "$(jq -c '.first' "$STATE/master-context.json")" = '{"pct":70,"tokens":140000}' ]
+}
+
+@test "A1: .first never latches a reading without numeric tokens (pct only)" {
+  feed() { printf '%s' "$1" | "$SL" >/dev/null; }
+  feed '{"session_id":"s1","context_window":{"used_percentage":40,"context_window_size":200000}}'
+  [ "$(jq '.first' "$STATE/master-context.json")" = "null" ]
+  feed '{"session_id":"s1","context_window":{"used_percentage":45,"total_input_tokens":90000,"context_window_size":200000}}'
+  [ "$(jq -c '.first' "$STATE/master-context.json")" = '{"pct":45,"tokens":90000}' ]
+}
+
+@test "A1: tokens from the cumulative total_input_tokens fallback are flagged cumulative" {
+  in='{"session_id":"s1","context_window":{"used_percentage":20,"total_input_tokens":900000,"context_window_size":1000000}}'
+  printf '%s' "$in" | "$SL" >/dev/null
+  [ "$(jq '.cumulative' "$STATE/master-context.json")" = "true" ]
+  in='{"session_id":"s1","context_window":{"used_percentage":20,"context_window_size":1000000,"current_usage":{"input_tokens":200000}}}'
+  printf '%s' "$in" | "$SL" >/dev/null
+  [ "$(jq '.cumulative' "$STATE/master-context.json")" = "false" ]
+}

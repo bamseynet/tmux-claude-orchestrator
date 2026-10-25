@@ -224,6 +224,17 @@ else
   fi
 fi
 
+# issue #160: an operator `orch up` re-arms automatic master context resets
+# (clears the loop-guard backoff, the reset cooldown and the abort throttle).
+# Exception: a reset the loop guard has not judged yet (neither verified nor
+# backed off) is kept, cooldown included -- dropping it would lose the guard's
+# only record of that reset and allow an unguarded second one right away.
+rm -f "$STATE_DIR/master-reset-retry-after"
+if ! jq -e '(.backoff // false) == false and (.verified // false) == false and (.old_session_id // "") != ""' \
+     "$STATE_DIR/master-reset.json" >/dev/null 2>&1; then
+  rm -f "$STATE_DIR/master-reset.json"
+fi
+
 # Background heartbeat
 if [ ! -f "$STATE_DIR/heartbeat.pid" ] || ! pid_is_expected "$(cat "$STATE_DIR/heartbeat.pid" 2>/dev/null)" "$here/heartbeat.sh"; then
   nohup "$here/heartbeat.sh" >>"$STATE_DIR/heartbeat.log" 2>&1 &
