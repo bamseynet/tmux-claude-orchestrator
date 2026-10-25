@@ -268,3 +268,47 @@ EOF
   refute_grep 'master window down; requeued events' "$LOG"
   [ ! -s "$INBOX" ]
 }
+
+# --- Issue #163 part B: denylisted lines are stripped from mixed batches --------
+
+@test "case9 (#163): a mixed batch is injected without its subagent-done lines" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done","ts":"2026-10-25T10:00:00Z"}\n' >> "$INBOX"
+  printf '{"id":"w2","event":"done","ts":"2026-10-25T10:00:01Z"}\n' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q '"event":"done"' "$PASTED"
+  refute_grep '"event":"subagent-done"' "$PASTED"
+}
+
+@test "case10 (#163): non-denylisted reason mentioning subagent-done and a malformed line survive stripping" {
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n' >> "$INBOX"
+  printf '%s\n' '{"id":"w2","event":"merge-blocked","reason":"waiting on subagent-done hook"}' >> "$INBOX"
+  printf 'not json at all\n' >> "$INBOX"
+
+  wait_for grep -q 'send-keys' "$CALLS"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q 'waiting on subagent-done hook' "$PASTED"
+  grep -q 'not json at all' "$PASTED"
+  refute_grep '"id":"w1"' "$PASTED"
+}
+
+@test "case11 (#163): a requeued mixed batch keeps its actionable line and drops noise" {
+  printf '❯ draft text\n? for shortcuts' > "$PANE_TEXT_FILE"
+  start_hb
+  printf '{"id":"w1","event":"subagent-done"}\n' >> "$INBOX"
+  printf '{"id":"w2","event":"needs-input"}\n' >> "$INBOX"
+
+  wait_for grep -q 'unsent draft' "$LOG"
+  touch "$STATE_DIR/.stop"
+  wait "$HB_PID" 2>/dev/null || true
+
+  grep -q '"event":"needs-input"' "$INBOX"
+  refute_grep '"event":"subagent-done"' "$INBOX"
+}

@@ -226,22 +226,25 @@ heartbeat_main() {
       # wait_ready wait every tick, and a requeued noise batch could trip the
       # issue #52 safety valve and force-deliver the noise anyway (symptom
       # gone, defect alive).
-      local noise_only=1 _dl_ev_line _dl_ev_type _dl_hit _dl
+      local noise_only=1 _dl_ev_line _dl_ev_type _dl_hit _dl kept=""
       if [ "${#inject_denylist[@]}" -eq 0 ]; then
         noise_only=0
       else
         while IFS= read -r _dl_ev_line; do
           [ -n "$_dl_ev_line" ] || continue
-          # Fail open: unparseable JSON or a missing/empty .event field makes
-          # the whole batch actionable rather than silently swallowing it.
-          _dl_ev_type="$(jq -r '.event // empty' <<<"$_dl_ev_line" 2>/dev/null)" || { noise_only=0; break; }
-          [ -n "$_dl_ev_type" ] || { noise_only=0; break; }
+          # Fail open: unparseable JSON or a missing/empty .event field keeps
+          # the line rather than silently swallowing it.
           _dl_hit=0
-          for _dl in "${inject_denylist[@]}"; do
-            [ "$_dl_ev_type" = "$_dl" ] && { _dl_hit=1; break; }
-          done
-          [ "$_dl_hit" -eq 1 ] || { noise_only=0; break; }
+          if _dl_ev_type="$(jq -r '.event // empty' <<<"$_dl_ev_line" 2>/dev/null)" && [ -n "$_dl_ev_type" ]; then
+            for _dl in "${inject_denylist[@]}"; do
+              [ "$_dl_ev_type" = "$_dl" ] && { _dl_hit=1; break; }
+            done
+          fi
+          [ "$_dl_hit" -eq 1 ] || kept+="${kept:+$'\n'}$_dl_ev_line"
         done <<<"$events"
+        # Issue #163 part B: a mixed batch is injected (and requeued) with the
+        # denylisted lines stripped; events.jsonl keeps the full record.
+        [ -z "$kept" ] || { noise_only=0; events="$kept"; }
       fi
 
       if [ "$noise_only" -eq 1 ]; then
