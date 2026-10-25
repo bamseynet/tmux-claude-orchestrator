@@ -83,6 +83,35 @@ JSON
   [ "$output" = '["Bash(ls:*)","Bash(cat:*)"]' ]
 }
 
+# issue #163 part A: an unmatched Notification hook turned idle_prompt (fires 60 s
+# after every Stop) into a false `needs-input` and overwrote a finished worker's
+# `done`. Pin the matcher to the genuinely-blocking types; bats can't run Claude
+# Code's matcher, so this pins the config (the probe in #163 is the evidence).
+NOTIF_MATCHER='permission_prompt|elicitation_dialog|elicitation_url_dialog'
+
+@test "spawn.sh scopes the Notification hook to blocking types, --no-worktree file (issue #163 A)" {
+  run "$SPAWN" w1n sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  settings="$ORCH_ROOT/_orch/state/settings/w1n.json"
+  run jq -r '.hooks.Notification[0].matcher' "$settings"
+  [ "$output" = "$NOTIF_MATCHER" ]
+  # no Notification entry without a matcher (it would fire on idle_prompt)
+  run jq -e '[.hooks.Notification[] | select((.matcher // "") == "")] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+  run jq -r '.hooks.Notification[0].hooks[0].command' "$settings"
+  [[ "$output" == *"report.sh w1n needs-input"* ]]
+}
+
+@test "spawn.sh scopes the Notification hook to blocking types, worktree settings.local.json (issue #163 A)" {
+  run "$SPAWN" w1m sonnet "do the thing"
+  [ "$status" -eq 0 ]
+  settings="$(worker_wdir_for w1m)/.claude/settings.local.json"
+  run jq -r '.hooks.Notification[0].matcher' "$settings"
+  [ "$output" = "$NOTIF_MATCHER" ]
+  run jq -e '[.hooks.Notification[] | select((.matcher // "") == "")] | length == 0' "$settings"
+  [ "$status" -eq 0 ]
+}
+
 @test "spawn.sh wraps bare commands as Bash(<cmd>:*) rules (issue #78)" {
   run "$SPAWN" w1b sonnet "do the thing" --no-worktree --allow "git, gh , jq"
   [ "$status" -eq 0 ]
