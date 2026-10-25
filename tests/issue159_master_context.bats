@@ -154,6 +154,27 @@ run_ss() { # <source> <session_id>
   [ "$(printf '%s' "$output" | jq '.hookSpecificOutput.additionalContext|length')" -le 9500 ]
 }
 
+@test "A3: rehydrate larger than one argv string (128 KiB) still injects role prompt + tail" {
+  seed_state
+  head -c 300000 /dev/zero | tr '\0' 'y' >> "$STATE/master-notes.md"
+  echo "NOTES-CANARY-HUGE-BOTTOM" >> "$STATE/master-notes.md"
+  run_ss compact new5
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)"
+  [[ "$ctx" == "You are the ORCHESTRATOR"* ]]
+  [[ "$ctx" == *"NOTES-CANARY-HUGE-BOTTOM"* ]]
+}
+
+@test "A1: chained operator status line has spinner glyphs scrubbed" {
+  mkdir -p "$HOME/.claude"
+  printf '#!/usr/bin/env bash\necho "a ✻ b ✳ c é"\n' > "$BATS_TEST_TMPDIR/userbar.sh"
+  chmod +x "$BATS_TEST_TMPDIR/userbar.sh"
+  jq -n --arg c "$BATS_TEST_TMPDIR/userbar.sh" '{statusLine:{type:"command",command:$c}}' > "$HOME/.claude/settings.json"
+  run bash -c 'printf "%s" "{}" | "$1"' _ "$SL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"a * b * c é"* ]]
+}
+
 @test "A3: SessionStart on startup records the session id but emits no context" {
   seed_state
   run_ss startup new2
@@ -221,4 +242,18 @@ run_ss() { # <source> <session_id>
   run "$ORCH_ROOT/_orch/clean.sh" master
   [ "$status" -eq 0 ]
   [ -f "$STATE/master-settings.json" ]
+}
+
+# ---------------------------------------------------------------- pin
+@test "hooks write to their own toolkit's state, not an inherited ORCH_ROOT" {
+  other="$BATS_TEST_TMPDIR/other"; mkdir -p "$other/_orch/state"
+  run bash -c 'printf "{\"source\":\"startup\",\"session_id\":\"pin1\"}" | ORCH_ROOT="$1" "$2"' _ "$other" "$SS"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .session_id "$STATE/master-session.json")" = "pin1" ]
+  [ ! -e "$other/_orch/state/master-session.json" ]
+  in='{"session_id":"pin2","context_window":{"used_percentage":5,"total_input_tokens":5,"context_window_size":1000000}}'
+  run bash -c 'printf "%s" "$1" | ORCH_ROOT="$2" "$3"' _ "$in" "$other" "$SL"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .session_id "$STATE/master-context.json")" = "pin2" ]
+  [ ! -e "$other/_orch/state/master-context.json" ]
 }

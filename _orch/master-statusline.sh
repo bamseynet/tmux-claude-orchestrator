@@ -5,11 +5,11 @@
 # statusLine.command (--settings replaces it) or prints a minimal line.
 # Must always exit 0 and never print the glyphs the pane heuristics match on.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$here/lib.sh" 2>/dev/null || true
-
+# Deliberately does NOT source lib.sh: this runs on every status-line refresh and
+# lib.sh's load-time work (a dozen jq/sha1sum subprocesses) is pure overhead
+# here. The path is pinned to THIS toolkit, not an inherited $ORCH_ROOT.
 input="$(cat 2>/dev/null || true)"
-out="${STATE_DIR:-$here/state}/master-context.json"
+out="$here/state/master-context.json"
 
 rec="$(printf '%s' "$input" | jq -c --arg ts "$(date -u +%FT%TZ)" '
   select(type == "object")
@@ -22,11 +22,15 @@ if [ -n "$rec" ]; then
 fi
 
 user_cmd="$(jq -r '.statusLine.command // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
+# Never chain to ourselves (an operator who copied this into their own settings).
+case "$user_cmd" in *master-statusline.sh*) user_cmd="" ;; esac
 if [ -n "$user_cmd" ]; then
   # The operator's bar may print prompt/box glyphs (❯ > │ ...) that
-  # TUI_READY_REGEX / pane_has_draft would match; neutralise them.
+  # TUI_READY_REGEX / pane_has_draft would match, or spinner glyphs
+  # (✻ ✽ ✳ ✶) that TUI_ACTIVE_GLYPH_REGEX reads as "busy"; neutralise them.
   printf '%s' "$input" | bash -c "$user_cmd" 2>/dev/null \
-    | sed -e 's/❯/-/g' -e 's/>/-/g' -e 's/│/|/g' -e 's/┃/|/g' -e 's/╭/+/g' -e 's/╮/+/g' -e 's/╰/+/g' -e 's/╯/+/g' || true
+    | sed -e 's/❯/-/g' -e 's/>/-/g' -e 's/│/|/g' -e 's/┃/|/g' -e 's/╭/+/g' -e 's/╮/+/g' -e 's/╰/+/g' -e 's/╯/+/g' \
+        -e 's/✻/*/g' -e 's/✽/*/g' -e 's/✳/*/g' -e 's/✶/*/g' || true
 else
   pct="$(printf '%s' "$rec" | jq -r '.pct // empty' 2>/dev/null || true)"
   if [ -n "$pct" ]; then printf 'orch master ctx %s%%\n' "$pct"; else printf 'orch master\n'; fi
