@@ -433,6 +433,17 @@ else
   fi
 fi
 
+if [ "$spawn_ok" -ne 1 ]; then
+  # Mark spawn-failed in the same locked read-modify-write that re-checks for a hook
+  # status: a Stop/Notification landing after the last hook_reported() check must
+  # not be clobbered into spawn-failed (and reaped) while the worker is running.
+  # shellcheck disable=SC2016  # $c is a jq variable, not shell
+  update_worker_status "$id" '.status = (if ((.status // "") as $c
+      | ["done","waiting-bg","needs-input","subagent-done"] | map(. == $c) | any)
+    then .status else "spawn-failed" end)'
+  hook_reported && spawn_ok=1
+fi
+
 if [ "$spawn_ok" -eq 1 ]; then
   # Only promote "spawning": a fast first Stop/Notification (done, waiting-bg,
   # needs-input) that already landed under the lock must not be clobbered.
@@ -441,8 +452,8 @@ if [ "$spawn_ok" -eq 1 ]; then
   log "spawned $id ($model) in $wdir"
   say "spawned $id ($model)  ->  window $S:$id   dir $wdir"
 else
-  # Never-started worker: record it and tell the master so the spawn is not lost.
-  update_worker_status "$id" '.status="spawn-failed"'
+  # Never-started worker (status already set to spawn-failed above): tell the
+  # master so the spawn is not lost.
   sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
   printf '%s\n' "$sf_line" >> "$INBOX"
   printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"

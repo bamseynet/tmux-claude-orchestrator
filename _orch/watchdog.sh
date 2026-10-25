@@ -336,7 +336,13 @@ dead_sweep() { # <live_windows>
       if [ "$misses" -ge "$DEAD_CONFIRM_TICKS" ]; then
         "$here/report.sh" "$id" dead >/dev/null 2>&1 || true
         rm -f "$dm"
-        prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id"
+        # Only a mid-turn worker's worktree is pruned. waiting-bg / subagent-done
+        # (issue #163) are reported dead too, but their turn may have ended with
+        # finished, unmerged commits (e.g. waiting-bg on a session cron, or a legacy
+        # subagent-done left after the final Stop) -- keep them for the master.
+        case "$status" in
+          spawning | working) prune_dead_worktree "${PROJECT_ROOT:-$(pwd)}" "$id" ;;
+        esac
         log "watchdog: worker '$id' dead (no live window, was $status); notified master"
       else
         printf '%s\n' "$misses" > "$dm"

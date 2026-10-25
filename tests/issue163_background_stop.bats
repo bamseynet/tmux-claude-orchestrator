@@ -186,3 +186,14 @@ ahead_commit() {
   run worker_is_orphaned $'a\nb' subagent-done w1
   [ "$status" -eq 0 ]
 }
+
+@test "C12: dead sweep reports a windowless waiting-bg worker dead but keeps its worktree/branch" {
+  wd_setup
+  ahead_commit
+  mkworker w1 waiting-bg
+  DEAD_CONFIRM_TICKS=1
+  dead_sweep $'other'
+  [ "$(jq -r .status "$WJ")" = "dead" ]
+  [ -d "$(worker_wdir "$PROJECT_ROOT" w1)" ]
+  git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$(worker_branch w1)"
+}
