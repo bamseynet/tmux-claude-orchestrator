@@ -92,6 +92,18 @@ BG='{"background_tasks":[{"type":"shell","status":"running"}],"session_crons":[]
   [ "$(jq -r .status "$WJ")" = "done" ]
 }
 
+@test "C5g: a late SubagentStop does not overwrite done / needs-input (deps, reap, re-alert)" {
+  printf '%s' '{"background_tasks":[]}' | "$REPORT" w1 done --hook
+  "$REPORT" w1 subagent-done </dev/null
+  [ "$(jq -r .status "$WJ")" = "done" ]
+  "$REPORT" w1 needs-input </dev/null
+  "$REPORT" w1 subagent-done </dev/null
+  [ "$(jq -r .status "$WJ")" = "needs-input" ]
+  "$REPORT" w2 working </dev/null
+  "$REPORT" w2 subagent-done </dev/null
+  [ "$(jq -r .status "$ORCH_ROOT/_orch/state/workers/w2.json")" = "subagent-done" ]
+}
+
 # ---- watchdog ----
 
 wd_setup() {
