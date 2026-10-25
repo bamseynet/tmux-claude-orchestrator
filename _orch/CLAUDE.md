@@ -151,13 +151,18 @@ with the Read tool / a scoped `git diff` over having a worker paste its full dif
 into chat — same information, retrievable any time from git, without permanently
 bloating your context.
 
-**PreCompact.** Claude Code exposes a `PreCompact` hook. This repo does not wire
-one up yet (a hook scoped to only the orchestrator's tmux session/window, that is
-purely observational and never blocks or delays compaction, is a reasonable
-follow-up) — for now, treat *every* heartbeat you act on as a checkpoint boundary:
-refresh `master-notes.md` and `review-log.jsonl` as the last step of handling it,
-so state is never more than one heartbeat-tick stale regardless of when
-compaction actually lands.
+**Automatic rehydrate.** `bootstrap.sh` launches you with `--settings
+_orch/state/master-settings.json`, which wires a `SessionStart` hook
+(`master-session-start.sh`). After a `/clear` or a compaction (`source` =
+`clear|compact`) it injects the role prompt plus `rehydrate.sh` output as
+context (capped under the 10,000-char hook limit); on `startup`/`resume`
+bootstrap already sent the role prompt, so nothing extra is injected. A status
+line (`master-statusline.sh`) records context usage to
+`_orch/state/master-context.json`. Auto-compaction fires earlier than Claude
+Code's default (`master_context.autocompact_window`, default 400000 tokens).
+`PreCompact` stays unused: it can only block compaction, not observe it usefully.
+Still treat every heartbeat you act on as a checkpoint boundary: refresh
+`master-notes.md` and `review-log.jsonl` as the last step of handling it.
 
 ## Anti-patterns
 
