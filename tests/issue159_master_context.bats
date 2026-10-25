@@ -104,6 +104,19 @@ STUB
   [[ "$output" == *"USER-BAR:s1"* ]]
 }
 
+@test "A2: chained operator status line is scrubbed of pane-heuristic glyphs" {
+  mkdir -p "$HOME/.claude"
+  printf '#!/usr/bin/env bash\necho "❯ dir > branch │ x ╭╮"\n' > "$BATS_TEST_TMPDIR/userbar.sh"
+  chmod +x "$BATS_TEST_TMPDIR/userbar.sh"
+  jq -n --arg c "$BATS_TEST_TMPDIR/userbar.sh" '{statusLine:{type:"command",command:$c}}' > "$HOME/.claude/settings.json"
+  run bash -c 'printf "%s" "{}" | "$1"' _ "$SL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dir"*"branch"* ]]
+  [[ "$output" != *"❯"* ]]
+  [[ "$output" != *">"* ]]
+  [[ "$output" != *"│"* ]]
+}
+
 # ---------------------------------------------------------------- A3
 seed_state() {
   echo '{"id":"wz9","status":"working","model":"sonnet","task":"canary task"}' > "$STATE/workers/wz9.json"
@@ -128,6 +141,17 @@ run_ss() { # <source> <session_id>
     [[ "$ctx" == "You are the ORCHESTRATOR"* ]]
     [ "$(jq -r .session_id "$STATE/master-session.json")" = "new1" ]
   done
+}
+
+@test "A3: over-cap rehydrate keeps the tail (newest notes + reconcile line)" {
+  seed_state
+  echo "NOTES-CANARY-BOTTOM" >> "$STATE/master-notes.md"
+  run_ss compact new4
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r .hookSpecificOutput.additionalContext)"
+  [[ "$ctx" == *"NOTES-CANARY-BOTTOM"* ]]
+  [[ "$ctx" == *"Reconcile the above"* ]]
+  [ "$(printf '%s' "$output" | jq '.hookSpecificOutput.additionalContext|length')" -le 9500 ]
 }
 
 @test "A3: SessionStart on startup records the session id but emits no context" {

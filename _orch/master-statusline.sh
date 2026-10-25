@@ -9,7 +9,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/lib.sh" 2>/dev/null || true
 
 input="$(cat 2>/dev/null || true)"
-out="$STATE_DIR/master-context.json"
+out="${STATE_DIR:-$here/state}/master-context.json"
 
 rec="$(printf '%s' "$input" | jq -c --arg ts "$(date -u +%FT%TZ)" '
   select(type == "object")
@@ -23,7 +23,10 @@ fi
 
 user_cmd="$(jq -r '.statusLine.command // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || true)"
 if [ -n "$user_cmd" ]; then
-  printf '%s' "$input" | bash -c "$user_cmd" 2>/dev/null || true
+  # The operator's bar may print prompt/box glyphs (❯ > │ ...) that
+  # TUI_READY_REGEX / pane_has_draft would match; neutralise them.
+  printf '%s' "$input" | bash -c "$user_cmd" 2>/dev/null \
+    | sed -e 's/❯/-/g' -e 's/>/-/g' -e 's/│/|/g' -e 's/┃/|/g' -e 's/╭/+/g' -e 's/╮/+/g' -e 's/╰/+/g' -e 's/╯/+/g' || true
 else
   pct="$(printf '%s' "$rec" | jq -r '.pct // empty' 2>/dev/null || true)"
   if [ -n "$pct" ]; then printf 'orch master ctx %s%%\n' "$pct"; else printf 'orch master\n'; fi

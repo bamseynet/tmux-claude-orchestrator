@@ -169,9 +169,15 @@ if ! session_exists "$S"; then
   # `orch clean master` would delete it.
   master_settings="$STATE_DIR/master-settings.json"
   _sl="$here/master-statusline.sh"; _ss="$here/master-session-start.sh"
-  jq -n --arg sl "${_sl// /\\ }" --arg ss "${_ss// /\\ }" \
-    '{statusLine:{type:"command",command:$sl}, hooks:{SessionStart:[{hooks:[{type:"command",command:$ss}]}]}}' \
-    > "$master_settings.tmp" && mv -f "$master_settings.tmp" "$master_settings"
+  settings_flag=""
+  if jq -n --arg sl "$(printf '%q' "$_sl")" --arg ss "$(printf '%q' "$_ss")" \
+       '{statusLine:{type:"command",command:$sl}, hooks:{SessionStart:[{hooks:[{type:"command",command:$ss}]}]}}' \
+       > "$master_settings.tmp.$$" && mv -f "$master_settings.tmp.$$" "$master_settings"; then
+    settings_flag=" --settings $(printf '%q' "$master_settings")"
+  else
+    rm -f "$master_settings.tmp.$$"
+    log "WARNING: could not write $master_settings; launching master without status-line capture / SessionStart rehydrate"
+  fi
   # master_context.autocompact_window: bare integer 100000-1000000 only (the
   # "400k" form fails on CLIs older than v2.1.304; a bare 400 means 400 tokens).
   compact_env=""
@@ -186,7 +192,7 @@ if ! session_exists "$S"; then
       log "WARNING: master_context.autocompact_window invalid (want integer 100000-1000000); ignoring"
     fi
   fi
-  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model} --settings $(printf '%q' "$master_settings")" Enter
+  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}" Enter
   if wait_ready "$S:$ORCH_WINDOW" 90; then
     send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt)"
   else
