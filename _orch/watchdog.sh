@@ -139,7 +139,14 @@ worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
     wdir="$(legacy_worker_wdir "$proj" "$id")"
     { [ -d "$wdir" ] && same_repo "$wdir" "$proj"; } || { echo 0; return 1; }
   fi
-  if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
+  # Issue #176: the ref spawn recorded wins, then ORCH_BASE_BRANCH, then the chain.
+  base="$(worker_recorded_base "$wdir" "$id")"
+  if [ -n "$base" ]; then
+    :
+  elif [ -n "${ORCH_BASE_BRANCH:-}" ] \
+       && git -C "$wdir" rev-parse --verify -q "origin/$ORCH_BASE_BRANCH" >/dev/null 2>&1; then
+    base="origin/$ORCH_BASE_BRANCH"
+  elif git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
     base="origin/main"
   elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
     base="origin/HEAD"

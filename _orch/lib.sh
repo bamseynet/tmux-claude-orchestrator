@@ -291,6 +291,36 @@ worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
   jq -r '.target_repo // empty' "$f" 2>/dev/null || true
 }
 
+# worker_recorded_base <repo_dir> <id>: the base ref spawn recorded for <id>
+# (issue #153/#176) that still resolves in <repo_dir>: `base`, else `base_sha`.
+# Prints nothing when there is no usable record.
+worker_recorded_base() {
+  local dir="$1" id="$2" f="$WORKERS_DIR/$2.json" key ref
+  [ -f "$f" ] || return 0
+  for key in base base_sha; do
+    ref="$(jq -r --arg k "$key" '.[$k] // empty' "$f" 2>/dev/null || true)"
+    if [ -n "$ref" ] && git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s' "$ref"; return 0
+    fi
+  done
+}
+
+# worker_recorded_base_branch <id>: the recorded `base` as a plain branch name for
+# `gh pr create --base` (leading origin/ stripped). Prints nothing when there is no
+# record or it is not a branch ref (e.g. spawn's pinned-SHA HEAD fallback).
+worker_recorded_base_branch() {
+  local f="$WORKERS_DIR/$1.json" ref
+  [ -f "$f" ] || return 0
+  ref="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
+  ref="${ref#origin/}"
+  case "$ref" in
+    "" | HEAD | *[!A-Za-z0-9._/-]*) return 0 ;;
+  esac
+  # A bare hex string is a pinned sha, not a branch gh can target.
+  case "$ref" in *[!0-9a-f]*) ;; *) [ "${#ref}" -lt 7 ] || return 0 ;; esac
+  printf '%s' "$ref"
+}
+
 # resolve_worker_proj <id>: the repo to operate on for worker <id>. Prints the
 # recorded repo when it still exists, else PROJECT_ROOT/cwd. An EXPLICIT --repo
 # (orch exports ORCH_REPO_EXPLICIT=1 for it) that names a different repo than the
