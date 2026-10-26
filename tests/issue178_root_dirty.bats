@@ -69,7 +69,7 @@ inbox() { nlines "$INBOX"; }
 }
 
 @test "no event for a no-worktree worker even when the root is dirtied" {
-  worker w1 no-worktree
+  worker w1 no-worktree; baseline w1   # baseline: excluded by mode, not by the no-baseline skip
   echo y >> "$PROJ/f.sh"
   root_dirty_tick
   [ "$(events)" -eq 0 ]
@@ -98,7 +98,7 @@ inbox() { nlines "$INBOX"; }
   fb="$BATS_TEST_TMPDIR/fakebin"; mkdir -p "$fb"
   printf '#!/usr/bin/env bash\necho x >> "%s/git.calls"\nexit 0\n' "$BATS_TEST_TMPDIR" > "$fb/git"
   chmod +x "$fb/git"
-  worker w1 no-worktree
+  worker w1 no-worktree; baseline w1   # real git, before the fake goes on PATH
   PATH="$fb:$PATH" root_dirty_tick
   [ ! -e "$BATS_TEST_TMPDIR/git.calls" ]
 }
@@ -235,4 +235,18 @@ inbox() { nlines "$INBOX"; }
   [ -s "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
   root_dirty_tick
   [ "$(events)" -eq 1 ]
+}
+
+@test "operator edit masked by a later spawn stays silent after that worker leaves" {
+  worker w1 worktree; baseline w1
+  echo op >> "$PROJ/f.sh"              # operator edit between spawns
+  worker w2 worktree; baseline w2      # absorbed by w2's baseline
+  root_dirty_tick; [ "$(events)" -eq 0 ]
+  STUB_WINS=" w1"                      # w2's window closed; w1 still live
+  root_dirty_tick
+  [ "$(events)" -eq 0 ]
+  echo n > "$PROJ/later.txt"           # positive control: repo still checked
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *'"f.sh'* ]]
 }

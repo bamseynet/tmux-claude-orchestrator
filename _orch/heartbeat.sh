@@ -421,8 +421,10 @@ master_reset_tick() { # <session:window>
 # not blamed). Bash writes cannot be attributed: the event lists the live worker
 # ids without claiming which one wrote. A repo where any such worker lacks a
 # baseline (spawned before this existed) is skipped rather than guessed at.
-# Reported entries are persisted per repo so a second tick is silent; an entry
-# that clears and returns re-alerts. Entries compare by path, so a write to a path
+# Every dirty path seen (reported OR baseline-absorbed) is persisted per repo so a
+# second tick is silent, and so a path absorbed by a later worker's baseline is not
+# reported once that worker leaves the live set; an entry that clears and returns
+# re-alerts. Entries compare by path, so a write to a path
 # already dirty in a baseline is not seen. Known limitation: a Bash `git commit` /
 # `checkout` into the root leaves it clean and is NOT detected (a HEAD comparison
 # would false-positive on an operator `git pull`).
@@ -454,7 +456,7 @@ root_dirty_tick() {
     pairs+="$real"$'\t'"$id"$'\n'
   done
   [ -n "$pairs" ] && repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
-  local cur new bl union rep_f paths wl ev wids
+  local all cur new bl union rep_f paths wl ev wids
   [ -z "$repos" ] || mkdir -p "$STATE_DIR/root-dirty"
   while IFS= read -r real; do
     [ -n "$real" ] || continue
@@ -473,13 +475,16 @@ root_dirty_tick() {
     # A failed `git status` must not overwrite the record with "nothing dirty":
     # the next good tick would re-alert every entry already reported.
     cur="$(root_porcelain "$real")" || continue
-    cur="$(printf '%s\n' "$cur" | cut -c4- | grep -vxFf <(printf '%s' "$union") | grep -v '^$' || true)"
+    # all = every dirty path now; it becomes the record. Recording only the
+    # reported (post-union) paths would let an operator edit masked by a later
+    # worker's baseline alert as soon as that worker's window closes.
+    all="$(printf '%s\n' "$cur" | cut -c4- | grep -v '^$' || true)"
+    cur="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s' "$union") | grep -v '^$' || true)"
     new="$cur"
     if [ -n "$cur" ] && [ -f "$rep_f" ]; then
       new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
     fi
-    printf '%s' "$cur" > "$rep_f"
-    [ -n "$new" ] || continue
+    [ -n "$new" ] || { printf '%s' "$all" > "$rep_f"; continue; }
     paths="$(printf '%s\n' "$new" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     ev="$(jq -nc --arg r "$real" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
@@ -487,6 +492,9 @@ root_dirty_tick() {
         note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
     printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
     printf '%s\n' "$ev" >> "$INBOX"
+    # Record only once the event is out: a failed event build above leaves the
+    # record untouched so the next tick retries instead of silently dropping it.
+    printf '%s' "$all" > "$rep_f"
     log "root-dirty: new entries in $real while worktree workers live: ${new//$'\n'/ }"
   done <<<"$repos"
   # Forget reported entries of repos with no live worktree worker: a stale record

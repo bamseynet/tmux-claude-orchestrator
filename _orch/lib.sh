@@ -1443,7 +1443,7 @@ root_porcelain() { # <project_root>
 root_baseline_write() { # <project_root> <id>
   local f; f="$(root_baseline_file "$1" "$2")"
   mkdir -p "$(dirname "$f")" && root_porcelain "$1" > "$f.tmp" && mv -f "$f.tmp" "$f" \
-    || { rm -f "$f.tmp"; return 1; }
+    || { rm -f "$f.tmp" "$f"; return 1; }   # never leave a stale same-id baseline
 }
 
 # Workers actually holding a tmux window + claude process right now: every status
