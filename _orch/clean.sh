@@ -56,6 +56,13 @@ if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
   log "clean $id: refused to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))"
   exit 1
 fi
+# Issue #149: same all-or-nothing refusal when the path holds another repo's
+# checkout -- `worktree remove` would fail and the rm -rf fallback destroy it.
+if [ -d "$wdir" ] && foreign_checkout "$wdir" "$proj"; then
+  say "clean $id: refusing to remove $wdir — it is not a worktree of $proj" >&2
+  log "clean $id: refused to remove $wdir — not a worktree of $proj"
+  exit 1
+fi
 
 # 1) tmux window (only if the session exists and holds a window with this name)
 # session_exists() (issue #107): a bare `-t "$S"` target matches by UNAMBIGUOUS
@@ -89,7 +96,7 @@ if [ -d "$legacy_wdir" ]; then
   # Issue #149: ../wt/<id> is shared by every sibling repo, so a legacy dir may be
   # ANOTHER repo's worktree; `worktree remove` would fail and the rm -rf fallback
   # would destroy it. Only ever touch it when it is a checkout of THIS repo.
-  if [ -e "$legacy_wdir/.git" ] && ! same_repo "$legacy_wdir" "$proj"; then
+  if foreign_checkout "$legacy_wdir" "$proj"; then
     say "clean $id: leaving legacy $legacy_wdir in place — it is not a worktree of $proj" >&2
     log "clean $id: legacy $legacy_wdir belongs to another repo, not removed"
   elif [ "$sweep_legacy" -eq 1 ]; then

@@ -220,12 +220,15 @@ resolve_worker_wdir() {
   new="$(worker_wdir "$proj" "$id")"
   if [ ! -e "$new" ]; then
     old="$(v86_worker_wdir "$proj" "$id")"
-    if [ -d "$old" ]; then
-      same_repo "$old" "$proj" && { printf '%s' "$old"; return 0; }
-    fi
+    [ -d "$old" ] && same_repo "$old" "$proj" && { printf '%s' "$old"; return 0; }
   fi
   printf '%s' "$new"
 }
+
+# foreign_checkout <dir> <project_root> -> 0 iff <dir> is a git checkout of a
+# DIFFERENT repo (issue #149). `git worktree remove` fails on such a path and the
+# teardown's `rm -rf` fallback would then destroy another repo's work.
+foreign_checkout() { [ -e "$1/.git" ] && ! same_repo "$1" "$2"; }
 
 worker_branch() { # <id> -> this install's branch name for <id>
   printf 'orch/%s/%s' "$ORCH_HASH" "$1"
@@ -1309,6 +1312,9 @@ prune_dead_worktree() { # <project_root> <id>
     if worktree_owned_by_other "$wdir"; then
       owned_by_other=1
       log "prune_dead_worktree: refusing to touch $wdir for $id — owned by a different orch install ($(worktree_owner "$wdir"))"
+    elif foreign_checkout "$wdir" "$proj"; then
+      owned_by_other=1
+      log "prune_dead_worktree: refusing to touch $wdir for $id — it is not a worktree of $proj"
     else
       git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
       log "prune_dead_worktree: removed worktree $wdir for dead worker $id"

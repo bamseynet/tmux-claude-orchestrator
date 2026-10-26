@@ -140,6 +140,8 @@ mk_v86() { # <repo> <id>: a worker created at the current (pre-#149) layout
   [ "$output" = "1" ]
 }
 
+# collect.sh never looks at the worktree path (only the branch name, which #149
+# did not change): this is a regression guard, not coverage of resolve_worker_wdir.
 @test "upgrade: collect finds the branch of a pre-#149 layout worker" {
   mk_v86 "$A" old >/dev/null
   run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/collect.sh" old --base main
@@ -154,6 +156,36 @@ mk_v86() { # <repo> <id>: a worker created at the current (pre-#149) layout
   [[ "$output" != *spawn-failed* ]]
   grep -q "spawned old" <<<"$output"
   [ ! -e "$(libcall worker_wdir "$A" old)" ]
+}
+
+@test "upgrade: sibling b never adopts or cleans repo a's pre-#149 layout worktree" {
+  wdir="$(mk_v86 "$A" old)"
+  [ "$(libcall resolve_worker_wdir "$A" old)" = "$wdir" ]
+  [ "$(libcall resolve_worker_wdir "$B" old)" = "$(libcall worker_wdir "$B" old)" ]
+  jq --arg t "$B" '.target_repo=$t' "$WORKERS/old.json" > "$WORKERS/old.tmp" && mv "$WORKERS/old.tmp" "$WORKERS/old.json"
+  run env PROJECT_ROOT="$B" "$ORCH_DIR_SRC/clean.sh" old
+  [ "$status" -eq 0 ]
+  [ -d "$wdir" ]
+  [ "$(common_dir "$wdir")" = "$(common_dir "$A")" ]
+}
+
+@test "clean and prune refuse to rm -rf another repo's checkout sitting at this repo's path" {
+  wdir="$(libcall worker_wdir "$A" lift)"; branch="$(libcall worker_branch lift)"
+  mkdir -p "$(dirname "$wdir")"
+  git -C "$A" worktree add -q -B "$branch" "$wdir"
+  rm -rf "$wdir"                                   # a keeps a stale registration
+  git -C "$B" worktree add -q -B "$branch" "$wdir" # b's checkout now sits at a's path
+  libcall stamp_worktree_owner "$wdir"
+  jq -n --arg t "$A" '{id:"lift",status:"done",updated:"2000-01-01T00:00:00Z",target_repo:$t}' > "$WORKERS/lift.json"
+  run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/clean.sh" lift
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a worktree of"* ]]
+  [ "$(common_dir "$wdir")" = "$(common_dir "$B")" ]
+  export PROJECT_ROOT="$A"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/watchdog.sh"
+  prune_dead_worktree "$A" lift
+  [ "$(common_dir "$wdir")" = "$(common_dir "$B")" ]
 }
 
 @test "legacy: clean --sweep-legacy in repo a never deletes sibling b's pre-#86 ../wt/<id>" {
