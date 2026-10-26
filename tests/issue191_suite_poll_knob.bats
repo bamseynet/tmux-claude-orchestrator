@@ -3,35 +3,26 @@
 # whole suite, because ~51 inline tmux stubs answer `show-buffer` with success
 # forever and every stubbed spawn.sh otherwise burns the 50x0.1s cap (~5.5s).
 
-# Run a one-test nested suite that carries a copy of setup_suite.bash and
-# reports ORCH_SEND_POLL_TRIES as seen from a `run bash -c` child. The probe is
-# built with printf: a heredoc line starting with `@test` would be rewritten by
-# this file's own bats preprocessor.
-nested_probe() {
-  local d="$BATS_TEST_TMPDIR/nested"
-  mkdir -p "$d"
-  cp "$BATS_TEST_DIRNAME/setup_suite.bash" "$d/setup_suite.bash"
-  printf '%s\n' \
-    '@test "probe" {' \
-    '  run bash -c '"'"'printf %s "${ORCH_SEND_POLL_TRIES-unset}"'"'"'' \
-    '  echo "TRIES=$output" >&3' \
-    '}' >"$d/probe.bats"
-  # A nested bats must not inherit the outer run's BATS_* bookkeeping.
-  local -a scrub=() v
-  for v in $(compgen -e | grep '^BATS_'); do scrub+=(-u "$v"); done
-  run env "${scrub[@]}" "$@" bats "$d/probe.bats" 3>&1
+# What a `run bash -c` child sees after setup_suite ran with the given caller
+# env (leading args are `env` operands, e.g. -u VAR or VAR=val).
+poll_tries_after_setup_suite() {
+  run env "$@" bash -c 'source "$1"; setup_suite; printf %s "${ORCH_SEND_POLL_TRIES-unset}"' _ "$BATS_TEST_DIRNAME/setup_suite.bash"
 }
 
-@test "suite default: ORCH_SEND_POLL_TRIES is 1 when the caller did not set it" {
-  nested_probe -u ORCH_SEND_POLL_TRIES
+@test "setup_suite defaults ORCH_SEND_POLL_TRIES to 1 when the caller did not set it" {
+  poll_tries_after_setup_suite -u ORCH_SEND_POLL_TRIES
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TRIES=1"* ]]
+  [ "$output" = "1" ]
 }
 
 @test "setup_suite keeps a caller's ORCH_SEND_POLL_TRIES (uses :-, no clobber)" {
-  nested_probe ORCH_SEND_POLL_TRIES=7
+  poll_tries_after_setup_suite ORCH_SEND_POLL_TRIES=7
   [ "$status" -eq 0 ]
-  [[ "$output" == *"TRIES=7"* ]]
+  [ "$output" = "7" ]
+}
+
+@test "setup_suite is actually loaded: the knob is set inside the suite" {
+  [ -n "${ORCH_SEND_POLL_TRIES-}" ]
 }
 
 @test "runtime default stays 50 (setup_suite must not touch _orch/)" {
