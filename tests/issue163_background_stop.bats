@@ -55,7 +55,7 @@ BG='{"background_tasks":[{"type":"shell","status":"running"}],"session_crons":[]
 
 @test "C6: without --hook report.sh never reads stdin (no block)" {
   # An open pipe that never closes: a stray cat would hang until timeout kills it.
-  run timeout 10 bash -c "'$REPORT' w1 done < <(sleep 30)"
+  run timeout 10 bash -c "'$REPORT' w1 done < <(sleep 30 2>/dev/null)"
   [ "$status" -eq 0 ]
   [ "$(jq -r .status "$WJ")" = "done" ]
   run timeout 10 "$REPORT" w1 dead </dev/null
