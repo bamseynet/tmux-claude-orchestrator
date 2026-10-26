@@ -58,6 +58,30 @@ wd_pane() {
   [ "$SECONDS" -lt 8 ]       # and ended the 10s wait early
 }
 
+@test "watchdog: a nudge skipped for a dialog is re-armed and sent once it clears" {
+  wd_setup; wd_pane 1
+  sweep_window w1 65 </dev/null >/dev/null 2>&1 || true
+  [ ! -f "$SENT" ]
+  [ -f "$STATE_DIR/.rl-w1" ]           # the cooldown marker survives the skip
+  # Dialog answered: the next sweep sees a cleared, ready pane.
+  # shellcheck disable=SC2317
+  pane_tail() { printf '%s' '╭──────╮
+│ ❯    │
+╰──────╯'; }
+  sweep_window w1 65 </dev/null >/dev/null 2>&1 || true
+  grep -q "^SEND:test:w1 That was a TEMPORARY rate limit" "$SENT"
+  [ ! -f "$STATE_DIR/.rl-w1" ]
+}
+
+@test "watchdog: a dialog-skipped nudge still runs the liveness check" {
+  wd_setup; wd_pane 1
+  # shellcheck disable=SC2317
+  liveness_check() { echo "LIVENESS:$1" >> "$SENT"; }
+  sweep_window w1 65 </dev/null >/dev/null 2>&1 || true
+  grep -q '^LIVENESS:w1$' "$SENT"
+  ! grep -q '^SEND:' "$SENT"
+}
+
 # --- heartbeat: master injection ----------------------------------------------
 
 hb_setup() {
