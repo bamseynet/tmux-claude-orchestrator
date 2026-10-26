@@ -225,7 +225,9 @@ _fetch_spawn_base() { # <proj> <id>
   if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
     # Bounded and non-interactive: a hung/credential-prompting remote must not
     # stall spawn indefinitely.
-    command -v timeout >/dev/null 2>&1 && to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    if command -v timeout >/dev/null 2>&1; then to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    fi
     # GIT_TERMINAL_PROMPT only covers HTTPS; ssh can still prompt on /dev/tty
     # (and there is no `timeout` on stock macOS), so force BatchMode unless the
     # operator configured their own ssh command.
@@ -275,6 +277,11 @@ _resolve_spawn_base() { # <proj> <id>
     fi
   done
   [ -n "$base_ref" ] || return 0
+  # origin/HEAD is a symref that `remote set-head` can repoint; record the
+  # concrete branch it names so collect diffs against the same branch later.
+  if [ "$base_ref" = origin/HEAD ]; then
+    base_ref="$(git -C "$proj" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/HEAD)"
+  fi
   base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
   if [ "$base_ref" != "origin/$want" ]; then
     log "spawn $id: origin/$want not found in $proj; basing worker on $base_ref"
@@ -294,6 +301,7 @@ else
   # want the same path/branch for the same worker id.
   wdir="$(worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
+  _resolve_spawn_base "$proj" "$id"
   # Guard (issue #37): a pre-existing path at $wdir must not be silently reused
   # just because `worktree add` failed on it. Decide deterministically instead:
   # reuse only if it is verifiably a clean worktree of THIS repo on $branch AND
@@ -315,7 +323,6 @@ else
       stamp_worktree_owner "$wdir" || true
       # Still record base/base_sha (#153) so collect does not fall back to a
       # stale local main for a reused worktree; base_sha is the fork point.
-      _resolve_spawn_base "$proj" "$id"
       if [ -n "$base_ref" ]; then
         base_sha="$(git -C "$proj" merge-base "$base_ref" "refs/heads/$branch" 2>/dev/null || true)"
       fi
@@ -329,8 +336,7 @@ else
       say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! { _resolve_spawn_base "$proj" "$id"
-           git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_ref:+"$base_ref"} >/dev/null 2>&1; }; then
+  elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_ref:+"$base_ref"} >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"

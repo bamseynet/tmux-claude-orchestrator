@@ -175,3 +175,11 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   [ "$(jq -r .base "$f")" = "origin/main" ]
   [ "$(jq -r .base_sha "$f")" = "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" ]
 }
+
+@test "origin/HEAD fallback records the concrete branch it names, not the symref" {
+  git -C "$PROJECT_ROOT" remote set-head origin main
+  export ORCH_BASE_BRANCH=nope
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .base "$ROOT/_orch/state/workers/w1.json")" = "origin/main" ]
+}
