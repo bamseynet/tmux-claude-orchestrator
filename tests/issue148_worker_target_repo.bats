@@ -227,6 +227,10 @@ queue_record() { # <id> <target> <allow_unrelated>: a post-#148 --after-w1 queue
   [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
   [ "$(jq -r .id "$WORKERS/w2.json")" = "w2" ]
   [ "$(jq -r .target_repo "$WORKERS/w2.json")" = "$R/gone" ]
+  # seeded from the queue record so `orch status` doesn't render null model/task
+  [ "$(jq -r .model "$WORKERS/w2.json")" = "sonnet" ]
+  [ "$(jq -r .task "$WORKERS/w2.json")" = "task" ]
+  [ "$(jq -r '.created // empty' "$WORKERS/w2.json")" != "" ]
 }
 
 @test "watchdog dead_sweep prunes a dead worker's worktree in the recorded repo" {

@@ -122,19 +122,24 @@ drain_queue_if_room() {
     # popped, so a worker still reading "queued" (or with no status file at all)
     # here would stay queued/invisible forever.
     case "$(_worker_status "$id")" in queued | "") ;; *) exit 0 ;; esac
-    _drain_spawn_failed "$id" "$target"
+    _drain_spawn_failed "$id" "$target" "$model" "$task"
   ) &
 }
 
-# _drain_spawn_failed <id> <target>: mark a queued worker whose drained spawn was
-# refused as spawn-failed and notify the master the same way spawn.sh does. `updated`
-# is bumped so the reaper's retention counts from the failure, not from queue time.
+# _drain_spawn_failed <id> <target> <model> <task>: mark a queued worker whose drained
+# spawn was refused as spawn-failed and notify the master the same way spawn.sh does.
+# `updated` is bumped so the reaper's retention counts from the failure, not from
+# queue time; model/task/created are seeded from the queue record only when the
+# status file lacks them (e.g. it was removed while queued), so `orch status` rows
+# don't render as null.
 _drain_spawn_failed() {
-  local id="$1" target="$2" sf_line
+  local id="$1" target="$2" model="$3" task="$4" sf_line
   log "queue drain: spawn.sh refused queued worker $id${target:+ (target repo $target)}; marking spawn-failed"
-  # shellcheck disable=SC2016  # $i/$u/$r are jq --arg vars, not shell
+  # shellcheck disable=SC2016  # $i/$u/$r/$m/$t are jq --arg vars, not shell
   update_worker_status "$id" --arg i "$id" --arg u "$(date -u +%FT%TZ)" --arg r "$target" \
-    '.id=$i | .status="spawn-failed" | .updated=$u | (if $r == "" then . else .target_repo=$r end)' || true
+    --arg m "$model" --arg t "$task" \
+    '.id=$i | .status="spawn-failed" | .updated=$u | .created //= $u | .model //= $m | .task //= $t
+     | (if $r == "" then . else .target_repo=$r end)' || true
   sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
   printf '%s\n' "$sf_line" >> "$INBOX"
   printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"

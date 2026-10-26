@@ -541,6 +541,9 @@ Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGE
 against the resolved target repo, never inferred from where this toolkit lives.
 If the toolkit dir and the resolved target repo share no git history or remote,
 spawn refuses to run (set ORCH_ALLOW_UNRELATED_REPO=1 to override intentionally).
+Each worker records the repo it was spawned against (issue #148): clean, collect,
+merge, prune and the queue drain use that recorded repo, and an explicit --repo
+naming a different repo makes clean/collect/merge refuse rather than guess.
 To update a vendored copy of this toolkit, run \`./orch update\` (see above) — do
 not \`git pull\` inside the target repo expecting toolkit changes; by design its
 history is unrelated to the toolkit's own.
