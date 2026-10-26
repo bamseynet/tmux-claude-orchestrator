@@ -128,6 +128,14 @@ through `models.roles` when a matching role is defined — `review`→`review`, 
 back to a different model. `models.roles` is entirely optional; without it, behavior is
 unchanged from before this feature existed.
 
+## Versioning
+
+`VERSION` is bumped automatically by `.github/workflows/bump-version.yml` on every merge to `main` that touches runtime paths (`_orch/`, `tmux/`, `orch`, `install.sh`, `uninstall.sh`) — this is what lets `./orch update` in vendored installs see new versions. Merges touching only tests, docs, or `.github/` do not bump.
+
+- Default bump is **patch**. Put the `release:minor` or `release:major` label on a PR for a larger bump (highest label across coalesced merges wins; major/minor reset the lower fields).
+- A hand-written release PR that edits `VERSION` is respected and not re-bumped.
+- The bump commit is pushed by `github-actions[bot]` with `GITHUB_TOKEN`, so it does not re-trigger workflows (including CI).
+
 ## Worker permissions
 
 By default a spawned worker launches bare `claude`, so every Bash/edit/network action blocks on

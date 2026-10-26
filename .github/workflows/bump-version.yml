@@ -1,0 +1,76 @@
+name: Bump VERSION
+
+# Bumps VERSION on every merge to main that touches runtime paths, so vendored
+# installs (`./orch update` compares .orch-version to upstream VERSION) see
+# updates. Patch by default; `release:minor` / `release:major` PR labels opt in
+# to larger bumps (highest label across the coalesced range wins).
+#
+# Loop safety: VERSION is deliberately NOT in `paths:`, and pushes made with
+# GITHUB_TOKEN do not trigger workflows. Consequently ci.yml does not run on
+# the bump commit either (it only changes VERSION; the content was CI'd on its
+# PR).
+#
+# If branch protection is ever enabled on main, GITHUB_TOKEN cannot push here:
+# the job would need a bypass actor (GitHub App) and the bump commit would have
+# to be excluded from required checks. The failure mode is a red run.
+
+on:
+  push:
+    branches: [main]
+    # Keep in sync with RUNTIME_PATHS in scripts/bump-version.sh.
+    paths:
+      - '_orch/**'
+      - 'tmux/**'
+      - 'orch'
+      - 'install.sh'
+      - 'uninstall.sh'
+
+permissions: {}
+
+# Serialise runs; never cancel one mid-push. A newer pending run replaces an
+# older pending one, which is lossless because each run computes its bump from
+# the tip of main over the range since the last VERSION change.
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: bump VERSION
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Compute, commit and push the bump
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3 4 5; do
+            new="$(bash scripts/bump-version.sh bump .)"
+            if [ -z "$new" ]; then
+              echo "No runtime change since last VERSION change; nothing to bump."
+              exit 0
+            fi
+            git commit -m "chore(release): bump VERSION to $new [skip ci]" VERSION
+            if git push origin HEAD:main; then
+              echo "Bumped VERSION to $new"
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing onto main and recomputing."
+            git fetch origin main || exit 1
+            git reset --hard origin/main
+          done
+          echo "Failed to push the bump after 5 attempts." >&2
+          exit 1
