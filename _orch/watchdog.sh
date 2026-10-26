@@ -126,11 +126,13 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 # Pure-ish predicate (git only, no tmux): how many commits is <id>'s worktree
 # branch ahead of the upstream default branch? Prints 0 (and fails) when the
 # worktree does not exist, so callers can treat "no worktree" as "nothing to
-# review" without a separate existence check. Prefers origin/main, falling back to
-# origin/HEAD then a local `main` for repos without that exact remote branch
-# (e.g. hermetic test repos with no remote at all).
+# review" without a separate existence check. Counts against the base spawn
+# recorded (base, else base_sha; issue #176), then origin/$ORCH_BASE_BRANCH or a
+# local $ORCH_BASE_BRANCH, then origin/main, origin/HEAD and finally a local `main`
+# for repos without that exact remote branch (e.g. hermetic test repos with no
+# remote at all).
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
-  local proj="$1" id="$2" wdir base
+  local proj="$1" id="$2" wdir base cand
   wdir="$(resolve_worker_wdir "$proj" "$id")"
   # Back-compat (issue #86): a worker spawned before this install upgraded to
   # the namespaced layout still lives at the pre-#86 ../wt/<id> worktree.
@@ -139,15 +141,17 @@ worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
     wdir="$(legacy_worker_wdir "$proj" "$id")"
     { [ -d "$wdir" ] && same_repo "$wdir" "$proj"; } || { echo 0; return 1; }
   fi
-  if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
-    base="origin/main"
-  elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
-    base="origin/HEAD"
-  elif git -C "$wdir" rev-parse --verify -q main >/dev/null 2>&1; then
-    base="main"
-  else
-    echo 0
-    return 1
+  # Issue #176: the ref spawn recorded wins, then ORCH_BASE_BRANCH (remote, then
+  # spawn's local-$want fallback), then the generic chain.
+  base="$(worker_recorded_base "$wdir" "$id")"
+  if [ -z "$base" ]; then
+    for cand in ${ORCH_BASE_BRANCH:+"origin/$ORCH_BASE_BRANCH" "refs/heads/$ORCH_BASE_BRANCH"} \
+                origin/main origin/HEAD main; do
+      if git -C "$wdir" rev-parse --verify -q "$cand" >/dev/null 2>&1; then
+        base="$cand"; break
+      fi
+    done
+    [ -n "$base" ] || { echo 0; return 1; }
   fi
   git -C "$wdir" rev-list --count "$base..HEAD" 2>/dev/null || echo 0
 }

@@ -46,12 +46,7 @@ fi
 if [ -z "$base" ]; then
   # A pruned/renamed recorded ref (e.g. origin/develop deleted) falls back to the
   # recorded base_sha before the global default, which may be a different branch.
-  for rec_key in base base_sha; do
-    rec_base="$(jq -r --arg k "$rec_key" '.[$k] // empty' <<< "$status_json" 2>/dev/null || true)"
-    if [ -n "$rec_base" ] && git -C "$proj" rev-parse -q --verify "$rec_base^{commit}" >/dev/null 2>&1; then
-      base="$rec_base"; break
-    fi
-  done
+  base="$(worker_recorded_base "$proj" "$id")"
   [ -n "$base" ] || base="${ORCH_BASE_BRANCH:-main}"
 fi
 
