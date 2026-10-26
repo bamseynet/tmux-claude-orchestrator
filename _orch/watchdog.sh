@@ -11,7 +11,7 @@
 #       session dies, no Stop hook fires and workers/<id>.json stays "working"
 #       forever, so the task is silently lost. Detect a status file that still says
 #       "spawning"/"working" but has NO live tmux window, mark it "dead", notify
-#       the master once, and prune its ../wt/<hash>/<id> worktree + orch/<hash>/<id>
+#       the master once, and prune its ../wt/<hash>/<repo-hash>/<id> worktree + orch/<hash>/<id>
 #       branch (issue #37; namespaced per-install since #86) so the path frees up
 #       for a respawn without waiting on `orch clean`.
 #       Unlike (1)/(2) this iterates STATUS FILES (the window is gone, so a window
@@ -129,8 +129,11 @@ worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   wdir="$(resolve_worker_wdir "$proj" "$id")"
   # Back-compat (issue #86): a worker spawned before this install upgraded to
   # the namespaced layout still lives at the pre-#86 ../wt/<id> worktree.
-  [ -d "$wdir" ] || wdir="$(legacy_worker_wdir "$proj" "$id")"
-  [ -d "$wdir" ] || { echo 0; return 1; }
+  # Issue #149: ../wt/<id> is shared by sibling repos -- only count it if it is ours.
+  if [ ! -d "$wdir" ]; then
+    wdir="$(legacy_worker_wdir "$proj" "$id")"
+    { [ -d "$wdir" ] && same_repo "$wdir" "$proj"; } || { echo 0; return 1; }
+  fi
   if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
     base="origin/main"
   elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then

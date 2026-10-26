@@ -152,6 +152,28 @@ mk_v86() { # <repo> <id>: a worker created at the current (pre-#149) layout
   run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/spawn.sh" old sonnet "task"
   [ "$status" -eq 0 ]
   [[ "$output" != *spawn-failed* ]]
-  [[ "$output" == *"$wdir"* ]] || grep -q "spawned old" <<<"$output"
+  grep -q "spawned old" <<<"$output"
   [ ! -e "$(libcall worker_wdir "$A" old)" ]
+}
+
+@test "legacy: clean --sweep-legacy in repo a never deletes sibling b's pre-#86 ../wt/<id>" {
+  lw="$R/wt/old"                      # pre-#86 layout, shared by sibling repos a and b
+  git -C "$B" worktree add -q -B orch/old "$lw"
+  jq -n '{id:"old",status:"done",updated:"2000-01-01T00:00:00Z"}' | jq --arg t "$A" '.target_repo=$t' > "$WORKERS/old.json"
+  run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/clean.sh" old --sweep-legacy
+  [ "$status" -eq 0 ]
+  [ -d "$lw" ]
+  [ "$(common_dir "$lw")" = "$(common_dir "$B")" ]
+}
+
+@test "legacy: worker_branch_ahead ignores a sibling repo's pre-#86 ../wt/<id>" {
+  lw="$R/wt/old"
+  git -C "$B" worktree add -q -B orch/old "$lw"
+  echo x > "$lw/g.txt"; git -C "$lw" add g.txt; git -C "$lw" commit -q -m work
+  export PROJECT_ROOT="$A"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/watchdog.sh"
+  run worker_branch_ahead "$A" old
+  [ "$status" -ne 0 ]
+  [ "$output" = "0" ]
 }

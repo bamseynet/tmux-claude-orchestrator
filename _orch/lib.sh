@@ -203,23 +203,25 @@ worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
 v86_worker_wdir() { printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"; } # <project_root> <id>
 
 # _git_common_dir <dir> -> canonical absolute git common dir, nonzero if not a git dir
-_git_common_dir() {
-  local cd_
-  cd_="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 1
-  case "$cd_" in /*) ;; *) cd_="$1/$cd_" ;; esac
-  (cd "$cd_" 2>/dev/null && pwd -P)
+# (same --path-format=absolute form ensure_related_repo uses; it resolves symlinks)
+_git_common_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
+
+# same_repo <dir_a> <dir_b> -> 0 iff both are checkouts sharing one git common dir
+same_repo() {
+  local a b
+  a="$(_git_common_dir "$1")" && b="$(_git_common_dir "$2")" && [ -n "$a" ] && [ "$a" = "$b" ]
 }
 
 # resolve_worker_wdir <project_root> <id>: the worktree dir to use for <id>. The
 # current layout wins; a pre-#149 (#86 layout) dir is used only when it exists AND
 # is a worktree of THIS repo, so another repo's leftover is never picked up.
 resolve_worker_wdir() {
-  local proj="$1" id="$2" new old a b
+  local proj="$1" id="$2" new old
   new="$(worker_wdir "$proj" "$id")"
   if [ ! -e "$new" ]; then
     old="$(v86_worker_wdir "$proj" "$id")"
     if [ -d "$old" ]; then
-      a="$(_git_common_dir "$old")" && b="$(_git_common_dir "$proj")" && [ "$a" = "$b" ] && { printf '%s' "$old"; return 0; }
+      same_repo "$old" "$proj" && { printf '%s' "$old"; return 0; }
     fi
   fi
   printf '%s' "$new"
@@ -1280,14 +1282,13 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
   [ "$matched" -eq 0 ] || return 1
   # Issue #149: the path being in OUR worktree list is not enough -- a stale
   # registration can point at a directory another repo has since checked out.
-  local wc ec
-  wc="$(_git_common_dir "$real_wdir")" && ec="$(_git_common_dir "$expected")" && [ "$wc" = "$ec" ] || return 1
+  same_repo "$real_wdir" "$expected" || return 1
   [ -z "$(git -C "$real_wdir" status --porcelain 2>/dev/null)" ] || return 1
   return 0
 }
 
 # --- Dead-worker worktree pruning (issue #37) ---------------------------------------
-# A killed/crashed worker leaves its ../wt/<id> worktree and orch/<id> branch behind
+# A killed/crashed worker leaves its worktree (see worker_wdir) and branch behind
 # (no Stop hook fires to tear anything down). Mirrors clean.sh's worktree+branch
 # teardown so a dead worker's path frees up the same way an explicit `orch clean
 # <id>` would, without waiting for an operator to notice. Idempotent: a missing

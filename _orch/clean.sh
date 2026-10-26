@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # _orch/clean.sh <id> [--sweep-legacy] — retire a SINGLE worker and every
 # artifact it leaks. Removes, in order: the tmux window, the git worktree at
-# ../wt/<hash>/<id>, the branch orch/<hash>/<id> (issue #86: <hash> namespaces
+# ../wt/<hash>/<repo-hash>/<id> (#149), the branch orch/<hash>/<id> (issue #86: <hash> namespaces
 # the git layer per orch install), the status file workers/<id>.json, the
 # watchdog scratch .wd-<id>, and (issue #43) the --no-worktree worker's
 # private settings file settings/<id>.json.
@@ -75,16 +75,24 @@ fi
 if [ -d "$wdir" ]; then
   git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
   log "clean $id: removed worktree $wdir"
-  # This install's own namespace dir ($proj/../wt/<hash>) is otherwise never
-  # cleaned up once the last worker under it is retired.
+  # This install's own namespace dirs ($proj/../wt/<hash>/<repo-hash> and
+  # $proj/../wt/<hash>) are otherwise never cleaned up once the last worker under
+  # them is retired. Name <hash> explicitly: for a pre-#149 wdir, dirname(dirname)
+  # would be the shared ../wt itself.
   rmdir "$(dirname "$wdir")" 2>/dev/null || true
-  rmdir "$(dirname "$(dirname "$wdir")")" 2>/dev/null || true   # <hash> dir, once its last repo dir is gone (#149)
+  rmdir "$proj/../wt/$ORCH_HASH" 2>/dev/null || true
 fi
 # Back-compat (issue #86): the pre-namespacing ../wt/<id> layout is swept ONLY
 # on explicit --sweep-legacy (see the header comment above for why this is not
 # automatic). Without the flag, just tell the operator it's there.
 if [ -d "$legacy_wdir" ]; then
-  if [ "$sweep_legacy" -eq 1 ]; then
+  # Issue #149: ../wt/<id> is shared by every sibling repo, so a legacy dir may be
+  # ANOTHER repo's worktree; `worktree remove` would fail and the rm -rf fallback
+  # would destroy it. Only ever touch it when it is a checkout of THIS repo.
+  if [ -e "$legacy_wdir/.git" ] && ! same_repo "$legacy_wdir" "$proj"; then
+    say "clean $id: leaving legacy $legacy_wdir in place — it is not a worktree of $proj" >&2
+    log "clean $id: legacy $legacy_wdir belongs to another repo, not removed"
+  elif [ "$sweep_legacy" -eq 1 ]; then
     git -C "$proj" worktree remove --force "$legacy_wdir" >/dev/null 2>&1 || rm -rf "$legacy_wdir"
     log "clean $id: removed legacy worktree $legacy_wdir (--sweep-legacy)"
   else
