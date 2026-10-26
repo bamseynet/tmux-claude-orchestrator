@@ -630,8 +630,8 @@ TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quic
 # prose / a --resume transcript ("1. Yes, I trust this folder"). Requiring the
 # dialog's choice row as well makes a false positive need a near-verbatim copy
 # of the whole dialog. The trust dialog's destructive "No, exit" choice is
-# present in every known version of it; the permission dialog always offers
-# "1. Yes" as its first choice.
+# present in every known version of it; the permission dialog's choice row is
+# the highlighted "❯ N. Yes|No" row (the cursor may sit on any option, #196).
 # The AskUserQuestion selector (issue #189): Enter selects the highlighted
 # option, so injecting into it answers a question the operator never saw. Real
 # capture (Claude Code 2.1.310): footer "Enter to select · ↑/↓ to navigate · Esc
