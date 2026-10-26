@@ -28,21 +28,9 @@ esac
 exit 0
 EOF
 
-  cat > "$STUBBIN/git" <<'EOF'
-#!/usr/bin/env bash
-args=("$@"); i=0
-[ "${args[0]:-}" = "-C" ] && i=2
-if [ "${args[$i]:-}" = "worktree" ] && [ "${args[$((i+1))]:-}" = "add" ]; then
-  # first positional after `add` is the path (skip -b/-B <branch> and flags);
-  # spawn passes a trailing <commit-ish> since #153, so not the last arg
-  j=$((i+2))
-  while [ $j -lt ${#args[@]} ]; do
-    case "${args[$j]}" in -b|-B) j=$((j+2)) ;; -*) j=$((j+1)) ;; *) break ;; esac
-  done
-  mkdir -p "${args[$j]}"
-fi
-exit 0
-EOF
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/helpers/fake-git.bash"
+  install_fake_git "$STUBBIN"
 
   cat > "$STUBBIN/claude" <<'EOF'
 #!/usr/bin/env bash

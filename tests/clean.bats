@@ -62,22 +62,9 @@ esac
 exit 0
 EOF
 
-  # git stub: `worktree remove` actually deletes the target dir (mimicking real
-  # git); everything else is a graceful no-op. show-ref reports the branch present
-  # so the branch-delete branch is exercised.
-  cat > "$STUBBIN/git" <<'EOF'
-#!/usr/bin/env bash
-args=("$@"); i=0
-[ "${args[0]:-}" = "-C" ] && i=2
-case "${args[$i]:-}" in
-  worktree)
-    if [ "${args[$((i+1))]:-}" = "remove" ]; then
-      rm -rf "${args[${#args[@]}-1]}"
-    fi ;;
-  show-ref) exit 0 ;;   # branch present -> exercise branch -D
-esac
-exit 0
-EOF
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/helpers/fake-git.bash"
+  install_fake_git "$STUBBIN" remove-ref
 
   chmod +x "$STUBBIN/tmux" "$STUBBIN/git"
   PATH="$STUBBIN:$PATH"
