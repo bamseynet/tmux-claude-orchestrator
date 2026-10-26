@@ -8,9 +8,9 @@
 #   install_fake_git "$STUBBIN" [mode]
 #
 # Every mode exits 0 for anything it does not emulate; the remove-* modes parse
-# an optional leading `-C <dir>` once (offset i=2). The modes are deliberately
-# separate stubs, not one stub doing all three: a test's reliance on
-# `worktree remove` deleting a dir should stay visible at the call site.
+# an optional leading `-C <dir>` once (offset i=2). The mode is an explicit
+# argument, not auto-detected, so a test's reliance on `worktree remove`
+# deleting a dir stays visible at the call site.
 #
 #   add (default)  spawn tests. Everything succeeds and nothing is created:
 #                  `worktree add` does NOT mkdir its path. spawn.sh creates the
@@ -30,35 +30,23 @@ install_fake_git() { # <stubbin> [add|remove-noref|remove-ref]
     add)
       printf '#!/usr/bin/env bash\nexit 0\n' > "$stubbin/git"
       ;;
-    remove-noref)
-      cat > "$stubbin/git" <<'EOF'
+    remove-noref|remove-ref)
+      # show-ref exit code: noref -> 1 (skip branch -D), ref -> 0 (exercise it)
+      local sr=1
+      [ "$mode" = remove-ref ] && sr=0
+      cat > "$stubbin/git" <<STUB
 #!/usr/bin/env bash
-args=("$@"); i=0
-[ "${args[0]:-}" = "-C" ] && i=2
-case "${args[$i]:-}" in
+args=("\$@"); i=0
+[ "\${args[0]:-}" = "-C" ] && i=2
+case "\${args[\$i]:-}" in
   worktree)
-    if [ "${args[$((i+1))]:-}" = "remove" ]; then
-      rm -rf "${args[${#args[@]}-1]}"
+    if [ "\${args[\$((i+1))]:-}" = "remove" ]; then
+      rm -rf "\${args[\${#args[@]}-1]}"
     fi ;;
-  show-ref) exit 1 ;;
+  show-ref) exit $sr ;;
 esac
 exit 0
-EOF
-      ;;
-    remove-ref)
-      cat > "$stubbin/git" <<'EOF'
-#!/usr/bin/env bash
-args=("$@"); i=0
-[ "${args[0]:-}" = "-C" ] && i=2
-case "${args[$i]:-}" in
-  worktree)
-    if [ "${args[$((i+1))]:-}" = "remove" ]; then
-      rm -rf "${args[${#args[@]}-1]}"
-    fi ;;
-  show-ref) exit 0 ;;   # branch present -> exercise branch -D
-esac
-exit 0
-EOF
+STUB
       ;;
     *)
       echo "install_fake_git: unknown mode '$mode'" >&2
