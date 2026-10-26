@@ -31,6 +31,13 @@ if [ "$wr" -eq 2 ]; then
   say "$id is showing a dialog (not ready); not asking"; exit 1
 fi
 [ "$wr" -ne 1 ] || say "(warning: $id looks busy; asking anyway)"
+# Issue #179: an unsent paste chip is not a dialog, but our paste + Enter would
+# submit the stuck chip together with the new text. Vetoed here rather than in
+# is_ready so spawn's send_task and the heartbeat is_ready checks are unchanged.
+if pane_has_pending_paste "$S:$id"; then
+  say "$id has an unsent paste in its input box; not asking. Clear it (or press Enter) first"
+  exit 1
+fi
 send_prompt "$S:$id" "$msg"
 
 # A dialog raised while answering will not clear by itself: show it now
