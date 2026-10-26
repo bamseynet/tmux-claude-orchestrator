@@ -134,3 +134,33 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   [ "$(jq -r .base "$f")" = "origin/main" ]
   [ "$(jq -r .base_sha "$f")" = "$(git -C "$(_wdir w1)" rev-parse HEAD)" ]
 }
+
+@test "ORCH_BASE_BRANCH only exists locally: based on local branch, not origin/HEAD" {
+  git -C "$PROJECT_ROOT" branch develop
+  _push_other main x.txt >/dev/null
+  export ORCH_BASE_BRANCH=develop
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  [ "$(git -C "$(_wdir w1)" rev-parse HEAD)" = "$(git -C "$PROJECT_ROOT" rev-parse develop)" ]
+  [ "$(jq -r .base "$ROOT/_orch/state/workers/w1.json")" = "develop" ]
+}
+
+@test "HEAD fallback records the sha, not the moving HEAD ref" {
+  git -C "$PROJECT_ROOT" remote remove origin
+  export ORCH_BASE_BRANCH=nope
+  H="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .base "$ROOT/_orch/state/workers/w1.json")" = "$H" ]
+}
+
+@test "fetch runs before the spawn gate (a queued spawn has already refreshed origin)" {
+  # The network fetch must not sit between the gate's live-worker count and the
+  # status write, or concurrent spawns can all pass the gate and overrun max_workers.
+  X="$(_push_other main x.txt)"
+  jq '.thresholds.max_workers = 0' "$ROOT/_orch/config.json" > "$ROOT/c.tmp" && mv "$ROOT/c.tmp" "$ROOT/_orch/config.json"
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .status "$ROOT/_orch/state/workers/w1.json")" = queued ]
+  [ "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" = "$X" ]
+}

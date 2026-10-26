@@ -217,6 +217,31 @@ if [ -n "$after_id" ]; then
   exit 0
 fi
 
+# Issue #153: refresh origin before the spawn gate, so the (up to
+# ORCH_SPAWN_FETCH_TIMEOUT s) network call does not sit between the gate's
+# live-worker count and this worker's status write, widening the max_workers race.
+_fetch_spawn_base() { # <proj> <id>
+  local proj="$1" id="$2" to=""
+  if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
+    # Bounded and non-interactive: a hung/credential-prompting remote must not
+    # stall spawn indefinitely.
+    command -v timeout >/dev/null 2>&1 && to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    # GIT_TERMINAL_PROMPT only covers HTTPS; ssh can still prompt on /dev/tty
+    # (and there is no `timeout` on stock macOS), so force BatchMode unless the
+    # operator configured their own ssh command.
+    local fetch_env=(GIT_TERMINAL_PROMPT=0)
+    if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -z "${GIT_SSH:-}" ] \
+       && ! git -C "$proj" config --get core.sshCommand >/dev/null 2>&1; then
+      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+    fi
+    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
+    if ! env "${fetch_env[@]}" $to git -C "$proj" fetch --quiet origin </dev/null >/dev/null 2>&1; then
+      log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
+    fi
+  fi
+}
+[ "$mode" = "--no-worktree" ] || _fetch_spawn_base "$proj" "$id"
+
 # Unified resource guard (issues #21 concurrency, #31 memory, #24 budget): refuse
 # to launch another full Claude Code session when any cap is at/over the line, and
 # persist the spawn to the pending queue instead. heartbeat.sh drains the queue as
@@ -238,19 +263,13 @@ fi
 # Issue #153: pick the commit a new worker worktree branches from — the remote
 # base (origin/${ORCH_BASE_BRANCH:-main}), not the target checkout's HEAD.
 # Sets globals base_ref/base_sha (base_ref stays empty if nothing resolves).
+# Reads the remote-tracking refs _fetch_spawn_base refreshed before the gate.
 _resolve_spawn_base() { # <proj> <id>
-  local proj="$1" id="$2" want="${ORCH_BASE_BRANCH:-main}" cand local_sha to=""
+  local proj="$1" id="$2" want="${ORCH_BASE_BRANCH:-main}" cand local_sha
   base_ref=""; base_sha=""
-  if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
-    # Bounded and non-interactive: a hung/credential-prompting remote must not
-    # stall spawn indefinitely.
-    command -v timeout >/dev/null 2>&1 && to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
-    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
-    if ! GIT_TERMINAL_PROMPT=0 $to git -C "$proj" fetch --quiet origin </dev/null >/dev/null 2>&1; then
-      log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
-    fi
-  fi
-  for cand in "origin/$want" origin/HEAD "$want" HEAD; do
+  # An explicitly requested local $want beats the remote's default branch:
+  # origin/HEAD may be a different branch entirely (e.g. main vs develop).
+  for cand in "origin/$want" "$want" origin/HEAD HEAD; do
     if git -C "$proj" rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1; then
       base_ref="$cand"; break
     fi
@@ -266,6 +285,7 @@ _resolve_spawn_base() { # <proj> <id>
 }
 
 # 1) working directory: isolated worktree (default) or the project root
+base_ref=""; base_sha=""
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
 else
@@ -390,7 +410,7 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
   --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
   '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}
-   + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
+   + (if $base_sha == "" then {} else {base:(if $base == "HEAD" then $base_sha else $base end), base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
