@@ -294,3 +294,15 @@ hook_cmd() { # <settings-file>
   s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
   [[ "$(hook_cmd "$s")" == *"$TARGET "* ]]
 }
+
+@test "hook resolves a relative file_path against the payload's cwd, not the worktree root" {
+  run spawn w1 sonnet "task"
+  wdir="$(jq -r .wdir "$WORKERS/w1.json")"
+  s="$wdir/.claude/settings.local.json"
+  mkdir -p "$wdir/sub"
+  # From $wdir/sub this lands in $TARGET; read against $wdir it would miss it.
+  p="$(jq -n --arg c "$wdir/sub" --arg p "../../../../../target/f.txt" \
+    '{tool_name:"Write", cwd:$c, tool_input:{file_path:$p}}')"
+  run bash -c "$(hook_cmd "$s")" <<<"$p"
+  [ "$status" -eq 2 ]
+}

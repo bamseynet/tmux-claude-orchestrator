@@ -18,7 +18,11 @@ id="${1:?worker id}"; proj="${2:?target repo}"; wdir="${3:?worktree}"
 # truncated JSON then failed open. Bounded by `timeout` where present, so a stdin
 # that never closes fails open instead of stalling the worker on the hook timeout.
 tmo=(); command -v timeout >/dev/null 2>&1 && tmo=(timeout 10)
-path="$("${tmo[@]}" jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)" || exit 0
+# Line 1 is the session cwd (a relative file_path resolves against it, and a Bash
+# `cd` moves it off the worktree root); the rest is the path. No newline -> no path.
+out="$("${tmo[@]}" jq -r '(.cwd // "" | tostring), (.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)" || exit 0
+case "$out" in *$'\n'*) ;; *) exit 0 ;; esac
+cwd="${out%%$'\n'*}"; path="${out#*$'\n'}"
 [ -n "$path" ] || exit 0
 
 # Lexical normalisation (the file may not exist yet): resolve ".", ".." and "//".
@@ -73,7 +77,8 @@ case "$path" in
   "~") path="$HOME" ;;
   "~/"*) path="$HOME/${path#"~/"}" ;;
 esac
-case "$path" in /*) ;; *) path="$wdir/$path" ;; esac
+case "$cwd" in /*) ;; *) cwd="$wdir" ;; esac
+case "$path" in /*) ;; *) path="$cwd/$path" ;; esac
 # Two readings of the same string: the kernel's (symlinks before "..", canon) and a
 # writer that normalises the string first (path.resolve), whose ".." pops a symlink
 # lexically ("<target>/<link-out>/../x" is <target>/x). Deny if either lands in the
