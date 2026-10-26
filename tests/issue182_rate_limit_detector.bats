@@ -47,7 +47,16 @@ setup() {
            'Merged PR #429 into main; elapsed 4290ms' \
            'refactor: remove overloaded constructor' \
            '@test "rate_limited matches the classic patterns"' \
-           "rate limit detected on 'r173'; cooling 65s"; do
+           "rate limit detected on 'r173'; cooling 65s" \
+           '+API Error: 429 Too Many Requests' \
+           '-  ⎿  API Error: 429 Too Many Requests' \
+           '# API Error: Request rejected (429)' \
+           '> You'"'"'ve hit your session limit' \
+           'Context limit reached · /compact or /clear to continue' \
+           'Concurrent subagent limit reached. You can run 4 subagents at once.' \
+           'Budget limit reached ($5.00)' \
+           'HTTP 429 Too Many Requests' \
+           'the API is overloaded right now'; do
     run rate_limited "$t"
     [ "$status" -ne 0 ] || { echo "false positive: $t"; return 1; }
   done
@@ -61,7 +70,22 @@ setup() {
     [ "$status" -eq 0 ] || { echo "missed: $line"; return 1; }
     n=$((n+1))
   done < "$BATS_TEST_DIRNAME/fixtures/rate_limit_lines.txt"
-  [ "$n" -ge 5 ]
+  [ "$n" -ge 19 ]
+}
+
+@test "real rate-limit lines still match under LC_ALL=C (byte-wise glyph prefix)" {
+  local line
+  while IFS= read -r line; do
+    case "$line" in '#'*|'') continue ;; esac
+    LC_ALL=C rate_limited "$line" || { echo "missed under C locale: $line"; return 1; }
+  done < "$BATS_TEST_DIRNAME/fixtures/rate_limit_lines.txt"
+}
+
+@test "the nudge does not match even after a TUI glyph prefix" {
+  run rate_limited "  ⎿  $WATCHDOG_RL_NUDGE"
+  [ "$status" -ne 0 ]
+  run rate_limited "● $WATCHDOG_RL_NUDGE"
+  [ "$status" -ne 0 ]
 }
 
 @test "a real signal among normal output still matches" {

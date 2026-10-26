@@ -1,11 +1,37 @@
-# PROVENANCE (issue #182): NOT live captures. No real Claude Code rate-limit
-# rendering is checked into this repo, so these are the exact strings ASSUMED from
-# Claude Code's documented/commonly reported output. Replace with real captures
-# when one is obtained (same gap as #179). Lines starting with '#' are ignored.
+# PROVENANCE (issue #182): strings extracted with `strings` from the installed
+# Claude Code 2.1.310 binary (~/.local/share/claude/versions/2.1.310), with
+# template slots filled in by hand. They are NOT live tmux captures; replace
+# with real pane captures when one is obtained (same gap as #179). The leading
+# indent / glyph shown on some lines is the TUI's rendering prefix (assumed).
+# Lines starting with '#' are ignored. Source string for each line:
+#   `${Vl}: Request rejected (429)${we?` · ${we}`:""}`   (Vl="API Error")
+API Error: Request rejected (429) · this may be a temporary capacity issue.
+#   T9o="Server is temporarily limiting requests (not your usage limit)"
+  ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Retrying in 5s · attempt 3/10
+#   Hbe="Repeated 529 Overloaded errors"
+API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary. Try again in a moment.
+#   API error with status + JSON body (error types rate_limit_error/overloaded_error)
 API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization"}}
-  ⎿  API Error: 429 Too Many Requests
 API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
-  ⎿  API Error (529 Overloaded) · Retrying in 5 seconds… (attempt 3/10)
-Claude usage limit reached. Your limit will reset at 3pm (UTC).
-5-hour limit reached ∙ resets 3pm
-Weekly limit reached ∙ resets Oct 30, 9am
+#   emt / b9o / w9o
+⏺ Opus is experiencing high load, please use /model to switch to Sonnet
+Fable is experiencing high load. Switch to Sonnet.
+#   "Fast mode overloaded and is temporarily unavailable"
+Fast mode overloaded and is temporarily unavailable · resets in 4m
+#   `You've hit your ${limitName}` (limitName from the five_hour/seven_day map)
+You've hit your session limit · resets 3pm
+● You've hit your weekly limit · resets Oct 30, 9am
+You've hit your limit
+#   L9o: "You've reached your Fable limit."
+You've reached your Fable limit.
+#   "You're out of usage credits" / "Your org is out of usage · add funds to continue"
+You're out of usage credits · progress saved
+Your org is out of usage · add funds to continue
+#   retry spinner: `<limit> · Retrying in ${I}${f} · attempt ${n}/${max}`
+✻ Session limit reached · Retrying in 5s (resets 3pm) · attempt 3/10
+Weekly limit reached · Retrying in 30s (resets Oct 30) · attempt 1/10
+#   bt.started: "Usage limit reached · continuing automatically {when} · esc to cancel"
+Usage limit reached · continuing automatically at 3pm · esc to cancel
+#   goal-mode pause reasons
+Goal paused · the request was rate limited · send a message to retry
+Goal paused · usage limit reached · send a message after it resets to continue

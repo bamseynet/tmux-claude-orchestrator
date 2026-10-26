@@ -42,7 +42,7 @@
     "background_wait_seconds": 1800,
     "realert_seconds": 90,
     "realert_max_seconds": 1800,
-    "rate_limit_regex": "^[[:space:]]*(⎿[[:space:]]*|●[[:space:]]*)?(API Error[^a-z]*(429|529|rate limit|overloaded)|(Claude (AI )?)?usage limit reached|[0-9]+-hour limit reached|Weekly limit reached|Request rejected .429.)",
+    "rate_limit_regex": "^[^[:alnum:]+#>|-]*(API Error[^[:alnum:]]*(Request rejected[^[:alnum:]]*429|Server is temporarily limiting requests|Repeated 529|429|529|rate limit|overloaded)|Request rejected[^[:alnum:]]*429|[[:alpha:]]+ is experiencing high load|Fast mode overloaded|You.ve hit your |You.ve reached your [[:alpha:]]+ limit|You.re out of usage credits|Your org(anization)? is out of usage|(Claude (AI )?)?(Session|Weekly|Opus|Sonnet|Fable|Usage) limit reached|Goal paused[^[:alnum:]]+(the request was rate limited|usage limit reached))",
     "reap_terminal_after_seconds": 1800
   },
   "models": {
