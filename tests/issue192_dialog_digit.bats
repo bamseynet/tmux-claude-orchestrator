@@ -161,8 +161,8 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
 }
 
 @test "permission: a wrapped '1.2' continuation above the cursor does not hide option 2" {
-  printf '%s\n' ' Do you want to proceed?' '   1. Yes' '   2. Yes, and always allow npm install pkg@' \
-    '      1.2.3 from this project' ' ❯ 3. No' ' Esc to cancel · Tab to amend' > "$BATS_TEST_TMPDIR/wrap"
+  printf '%s\n' ' Do you want to proceed?' ' ❯ 1. Yes' '   2. Yes, and always allow npm install pkg@' \
+    '      1.2.3 from this project' '   3. No' ' Esc to cancel · Tab to amend' > "$BATS_TEST_TMPDIR/wrap"
   stub_tmux "$BATS_TEST_TMPDIR/wrap"
   send 2
   [ "$status" -eq 0 ]

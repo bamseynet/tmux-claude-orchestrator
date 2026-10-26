@@ -257,7 +257,7 @@ $SCREEN_trust"
   # but the real input box (with the stuck chip) is drawn below it: a real
   # dialog hides the input box, so Enter here would submit the chip + "1".
   SCREEN_stalechip=' Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
   2. No
 ● done
 ╭──────────────╮
