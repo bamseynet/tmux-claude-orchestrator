@@ -57,7 +57,7 @@ cmd_bump() { # [repo-dir]
     [ -n "$sha" ] || continue
     # A failed lookup must not silently downgrade a release:major/minor to patch.
     out="$(gh api "repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY unset}/commits/$sha/pulls" \
-      --jq '.[].labels[].name')" || die "label lookup failed for $sha"
+      --jq '.[] | select(.merged_at != null) | .labels[].name')" || die "label lookup failed for $sha"
     labels="$labels$out
 "
   done < <(git rev-list "$base..HEAD" -- "${RUNTIME_PATHS[@]}")

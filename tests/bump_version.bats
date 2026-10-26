@@ -189,3 +189,10 @@ commit() { # <file> [label]
   # contents: write only inside the job (after `jobs:`)
   [ "$(sed -n '/^jobs:/,$p' "$WORKFLOW" | grep -c 'contents: write')" -eq 1 ]
 }
+
+@test "workflow on.push.paths matches RUNTIME_PATHS in bump-version.sh" {
+  want="$(sed -n 's/^RUNTIME_PATHS=(\(.*\))/\1/p' "$BUMP" | tr ' ' '\n' | sed -E 's#^(_orch|tmux)$#\1/**#' | sort)"
+  got="$(sed -n '/^    paths:/,/^permissions:/p' "$WORKFLOW" | sed -n "s/^      - '\(.*\)'/\1/p" | sort)"
+  [ -n "$want" ]
+  [ "$want" = "$got" ]
+}
