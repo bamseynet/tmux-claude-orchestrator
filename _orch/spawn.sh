@@ -195,6 +195,18 @@ if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; t
   say "worker '$id' already exists in session '$S'"; exit 1
 fi
 
+# Issue #177: workers/<id>.json is keyed on id only, so any surviving record means
+# that worker's worktree/branch is not cleaned up. Refuse (before any state write)
+# to overwrite one recorded against a different, still-existing repo; it would
+# orphan that repo's worktree and branch. Same repo, no target_repo (pre-#148) or a
+# vanished repo do not block.
+_rec_repo="$(worker_target_repo "$id")"
+if _rec_phys="$(_phys_dir "$_rec_repo")" && [ "$_rec_phys" != "$(_phys_dir "$proj")" ]; then
+  log "spawn refused for $id: uncleaned worker recorded against $_rec_repo, not $proj"
+  say "worker '$id' is already recorded against $_rec_repo (not $proj); run 'orch clean $id' first" >&2
+  exit 1
+fi
+
 # Task dependencies (issue #22): --after <id> holds this spawn in the pending
 # queue unconditionally — never attempt to launch now, regardless of the resource
 # gate — until worker <id> reaches status "done". heartbeat.sh's drain_queue_if_room
@@ -706,7 +718,7 @@ else
       log "worker $id: dialog on screen; not re-pasting (would be consumed as a dialog choice)"
       # A permission dialog that rendered only after the last poll is still
       # positive evidence the (already sent) task landed (issue #133).
-      if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
+      if [ "$task_sent" -eq 1 ] && pane_has_postaccept_dialog "$S:$id"; then spawn_ok=1; fi
     else
       if [ "$task_sent" -eq 1 ]; then
         log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
@@ -720,7 +732,7 @@ else
         # claude exited or a dialog came back; nothing was sent -> spawn-failed
         # below -- unless the dialog that came back is a permission dialog for
         # the already-sent task, which is positive evidence it landed (#133).
-        if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
+        if [ "$task_sent" -eq 1 ] && pane_has_postaccept_dialog "$S:$id"; then spawn_ok=1; fi
       elif confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then

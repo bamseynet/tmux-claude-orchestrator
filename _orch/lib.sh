@@ -4,6 +4,7 @@
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
 #           pane_has_permission_dialog(), pane_has_trust_dialog(), pane_has_dialog() (issues #132/#133),
+#           pane_has_postaccept_dialog() (issue #189),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -291,6 +292,46 @@ worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
   jq -r '.target_repo // empty' "$f" 2>/dev/null || true
 }
 
+# worker_recorded_base <repo_dir> <id>: the base ref spawn recorded for <id>
+# (issue #153/#176) that still resolves in <repo_dir>: `base`, else `base_sha`.
+# Prints nothing when there is no usable record.
+worker_recorded_base() {
+  local dir="$1" f="$WORKERS_DIR/$2.json" ref
+  [ -f "$f" ] || return 0
+  # One jq read yields both candidates in order (base, then base_sha).
+  while IFS= read -r ref; do
+    if [ -n "$ref" ] && git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s' "$ref"; return 0
+    fi
+  done < <(jq -r '.base // empty, .base_sha // empty' "$f" 2>/dev/null || true)
+}
+
+# worker_recorded_base_branch <repo_dir> <id>: the recorded `base` as a plain branch
+# name for `gh pr create --base` (leading origin/ stripped). Prints nothing when there
+# is no record, it is not a branch ref (e.g. spawn's pinned-SHA HEAD fallback), or the
+# branch no longer exists in <repo_dir> (an origin/<b> record as origin/<b>, a local
+# <b> record as <b>) -- the last case warns on stderr.
+worker_recorded_base_branch() {
+  local dir="$1" f="$WORKERS_DIR/$2.json" rec ref
+  [ -f "$f" ] || return 0
+  rec="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
+  ref="${rec#origin/}"
+  case "$ref" in "" | HEAD) return 0 ;; esac
+  # spawn pins its HEAD fallback to a full sha (40 hex, 64 under sha256); only
+  # that exact shape is a sha -- a hex-looking branch like "deadbeef" is a branch.
+  case "$ref" in
+    *[!0-9a-f]*) ;;
+    *) { [ "${#ref}" -eq 40 ] || [ "${#ref}" -eq 64 ]; } && return 0 ;;
+  esac
+  # A recorded branch since deleted/pruned can't be a PR base.
+  if [ "$ref" != "$rec" ]; then rec="refs/remotes/origin/$ref"; else rec="refs/heads/$ref"; fi
+  if ! git -C "$dir" rev-parse -q --verify "$rec" >/dev/null 2>&1; then
+    say "recorded base '$ref' for $2 no longer exists; falling back to the default base" >&2
+    return 0
+  fi
+  printf '%s' "$ref"
+}
+
 # resolve_worker_proj <id>: the repo to operate on for worker <id>. Prints the
 # recorded repo when it still exists, else PROJECT_ROOT/cwd. An EXPLICIT --repo
 # (orch exports ORCH_REPO_EXPLICIT=1 for it) that names a different repo than the
@@ -469,9 +510,16 @@ strip_ansi() {
   '
 }
 
-# Last N lines of a pane, de-ANSI'd.
+# Last N non-trailing-blank lines of a pane, de-ANSI'd. capture-pane -p emits
+# every row of the pane, so in a fresh session (TUI drawn from the top of a tall
+# pane) a plain tail is mostly the blank rows below the content, cutting off the
+# rows the detectors need -- e.g. the AskUserQuestion selector's cursor row sits
+# ~10 rows above its footer, so a 40-row pane showing the real #189 capture was
+# missed outright (issue #189 review).
 pane_tail() { # <target> [lines]
-  tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "${2:-15}" | strip_ansi
+  tmux capture-pane -t "$1" -p 2>/dev/null \
+    | awk '{ r[NR] = $0 } /[^[:space:]]/ { n = NR } END { for (i = 1; i <= n; i++) print r[i] }' \
+    | tail -n "${2:-15}" | strip_ansi
 }
 
 # --- Claude Code launch env (issues #140, #144) ---------------------------------------
@@ -582,6 +630,17 @@ TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quic
 # of the whole dialog. The trust dialog's destructive "No, exit" choice is
 # present in every known version of it; the permission dialog always offers
 # "1. Yes" as its first choice.
+# The AskUserQuestion selector (issue #189): Enter selects the highlighted
+# option, so injecting into it answers a question the operator never saw. Real
+# capture (Claude Code 2.1.310): footer "Enter to select · ↑/↓ to navigate · Esc
+# to cancel" and a cursor row "❯ 1. <option>"; both are required, so a numbered
+# list in model prose never matches on its own. A multi-question selector ends
+# on a footerless review screen ("Ready to submit your answers?" over "❯ 1.
+# Submit answers"), where Enter submits every answer -- matched too.
+TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*(Enter to select.*Esc to cancel|Ready to submit your answers\?)')"
+TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.')"
+# Cursor on the selector's "Type something." row: the footer adds an editor hint.
+TUI_ASKUSER_TEXT_REGEX="$(_tui_pattern askuser_text_entry_regex '^[[:space:]│]*Enter to select.*ctrl\+g to edit.*Esc to cancel')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
 
@@ -681,6 +740,24 @@ pane_has_permission_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_PERMISSIO
 # bare Enter (issues #132/#133).
 pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"; }
 
+# A dialog that can only render after a prompt was accepted (permission or
+# AskUserQuestion)? (0 = visible). spawn.sh counts it as a landed task.
+pane_has_postaccept_dialog() {
+  local p; p="$(pane_tail "$1" 25)"
+  # The pre-acceptance trust dialog is never evidence, even if a future copy of
+  # it shares the selector's footer: inject_confirmed checks this BEFORE its
+  # trust veto, so a match there would report a parked worker as landed.
+  _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" && return 1
+  _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
+}
+
+# AskUserQuestion selector visible? (0 = visible). send.sh answers it with a
+# typed digit, not a paste: Claude Code ignores a pasted digit there and the
+# paste's Enter then picks the highlighted option (live-checked on 2.1.310).
+pane_has_askuser_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"; }
+pane_has_askuser_text_entry() { pane_tail "$1" 25 | grep -qE "$TUI_ASKUSER_TEXT_REGEX"; }
+
 # Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
 # send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --
 # while EITHER dialog is up: Enter is consumed as "select the highlighted
@@ -690,7 +767,8 @@ pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_R
 pane_has_dialog() {
   local p; p="$(pane_tail "$1" 25)"
   _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
-    _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"
+    _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
 }
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
@@ -723,7 +801,10 @@ inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # #128 banner veto below would wrongly report a healthy worker blocked on a
   # dialog as "not confirmed", triggering a bogus retry/re-inject into the
   # dialog itself.
-  pane_has_permission_dialog "$1" && return 0
+  # The AskUserQuestion selector (issue #189) is the same kind of evidence: only
+  # a running turn can render it. Without this, is_ready refusing it would mark
+  # a healthy worker that asks a question right away spawn-failed.
+  pane_has_postaccept_dialog "$1" && return 0
   # Checked BEFORE pane_active/is_ready (issue #133): the trust dialog's
   # highlighted-choice arrow ("❯ No, exit") matches TUI_READY_REGEX's bare "❯",
   # so without an explicit veto here is_ready() would misread the dialog as a

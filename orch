@@ -455,7 +455,8 @@ orch — tmux + Claude Code orchestrator
                                      review/merge flows
   ./orch merge <id> [--auto] [--base <br>]
                                      push orch/<hash>/<id>, open (or reuse) a PR against
-                                     <br> (default: main). Without --auto (and
+                                     <br> (default: the branch spawn recorded,
+                                     else \$ORCH_BASE_BRANCH/main). Without --auto (and
                                      merge.auto=false in config), only pushes +
                                      reports PR/check status — never merges. With
                                      --auto (or merge.auto=true): waits for
