@@ -1437,8 +1437,15 @@ root_porcelain() { # <project_root>
   local to=""
   if command -v timeout >/dev/null 2>&1; then to="timeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"
   elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"; fi
+  # The toolkit's own state dir inside the checkout (a vendored copy whose repo does
+  # not ignore _orch/state/) changes on every spawn and tick: never report it.
+  local sd rd ps=()
+  if sd="$(_phys_dir "$STATE_DIR")" && rd="$(_phys_dir "$1")"; then
+    case "$sd" in "$rd"/*) ps=(-- ':/' ":(exclude,literal)${sd#"$rd"/}") ;; esac
+  fi
   # shellcheck disable=SC2086  # $to is intentionally word-split (empty or "timeout N")
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE $to git --no-optional-locks -C "$1" status --porcelain -uall 2>/dev/null
+  # ${ps[@]+...}: an empty "${ps[@]}" is unbound under bash 3.2 + set -u (spawn.sh).
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE $to git --no-optional-locks -C "$1" status --porcelain -uall ${ps[@]+"${ps[@]}"} 2>/dev/null
 }
 root_baseline_write() { # <project_root> <id>
   local f; f="$(root_baseline_file "$1" "$2")"

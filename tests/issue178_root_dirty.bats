@@ -22,7 +22,7 @@ setup() {
   echo dirty >> "$PROJ/_orch/config.json"   # operator's own uncommitted edit
   # Hermetic tmux: session $SESSION_NAME exists; its windows are $STUB_WINS.
   tb="$BATS_TEST_TMPDIR/tmuxbin"; mkdir -p "$tb"
-  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) [ -n \"$STUB_NOSESS\" ] || echo \"$SESSION_NAME\";; list-windows) printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) [ -n \"$STUB_NOSESS\" ] || echo \"$SESSION_NAME\";; list-windows) [ -z \"$STUB_NOSESS\" ] || exit 1; printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
   chmod +x "$tb/tmux"; PATH="$tb:$PATH"; export STUB_WINS=""
 }
 
@@ -293,4 +293,16 @@ inbox() { nlines "$INBOX"; }
   [ "$(jq '.paths|length' <<<"$ev")" -eq 50 ]
   [ "$(jq '.paths_total' <<<"$ev")" -eq 120 ]
   root_dirty_tick; [ "$(events)" -eq 1 ]   # all 120 recorded, not just the 50 shown
+}
+
+@test "toolkit state inside the target checkout (vendored, not gitignored) is never reported" {
+  STATE_DIR="$PROJ/_orch/state"; WORKERS_DIR="$STATE_DIR/workers"; INBOX="$STATE_DIR/inbox.jsonl"
+  mkdir -p "$WORKERS_DIR"; : > "$INBOX"
+  baseline w1; worker w1 worktree      # status file lands after the baseline, as in spawn
+  root_dirty_tick; root_dirty_tick     # 2nd tick: the tick's own record/events files exist
+  [ "$(events)" -eq 0 ]
+  echo y >> "$PROJ/f.sh"               # positive control: the repo IS being checked
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *_orch/state* ]]
 }

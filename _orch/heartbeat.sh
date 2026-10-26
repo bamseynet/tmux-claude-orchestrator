@@ -466,7 +466,8 @@ root_dirty_tick() {
     [ -n "$real" ] || continue
     rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
     keep+="${rep_f##*/} "
-    wids="$(printf '%s' "$pairs" | awk -F'\t' -v r="$real" '$1==r{print $2}')"
+    # ENVIRON, not -v: awk -v expands backslash escapes in the repo path.
+    wids="$(printf '%s' "$pairs" | r="$real" awk -F'\t' '$1==ENVIRON["r"]{print $2}')"
     bfs=""; bl=1
     while IFS= read -r id; do
       f="$(root_baseline_file "$real" "$id")"
