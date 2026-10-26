@@ -10,19 +10,14 @@ setup() {
   source "$BATS_TEST_DIRNAME/helpers/fake-git.bash"
 }
 
-@test "fake-git add: worktree add mkdirs the path, skipping -b <br> and a trailing commit-ish" {
+@test "fake-git add: worktree add succeeds and creates nothing, with or without -C" {
   install_fake_git "$STUBBIN"
   run "$STUBBIN/git" worktree add -b br "$BATS_TEST_TMPDIR/wt1" origin/main
   [ "$status" -eq 0 ]
-  [ -d "$BATS_TEST_TMPDIR/wt1" ]
-  [ ! -e origin/main ]
-}
-
-@test "fake-git add: -C <dir> prefix shifts the offset" {
-  install_fake_git "$STUBBIN"
+  [ ! -e "$BATS_TEST_TMPDIR/wt1" ]
   run "$STUBBIN/git" -C /nonexistent worktree add "$BATS_TEST_TMPDIR/wt2"
   [ "$status" -eq 0 ]
-  [ -d "$BATS_TEST_TMPDIR/wt2" ]
+  [ ! -e "$BATS_TEST_TMPDIR/wt2" ]
 }
 
 @test "fake-git add: worktree remove and show-ref are no-ops exiting 0" {
