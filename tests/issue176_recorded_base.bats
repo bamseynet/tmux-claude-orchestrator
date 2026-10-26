@@ -3,6 +3,9 @@
 # base/base_sha spawn recorded (#153/#170) and ORCH_BASE_BRANCH. Real git with a
 # bare origin (not the fake-git stub); gh is stubbed on PATH and logs its argv.
 
+# shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   unset ORCH_BASE_BRANCH ORCH_REPO_EXPLICIT
   export ORCH_ROOT="$BATS_TEST_TMPDIR/root"
@@ -94,8 +97,8 @@ wd_vars() {
   wd_vars
   liveness_check w2 "idle" 1000
   liveness_check w2 "idle" 1400
-  ! grep -q ready-for-review "$INBOX"
-  ! grep -q ready-for-review "$STATE_DIR/events.jsonl" 2>/dev/null
+  refute_grep 'ready-for-review' "$INBOX"
+  [ ! -f "$STATE_DIR/events.jsonl" ] || refute_grep 'ready-for-review' "$STATE_DIR/events.jsonl"
 }
 
 @test "watchdog: idle 1-commit develop worker still emits ready-for-review" {
