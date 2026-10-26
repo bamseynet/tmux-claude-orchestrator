@@ -56,7 +56,7 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
 @test "stale local main: worker contains commit pushed to origin/main" {
   # No pre-fetch: spawn's own fetch must bring X in.
   X="$(_push_other main x.txt)"
-  ! git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null
+  if git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null; then return 1; fi
   run "$SPAWN" w1 sonnet "t"
   [ "$status" -eq 0 ]
   git -C "$(_wdir w1)" merge-base --is-ancestor "$X" HEAD
