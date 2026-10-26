@@ -109,3 +109,48 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   [ "$status" -ne 0 ]
   no_keys_sent
 }
+
+# The command preview sits in the same blank-free block as the options, so a
+# numbered line in it must not vouch for an option the dialog does not have.
+@test "permission: a numbered line in the command preview does not vouch for option 3" {
+  printf '%s\n' ' Bash command' '   cat <<EOF' '   3. step three' '   EOF' \
+    ' Do you want to proceed?' ' ❯ 1. Yes' '   2. No' ' Esc to cancel · Tab to amend' \
+    > "$BATS_TEST_TMPDIR/preview"
+  stub_tmux "$BATS_TEST_TMPDIR/preview"
+  send 3
+  [ "$status" -ne 0 ]
+  no_keys_sent
+}
+
+# The repurposed #155 chip-echo test now covers the trust dialog; keep the
+# permission-dialog half: an echoed chip above the dialog must not block it.
+@test "permission: a chip echoed above the dialog does not block the typed answer" {
+  { echo '❯ [Pasted text #1 +5 lines]'; cat "$FX/permission_dialog_2opt.txt"; } > "$BATS_TEST_TMPDIR/echo"
+  stub_tmux "$BATS_TEST_TMPDIR/echo"
+  send 2
+  [ "$status" -eq 0 ]
+  grep -qx 'send-keys -t orch:w -l 2' "$CALLS"
+}
+
+# Race, the case the "screen changed" guard exists for: the permission dialog
+# becomes an AskUserQuestion selector that also shows option 4. Typing 4 there
+# would pick a selector answer nobody saw; the idle-pane race above is caught
+# by pane_option_visible alone and does not exercise this guard.
+@test "race: permission dialog replaced by a selector showing the option -> refused" {
+  stub_tmux "$FX/permission_dialog_4opt.txt"
+  sed -i "s|capture-pane) cat \"$PANE\" ;;|capture-pane) n=\$(( \$(cat $BATS_TEST_TMPDIR/n 2>/dev/null \|\| echo 0) + 1 )); echo \$n > $BATS_TEST_TMPDIR/n; if [ \$n -ge 3 ]; then cat $FX/askuser_selector.txt; else cat \"$PANE\"; fi ;;|" "$STUBBIN/tmux"
+  grep -q 'askuser_selector' "$STUBBIN/tmux"
+  send 4
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"screen changed"* ]]
+  no_keys_sent
+}
+
+# Refused by the one-digit rule, not merely because no "12." row is visible.
+@test "permission: multi-digit is refused with the one-option-number message" {
+  stub_tmux "$FX/permission_dialog_4opt.txt"
+  send 12
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"one option number"* ]]
+  no_keys_sent
+}

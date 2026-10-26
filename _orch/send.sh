@@ -26,6 +26,19 @@ fi
 # a bare option number ("orch send <id> 1") answers a permission dialog or selector (typed, #192).
 # The wait ends early on a dialog, so one that renders mid-wait is caught too.
 wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
+# Type option <n> as one literal keypress (no paste, no Enter) and exit. Both the
+# selector and the permission dialog silently ignore a digit with no matching
+# row; reporting it as typed would leave the caller believing a still-blocked
+# worker was answered, so the cursor's own option list must show it first.
+type_option() { # <n> <dialog name> <note>
+  if ! pane_option_visible "$S:$id" "$1"; then
+    say "$id's $2 shows no option $1; not sending. Check the pane for the option numbers"
+    exit 1
+  fi
+  tmux send-keys -t "$S:$id" -l "$1"
+  say "typed option $1 into $id's $2 ($3)"
+  exit 0
+}
 # Issue #189: the AskUserQuestion selector ignores a pasted digit, and the
 # paste's Enter then answers with the HIGHLIGHTED option -- "orch send <id> 2"
 # picked 1. A typed digit selects (and advances) on its own, so type exactly one
@@ -50,26 +63,18 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
     say "$id is showing a question selector; not sending. Answer it with one option number, e.g. \`orch send $id 1\` (pick its \"Type something.\" number first to send free text)"
     exit 1
   fi
-  opt="${BASH_REMATCH[1]}"
-  # The selector silently ignores a digit with no matching row; reporting it as
-  # typed would leave the caller believing a still-blocked worker was answered.
-  if ! pane_option_visible "$S:$id" "$opt"; then
-    say "$id's question selector shows no option $opt; not sending. Check the pane for the option numbers"
-    exit 1
-  fi
-  tmux send-keys -t "$S:$id" -l "$opt"
-  say "typed option $opt into $id's question selector (a multi-select question only toggles it; check the pane)"
-  exit 0
+  type_option "${BASH_REMATCH[1]}" "question selector" "a multi-select question only toggles it; check the pane"
 fi
 # Issue #192: the permission and trust dialogs ignore a PASTED digit too, and the
 # paste's Enter then takes the highlighted default ("1. Yes" approved a tool call
 # meant to be refused with 4; "No, exit" killed the worker). No dialog is ever
 # answered by paste. Permission: type the digit as a keypress (no Enter) once its
-# own option block shows it. Trust: it has no digit hotkeys, and mapping N to
-# arrow presses blind is the same act-on-a-guess hazard, so refuse.
+# own option block shows it. Trust: its digit handling is unverified (the 2.1.310
+# capture has no numbers), and mapping N to arrow presses blind is the same
+# act-on-a-guess hazard, so refuse.
 if [ "$wr" -eq 2 ]; then
   if pane_has_trust_dialog "$S:$id"; then
-    say "$id is showing the folder-trust dialog; not sending. It has no number keys and its default is \"No, exit\": answer it in the pane (Down, then Enter)"
+    say "$id is showing the folder-trust dialog; not sending. Its default is \"No, exit\" and its keys are unverified: answer it in the pane (Down, then Enter)"
     exit 1
   fi
   if ! pane_has_permission_dialog "$S:$id" || pane_has_askuser_dialog "$S:$id"; then
@@ -84,14 +89,7 @@ if [ "$wr" -eq 2 ]; then
     say "$id is showing a permission dialog; not sending. Answer it with one option number, e.g. \`orch send $id 1\`"
     exit 1
   fi
-  opt="${BASH_REMATCH[1]}"
-  if ! pane_option_visible "$S:$id" "$opt"; then
-    say "$id's permission dialog shows no option $opt; not sending. Check the pane for the option numbers"
-    exit 1
-  fi
-  tmux send-keys -t "$S:$id" -l "$opt"
-  say "typed option $opt into $id's permission dialog (no Enter needed; option 3 may switch the worker's permission mode)"
-  exit 0
+  type_option "${BASH_REMATCH[1]}" "permission dialog" "no Enter needed; option 3 may switch the worker's permission mode"
 fi
 [ "$wr" -ne 1 ] || say "(warning: $id looks busy; sending anyway)"
 # Issue #179: an unsent paste chip is not a dialog, but our paste + Enter would

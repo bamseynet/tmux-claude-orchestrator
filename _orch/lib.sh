@@ -761,15 +761,20 @@ pane_has_askuser_text_entry() { pane_tail "$1" 25 | grep -qE "$TUI_ASKUSER_TEXT_
 # Does the cursor's own option block show option <n>? (0 = yes). Shared by the
 # AskUserQuestion selector (#189) and the permission dialog (#192): both ignore
 # a digit with no matching row, so a typed key must be vouched for first. Only
-# the block around the cursor row counts (from the last blank row above it
-# down): numbered prose or a submitted "1. ..." prompt higher up in the tail
+# the option list around the cursor row counts: it starts at the later of the
+# last blank row above the cursor and the last "1." row at or above it.
+# Numbered prose, a submitted "1. ..." prompt, or a numbered line in a
+# permission dialog's command preview (same blank-free block as its options)
 # would otherwise vouch for a digit the dialog ignores.
 pane_option_visible() { # <target> <n>
   pane_tail "$1" 25 | OPT="$2" CUR="$TUI_ASKUSER_CHOICE_REGEX" awk '
     { r[NR] = $0 } $0 ~ ENVIRON["CUR"] { c = NR }
     END {
       if (!c) exit 1
-      s = 0; for (i = 1; i < c; i++) if (r[i] !~ /[^[:space:]]/) s = i
+      s = 0; for (i = 1; i <= c; i++) {
+        if (i < c && r[i] !~ /[^[:space:]]/) s = i
+        if (r[i] ~ /^[[:space:]│❯]*1\./) s = i - 1
+      }
       for (i = s + 1; i <= NR; i++) if (r[i] ~ ("^[[:space:]│❯]*" ENVIRON["OPT"] "\\.")) exit 0
       exit 1
     }'
