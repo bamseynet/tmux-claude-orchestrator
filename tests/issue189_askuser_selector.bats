@@ -1,0 +1,88 @@
+#!/usr/bin/env bats
+# Issue #189: an open AskUserQuestion selector was not a "dialog", so the
+# heartbeat's #52 draft valve (and send/ask/watchdog) typed Enter into it and
+# auto-picked option 1.
+#
+# Fixture provenance: tests/fixtures/askuser_selector.txt is a REAL capture,
+# Claude Code 2.1.310 (haiku), 120x40, throwaway `tmux -L` socket in a scratch
+# dir, captured 2026-10-26 (`capture-pane -p`, trailing blank rows trimmed).
+# The cursor-on-option-2 and multi-question variants are derived from it with
+# sed and are ASSUMED shapes (not separately captured).
+
+setup() {
+  export FAKE_TMUX_STATE="$BATS_TEST_TMPDIR/fake-tmux-state"
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch"
+  cp "$BATS_TEST_DIRNAME/../_orch/config.json" "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/fake-tmux.bash"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  fake_tmux_add_session "orch" "w"
+  T="orch:w"
+  FIX="$BATS_TEST_DIRNAME/fixtures/askuser_selector.txt"
+  SCREEN_ask="$(cat "$FIX")"
+  SCREEN_ask2="$(sed -e 's/^❯ 1\./  1./' -e 's/^  2\. Merge now/❯ 2. Merge now/' "$FIX")"
+  SCREEN_askmulti="$(sed 's/^ ☐ PR 165/ ☐ PR 165  ☐ Scope  ✔ Submit/' "$FIX")"
+  SCREEN_prose='● Options:
+1. Keep looping
+2. Merge now
+3. Close it
+╭──────────────╮
+│ >            │
+╰──────────────╯
+  ? for shortcuts'
+  SCREEN_idle='● done
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
+  ? for shortcuts'
+}
+
+cell() { # <screen> <detector> <Y|n>
+  local var="SCREEN_$1" got
+  fake_tmux_set_pane "orch" "w" "${!var}"
+  if "$2" "$T"; then got=Y; else got=n; fi
+  [ "$got" = "$3" ] || { echo "$2 on $1: want $3 got $got"; return 1; }
+}
+
+@test "pane_has_dialog: real AskUserQuestion selector Y"   { cell ask       pane_has_dialog Y; }
+@test "pane_has_dialog: cursor on option 2 Y"              { cell ask2      pane_has_dialog Y; }
+@test "pane_has_dialog: multi-question header Y"           { cell askmulti  pane_has_dialog Y; }
+@test "pane_has_dialog: numbered prose above idle box n"   { cell prose     pane_has_dialog n; }
+@test "pane_has_dialog: idle prompt n"                     { cell idle      pane_has_dialog n; }
+@test "is_ready refuses the selector"                      { cell ask       is_ready n; }
+@test "inject_confirmed: selector is positive evidence"    { cell ask       inject_confirmed Y; }
+@test "inject_confirmed: selector beats a visible banner" {
+  fake_tmux_set_pane "orch" "w" "✻ Welcome to Claude Code!
+$SCREEN_ask"
+  inject_confirmed "$T"
+}
+
+# --- call sites ------------------------------------------------------------------
+
+stub_tmux() { # <screen file>
+  STUBBIN="$BATS_TEST_TMPDIR/bin"; CALLS="$BATS_TEST_TMPDIR/calls"; PANE="$BATS_TEST_TMPDIR/pane"
+  mkdir -p "$STUBBIN"; : > "$CALLS"; cp "$1" "$PANE"
+  cat > "$STUBBIN/tmux" <<STUB
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo orch ;;
+  list-windows) printf '%s\n' orchestrator w ;;
+  capture-pane) cat "$PANE" ;;
+  load-buffer) cat > /dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+STUB
+  chmod +x "$STUBBIN/tmux"
+  export PATH="$STUBBIN:$PATH" SESSION_NAME=orch
+}
+
+@test "send.sh refuses non-numeric text onto the selector" {
+  stub_tmux "$FIX"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}

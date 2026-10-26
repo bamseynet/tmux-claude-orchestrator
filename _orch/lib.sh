@@ -622,6 +622,13 @@ TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quic
 # of the whole dialog. The trust dialog's destructive "No, exit" choice is
 # present in every known version of it; the permission dialog always offers
 # "1. Yes" as its first choice.
+# The AskUserQuestion selector (issue #189): Enter selects the highlighted
+# option, so injecting into it answers a question the operator never saw. Real
+# capture (Claude Code 2.1.310): footer "Enter to select · ↑/↓ to navigate · Esc
+# to cancel" and a cursor row "❯ 1. <option>"; both are required, so a numbered
+# list in model prose never matches on its own.
+TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*Enter to select.*Esc to cancel')"
+TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
 
@@ -730,7 +737,8 @@ pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_R
 pane_has_dialog() {
   local p; p="$(pane_tail "$1" 25)"
   _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
-    _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"
+    _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
 }
 
 # An injected prompt appears to have landed. Requires positive evidence rather than
@@ -764,6 +772,10 @@ inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # dialog as "not confirmed", triggering a bogus retry/re-inject into the
   # dialog itself.
   pane_has_permission_dialog "$1" && return 0
+  # The AskUserQuestion selector (issue #189) is the same kind of evidence: only
+  # a running turn can render it. Without this, is_ready refusing it would mark
+  # a healthy worker that asks a question right away spawn-failed.
+  _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX" && return 0
   # Checked BEFORE pane_active/is_ready (issue #133): the trust dialog's
   # highlighted-choice arrow ("❯ No, exit") matches TUI_READY_REGEX's bare "❯",
   # so without an explicit veto here is_ready() would misread the dialog as a
