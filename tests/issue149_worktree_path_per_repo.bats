@@ -31,6 +31,10 @@ STUB
   chmod +x "$STUBBIN/tmux" "$STUBBIN/claude"
   PATH="$STUBBIN:$PATH"
 
+  # Hermetic against host git config: a global excludesfile (e.g. one ignoring
+  # .claude/settings.local.json) or commit.gpgsign would otherwise change results.
+  export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig" XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/xdg" GIT_CONFIG_NOSYSTEM=1
+  : > "$GIT_CONFIG_GLOBAL"; mkdir -p "$XDG_CONFIG_HOME"
   R="$BATS_TEST_TMPDIR/r"
   mkdir -p "$R"
   export ORCH_ROOT="$R/toolkit" A="$R/a" B="$R/b"
@@ -85,6 +89,7 @@ v86_wdir() { printf '%s/../wt/%s/%s' "$1" "$(bash -c 'source "$1"; printf %s "$O
   cp "$WORKERS/lift.json" "$BATS_TEST_TMPDIR/lift.before"
   run env PROJECT_ROOT="$B" "$ORCH_DIR_SRC/spawn.sh" lift sonnet "task"
   [ "$status" -ne 0 ]
+  [[ "$output" == *"already recorded against $A"* ]]
   cmp "$WORKERS/lift.json" "$BATS_TEST_TMPDIR/lift.before"
   [ ! -e "$(libcall worker_wdir "$B" lift)" ]
   [ -d "$wa" ]

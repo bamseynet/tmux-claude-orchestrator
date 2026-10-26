@@ -201,8 +201,7 @@ fi
 # orphan that repo's worktree and branch. Same repo, no target_repo (pre-#148) or a
 # vanished repo do not block.
 _rec_repo="$(worker_target_repo "$id")"
-if [ -n "$_rec_repo" ] && [ -d "$_rec_repo" ] \
-   && [ "$(cd "$_rec_repo" && pwd -P)" != "$(cd "$proj" && pwd -P)" ]; then
+if _rec_phys="$(_phys_dir "$_rec_repo")" && [ "$_rec_phys" != "$(_phys_dir "$proj")" ]; then
   log "spawn refused for $id: uncleaned worker recorded against $_rec_repo, not $proj"
   say "worker '$id' is already recorded against $_rec_repo (not $proj); run 'orch clean $id' first" >&2
   exit 1

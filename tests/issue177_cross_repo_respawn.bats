@@ -31,6 +31,10 @@ STUB
   chmod +x "$STUBBIN/tmux" "$STUBBIN/claude"
   PATH="$STUBBIN:$PATH"
 
+  # Hermetic against host git config: a global excludesfile (e.g. one ignoring
+  # .claude/settings.local.json) or commit.gpgsign would otherwise change results.
+  export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig" XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/xdg" GIT_CONFIG_NOSYSTEM=1
+  : > "$GIT_CONFIG_GLOBAL"; mkdir -p "$XDG_CONFIG_HOME"
   R="$BATS_TEST_TMPDIR/r"
   mkdir -p "$R"
   export ORCH_ROOT="$R/toolkit" A="$R/a" B="$R/b"
@@ -56,7 +60,8 @@ snapshot() { # prints b's git state + queue
   cat "$QUEUE" 2>/dev/null || true
 }
 # drop a repo's w1 worktree+branch so the next spawn creates fresh (a reused
-# worktree carries the first spawn's .claude/ settings and is not "clean" in CI)
+# worktree carries the first spawn's untracked .claude/settings.local.json, so it
+# is not "clean" and spawn's reuse check refuses it)
 reset_wt() { # <repo>
   local w; w="$(libcall worker_wdir "$1" w1)"
   git -C "$1" worktree remove --force "$w" 2>/dev/null || true
@@ -71,11 +76,10 @@ expect_spawned() { # diagnostics: show why a spawn that should succeed did not
 
 assert_refused() { # cmd run already; compares to pre-snapshot
   [ "$status" -ne 0 ]
-  [[ "$output" == *w1* ]]
-  [[ "$output" == *"$A"* ]]
+  [[ "$output" == *"worker 'w1' is already recorded against $A (not $B)"* ]]
   cmp "$WORKERS/w1.json" "$BATS_TEST_TMPDIR/w1.before"
   [ "$(snapshot)" = "$(cat "$BATS_TEST_TMPDIR/snap.before")" ]
-  grep -q "spawn refused for w1" "$(log_file)"
+  tail -1 "$(log_file)" | grep -q "spawn refused for w1"   # this run's refusal, not an earlier one
 }
 before() { cp "$WORKERS/w1.json" "$BATS_TEST_TMPDIR/w1.before"; snapshot > "$BATS_TEST_TMPDIR/snap.before"; }
 
@@ -100,22 +104,23 @@ before() { cp "$WORKERS/w1.json" "$BATS_TEST_TMPDIR/w1.before"; snapshot > "$BAT
   assert_refused
 }
 
-@test "same repo is not blocked, incl. symlink and trailing slash" {
+@test "same repo is not blocked (done/spawn-failed), incl. symlink and trailing slash" {
   ln -s "$A" "$R/a-link"
-  for p in "$A" "$R/a-link" "$A/"; do
-    rec done
+  for st in done spawn-failed; do for p in "$A" "$R/a-link" "$A/"; do
+    rec "$st"
     run spawn_in "$p" w1 sonnet "task"
     expect_spawned
     [[ "$output" != *refused* ]]
     [ "$(jq -r .status "$WORKERS/w1.json")" = "working" ]
     reset_wt "$A"
-  done
+  done; done
 }
 
 @test "not blocked: no target_repo, vanished repo, or record cleaned" {
   rec working ""
   run spawn_in "$B" w1 sonnet "task"
   expect_spawned
+  [ "$(jq -r .target_repo "$WORKERS/w1.json")" = "$B" ]
   rm -f "$WORKERS/w1.json"; reset_wt "$B"
   rec working "$R/gone"
   run spawn_in "$B" w1 sonnet "task"
