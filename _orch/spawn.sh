@@ -222,8 +222,11 @@ fi
 # live-worker count and this worker's status write, widening the max_workers race.
 _fetch_spawn_base() { # <proj> <id>
   local proj="$1" id="$2" to="" secs="${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
-  # A non-numeric value would make `timeout` exit 125 and every fetch "fail".
+  # A non-numeric value would make `timeout` exit 125 and every fetch "fail";
+  # 10# keeps a leading-zero value ("08") from aborting spawn as bad octal, and
+  # 0 would disable timeout(1)/lowSpeedTime/ConnectTimeout (unbounded fetch).
   case "$secs" in ''|*[!0-9]*) secs=30 ;; esac
+  secs=$((10#$secs)); [ "$secs" -gt 0 ] || secs=30
   if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
     # Bounded and non-interactive: a hung/credential-prompting remote must not
     # stall spawn indefinitely.
@@ -355,7 +358,10 @@ else
       say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_ref:+"$base_ref"} >/dev/null 2>&1; then
+  # Branch from the resolved base_sha, not the base_ref name: a concurrent spawn's
+  # fetch can move origin/<base> after resolution, and the recorded base_sha must
+  # be this worker's actual fork point.
+  elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_sha:+"$base_sha"} >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"

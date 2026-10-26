@@ -189,7 +189,9 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   X="$(_push_other main x.txt)"
   lock="$ROOT/_orch/state/workers/.spawn-fetch.lock"
   mkdir -p "$(dirname "$lock")"
-  flock "$lock" sleep 20 & holder=$!
+  # exec so $! is the process holding the lock (killing a flock(1) wrapper would
+  # orphan its `sleep` child, which keeps the lock and bats' fd 3 for 20s).
+  ( exec 9>"$lock"; flock 9; exec sleep 20 ) 3>&- & holder=$!
   sleep 0.5
   ORCH_LOCK_TIMEOUT=1 run "$SPAWN" w1 sonnet "t"
   kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
@@ -197,4 +199,11 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   grep -q 'fetch lock busy' "$ROOT/_orch/state/orch.log"
   # lock held => no fetch => X not yet in the project's refs
   ! git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null
+}
+
+@test "ORCH_SPAWN_FETCH_TIMEOUT with a leading zero does not abort spawn (octal)" {
+  X="$(_push_other main x.txt)"
+  ORCH_SPAWN_FETCH_TIMEOUT=08 run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  git -C "$(_wdir w1)" merge-base --is-ancestor "$X" HEAD
 }
