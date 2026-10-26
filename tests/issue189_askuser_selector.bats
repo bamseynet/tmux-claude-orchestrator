@@ -206,6 +206,6 @@ STUB
 ❯ 1. Yes, I trust this folder
   2. No, exit
 Enter to select · ↑/↓ to navigate · Esc to cancel'
-  ! pane_has_postaccept_dialog "$T"
+  ! pane_has_postaccept_dialog "$T" || return 1
   ! inject_confirmed "$T"
 }
