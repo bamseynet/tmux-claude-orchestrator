@@ -207,11 +207,12 @@ if [ -n "$after_id" ]; then
   queue_item="$(jq -nc --arg id "$id" --arg model "$model" --arg task "$task" --arg mode "$mode" \
         --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" \
         --arg reason "waiting for dependency '$after_id' to reach done" --arg after "$after_id" \
-    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason, after:$after}')"
+        --arg target "$proj" --arg unrel "${ORCH_ALLOW_UNRELATED_REPO:-}" \
+    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason, after:$after, target_repo:$target, allow_unrelated:$unrel}')"
   queue_push "$queue_item"
   # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u/$a are jq --arg vars, not shell
-  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" --arg a "$after_id" \
-    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u, after:$a}'
+  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" --arg a "$after_id" --arg r "$proj" \
+    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u, after:$a, target_repo:$r}'
   log "spawn queued for $id: waiting for dependency $after_id to reach done"
   say "spawn queued: $id ($model) waiting on '$after_id' to reach done"
   exit 0
@@ -272,11 +273,12 @@ if ! check_spawn_gate; then
   ts="$(date -u +%FT%TZ)"
   queue_item="$(jq -nc --arg id "$id" --arg model "$model" --arg task "$task" --arg mode "$mode" \
         --arg resume "$resume" --arg allow "$allow_csv" --arg ts "$ts" --arg reason "$GATE_REASON" \
-    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason}')"
+        --arg target "$proj" --arg unrel "${ORCH_ALLOW_UNRELATED_REPO:-}" \
+    '{id:$id, model:$model, task:$task, mode:$mode, resume:$resume, allow_csv:$allow, ts:$ts, reason:$reason, target_repo:$target, allow_unrelated:$unrel}')"
   queue_push "$queue_item"
   # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
-  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" \
-    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u}'
+  write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$ts" --arg r "$proj" \
+    '{id:$id, status:"queued", model:$m, task:$t, created:$u, updated:$u, target_repo:$r}'
   log "spawn refused for $id: $GATE_REASON; queued"
   say "spawn queued: $id ($model) refused — $GATE_REASON"
   exit 0
@@ -333,7 +335,8 @@ else
     if worktree_owned_by_other "$wdir"; then
       owner="$(worktree_owner "$wdir")"
       log "spawn refused for $id: $wdir is owned by a different orch install ($owner)"
-      update_worker_status "$id" '.status="spawn-failed"'
+      # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+      update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
@@ -350,7 +353,8 @@ else
       fi
     else
       log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on $branch"
-      update_worker_status "$id" '.status="spawn-failed"'
+      # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+      update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
@@ -363,7 +367,8 @@ else
   # be this worker's actual fork point.
   elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_sha:+"$base_sha"} >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
-    update_worker_status "$id" '.status="spawn-failed"'
+    # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+    update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
     printf '%s\n' "$sf_line" >> "$INBOX"
     printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
@@ -444,9 +449,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 # `created` is stamped once here so downstream tools (orch status, hud.sh) can
 # compute worker age; report.sh's later writes only ever touch `updated`.
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
-write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
+write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" --arg r "$proj" \
   --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
-  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}
+  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u, target_repo:$r}
    + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session

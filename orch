@@ -206,6 +206,11 @@ export PROJECT_ROOT="$target_repo"
 export SESSION_NAME="${SESSION_NAME:-orch}"
 
 cmd="${1:-help}"; shift || true
+# issue #148: an explicit --repo lets per-worker ops refuse a repo that contradicts
+# the one the worker was spawned against. Not for up/bootstrap: the loops it starts
+# inherit this environment and must keep using each worker's recorded repo.
+unset ORCH_REPO_EXPLICIT
+case "$cmd" in up|bootstrap) ;; *) [ -z "$repo_flag" ] || export ORCH_REPO_EXPLICIT=1 ;; esac
 case "$cmd" in
   up|bootstrap) exec "$here/_orch/bootstrap.sh" "$@" ;;
   spawn)        exec "$here/_orch/spawn.sh" "$@" ;;
@@ -536,6 +541,10 @@ Target repo (issue #35): resolved as --repo flag > \$PROJECT_ROOT > \$ORCH_TARGE
 against the resolved target repo, never inferred from where this toolkit lives.
 If the toolkit dir and the resolved target repo share no git history or remote,
 spawn refuses to run (set ORCH_ALLOW_UNRELATED_REPO=1 to override intentionally).
+Each worker records the repo it was spawned against (issue #148): clean, collect,
+merge, prune and the queue drain use that recorded repo, and an explicit --repo
+naming a different repo makes clean/collect/merge refuse (and prune skip those
+workers) rather than guess.
 To update a vendored copy of this toolkit, run \`./orch update\` (see above) — do
 not \`git pull\` inside the target repo expecting toolkit changes; by design its
 history is unrelated to the toolkit's own.
