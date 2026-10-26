@@ -20,6 +20,10 @@ setup() {
   source "$ORCH_DIR_SRC/heartbeat.sh"
   mkdir -p "$WORKERS_DIR" "$STATE_DIR"
   echo dirty >> "$PROJ/_orch/config.json"   # operator's own uncommitted edit
+  # Hermetic tmux: session $SESSION_NAME exists; its windows are $STUB_WINS.
+  tb="$BATS_TEST_TMPDIR/tmuxbin"; mkdir -p "$tb"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) echo "$SESSION_NAME";; list-windows) printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
+  chmod +x "$tb/tmux"; PATH="$tb:$PATH"; export STUB_WINS=""
 }
 
 worker() { # <id> <mode> [repo]
@@ -68,12 +72,23 @@ inbox() { nlines "$INBOX"; }
   [ "$(events)" -eq 0 ]
 }
 
-@test "done workers do not count as live" {
+@test "done workers whose window is gone do not count as live" {
   worker w1 worktree; baseline w1
   jq '.status="done"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  STUB_WINS="orch other"
   echo y >> "$PROJ/f.sh"
   root_dirty_tick
   [ "$(events)" -eq 0 ]
+}
+
+@test "a done worker whose window is alive (follow-up turn) still counts as live" {
+  worker w1 worktree; baseline w1
+  jq '.status="done"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  STUB_WINS="orch w1"
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" == *w1* ]]
 }
 
 @test "zero worktree-mode workers: tick runs no git" {
@@ -135,6 +150,32 @@ inbox() { nlines "$INBOX"; }
 @test "a worker's write before a later spawn is caught when ticked first" {
   worker w1 worktree; baseline w1
   echo w >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  ev="$(tail -1 "$STATE_DIR/events.jsonl")"
+  [[ "$ev" == *'"f.sh"'* ]]
+  worker w2 worktree; baseline w2      # later spawn absorbs f.sh into its baseline
+  grep -qx ' M f.sh' "$(root_baseline_file "$PROJ" w2)"
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]                # no duplicate alert
+}
+
+@test "dead workers do not count as live" {
+  worker w1 worktree; baseline w1
+  jq '.status="dead"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 0 ]
+}
+
+@test "a failed git status keeps the reported record (no re-alert)" {
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  fb="$BATS_TEST_TMPDIR/fakebin"; mkdir -p "$fb"
+  printf '#!/usr/bin/env bash\nexit 128\n' > "$fb/git"; chmod +x "$fb/git"
+  PATH="$fb:$PATH" root_dirty_tick
+  [ -s "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
   root_dirty_tick
   [ "$(events)" -eq 1 ]
 }

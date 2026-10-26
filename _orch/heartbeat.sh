@@ -429,12 +429,24 @@ master_reset_tick() { # <session:window>
 root_dirty_tick() {
   shopt -s nullglob
   local f st mode repo id real
-  local pairs="" repos="" keep=" "
+  local pairs="" repos="" keep=" " wins="" wins_read=0
   for f in "$WORKERS_DIR"/*.json; do
     IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
-    case "$st" in done|spawn-failed|queued|"") continue ;; esac
+    # dead: watchdog confirmed the window is gone, so it can write nothing.
+    case "$st" in spawn-failed|queued|dead|"") continue ;; esac
     [ "$mode" = worktree ] && [ -n "$repo" ] && [ -d "$repo" ] || continue
     [ -n "$id" ] || id="$(basename "$f" .json)"
+    # report.sh's Stop hook writes "done" (merged/blocked likewise) at the end of
+    # EVERY turn and send.sh never resets it, so a worker on a follow-up turn
+    # still reads "done". Such a worker is live iff its window still exists
+    # (one list-windows per tick, only when a turn-ended worker is present).
+    case "$st" in done|merged|blocked)
+      if [ "$wins_read" = 0 ]; then
+        wins_read=1
+        session_exists "$SESSION_NAME" && wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)"
+      fi
+      printf '%s\n' "$wins" | grep -qxF -- "$id" || continue ;;
+    esac
     real="$(_phys_dir "$repo")" || real="$repo"
     pairs+="$real"$'\t'"$id"$'\n'
   done
@@ -455,7 +467,10 @@ root_dirty_tick() {
     [ "$bl" = 1 ] || continue
     # Compare PATHS, not whole porcelain lines: an operator `git add` turns a
     # baseline " M f" into "M  f" and must not be blamed on a worker.
-    cur="$(root_porcelain "$real" | cut -c4- | grep -vxFf <(printf '%s' "$union") || true)"
+    # A failed `git status` must not overwrite the record with "nothing dirty":
+    # the next good tick would re-alert every entry already reported.
+    cur="$(root_porcelain "$real")" || continue
+    cur="$(printf '%s\n' "$cur" | cut -c4- | grep -vxFf <(printf '%s' "$union") | grep -v '^$' || true)"
     new="$cur"
     if [ -n "$cur" ] && [ -f "$rep_f" ]; then
       new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
