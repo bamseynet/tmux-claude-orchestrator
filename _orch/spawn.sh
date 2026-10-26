@@ -503,10 +503,11 @@ send_task() {
   fi
   if [ "$task_sent" -ne 1 ]; then
     wait_ready "$S:$id" 15 || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
-  fi
-  if pane_runs_shell; then
-    log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"
-    return 1
+    # claude can exit during that wait too.
+    if pane_runs_shell; then
+      log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"
+      return 1
+    fi
   fi
   if pane_has_dialog "$S:$id"; then
     log "worker $id: dialog on screen again; not sending the task"
@@ -592,7 +593,10 @@ else
       fi
       first_send=$((1 - task_sent))
       if ! send_task; then
-        : # claude exited or a dialog came back; nothing was sent -> spawn-failed below
+        # claude exited or a dialog came back; nothing was sent -> spawn-failed
+        # below -- unless the dialog that came back is a permission dialog for
+        # the already-sent task, which is positive evidence it landed (#133).
+        if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
       elif confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then

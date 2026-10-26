@@ -624,3 +624,38 @@ EOF2
   paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
   [ "$paste_calls" -eq 1 ]
 }
+
+@test "a permission dialog that renders as the last resort re-inject is about to paste still counts as landed" {
+  # The task is sent and nothing confirms through every rung; the last
+  # resort's pre-check sees no dialog, but the permission dialog for the
+  # task's first tool call renders just before send_task's own dialog check.
+  # send_task rightly refuses to paste (rc 2), but that dialog is positive
+  # evidence the already-sent task landed; it must not end in spawn-failed.
+  printf '%s\n' '✻ Welcome to Claude Code!' '│ ❯                              │' > "$PANE_FILE"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message)
+    case "\$*" in *pane_current_command*)
+      grep -q 're-injecting the full task once' "$LOGF" 2>/dev/null &&
+        printf '%s\n' '✻ Welcome to Claude Code!' ' Bash command' ' Do you want to proceed?' '❯ 1. Yes' '  2. No' > "$PANE_FILE"
+      echo claude ;;
+    esac ;;
+  capture-pane) cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w12 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w12 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  grep -Fq 'worker w12: dialog on screen again; not sending the task' "$LOGF"
+}
