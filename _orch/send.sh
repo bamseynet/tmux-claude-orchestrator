@@ -53,7 +53,17 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
   opt="${BASH_REMATCH[1]}"
   # The selector silently ignores a digit with no matching row; reporting it as
   # typed would leave the caller believing a still-blocked worker was answered.
-  if ! pane_tail "$S:$id" 25 | grep -qE "^[[:space:]│❯]*${opt}\."; then
+  # Only the cursor row's own option block counts (from the last blank row above
+  # the cursor down): numbered prose or a submitted "1. ..." prompt higher up in
+  # the tail would otherwise vouch for a digit the selector ignores.
+  if ! pane_tail "$S:$id" 25 | OPT="$opt" CUR="$TUI_ASKUSER_CHOICE_REGEX" awk '
+      { r[NR] = $0 } $0 ~ ENVIRON["CUR"] { c = NR }
+      END {
+        if (!c) exit 1
+        s = 0; for (i = 1; i < c; i++) if (r[i] !~ /[^[:space:]]/) s = i
+        for (i = s + 1; i <= NR; i++) if (r[i] ~ ("^[[:space:]│❯]*" ENVIRON["OPT"] "\\.")) exit 0
+        exit 1
+      }'; then
     say "$id's question selector shows no option $opt; not sending. Check the pane for the option numbers"
     exit 1
   fi

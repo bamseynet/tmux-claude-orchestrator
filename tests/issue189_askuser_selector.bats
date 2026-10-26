@@ -171,3 +171,17 @@ STUB
 @test "spawn ladder fallback: selector counts as post-acceptance evidence" {
   cell ask pane_has_postaccept_dialog Y
 }
+
+# Numbered prose (or a submitted "1. ..." prompt) above the selector is not one
+# of its rows: only the cursor row's own option block may vouch for a digit, or
+# the selector silently ignores it while send.sh reports it typed.
+@test "send.sh refuses an option number that only numbered prose above the selector shows" {
+  stub_tmux "$FIX"
+  sed -i '/^  Close it\. Do nothing else\./a\
+  7. step seven of the plan' "$PANE"
+  grep -q '7\. step seven' "$PANE"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 7
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"shows no option 7"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
