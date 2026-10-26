@@ -241,10 +241,10 @@ fi
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
 else
-  # Namespaced per install (issue #86): $proj/../wt/<hash-of-ORCH_ROOT>/<id> on
+  # Namespaced per install (#86) and per target repo (#149): $proj/../wt/<hash-of-ORCH_ROOT>/<hash-of-repo>/<id> on
   # branch orch/<hash>/<id>, so two orch installs targeting the same repo never
   # want the same path/branch for the same worker id.
-  wdir="$(worker_wdir "$proj" "$id")"
+  wdir="$(resolve_worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
   # Guard (issue #37): a pre-existing path at $wdir must not be silently reused
   # just because `worktree add` failed on it. Decide deterministically instead:

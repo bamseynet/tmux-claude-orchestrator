@@ -435,7 +435,7 @@ orch — tmux + Claude Code orchestrator
                                      (request/response; see ORCH_ASK_TIMEOUT
                                      and ORCH_ASK_LINES to tune the wait/output)
   ./orch clean <id> [--sweep-legacy] retire ONE worker: its tmux window, worktree
-                                     ../wt/<hash>/<id>, branch orch/<hash>/<id>
+                                     ../wt/<hash>/<repo-hash>/<id>, branch orch/<hash>/<id>
                                      (<hash> namespaces the git layer per orch
                                      install, issue #86), status file and
                                      watchdog scratch (idempotent). --sweep-legacy
