@@ -122,6 +122,7 @@ wd_vars() {
 }
 
 @test "merge: recorded origin/master -> --base master" {
+  git -C "$P" push -q origin develop:master && git -C "$P" fetch -q origin
   mkworker w1 origin/develop 1 origin/master
   PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
   grep -q 'gh pr create --base master ' "$GH_LOG"
@@ -175,7 +176,24 @@ wd_vars() {
 }
 
 @test "merge: hex-looking branch name is still a branch, not a pinned sha" {
+  git -C "$P" push -q origin develop:deadbeef && git -C "$P" fetch -q origin
   mkworker w1 origin/develop 1 origin/deadbeef
   PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
   grep -q 'gh pr create --base deadbeef ' "$GH_LOG"
+}
+
+@test "merge: recorded base branch pruned -> falls back to ORCH_BASE_BRANCH/main with a warning" {
+  mkworker w1 origin/develop 1
+  git -C "$P" update-ref -d refs/remotes/origin/develop
+  PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
+  grep -q 'gh pr create --base main ' "$GH_LOG"
+  refute_grep 'base develop' "$GH_LOG"
+  [[ "$output" == *"develop"*"no longer exists"* ]]
+}
+
+@test "merge: local-branch record (no origin/) that still exists locally is kept" {
+  mkworker w1 develop 1 develop
+  git -C "$P" update-ref -d refs/remotes/origin/develop
+  PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
+  grep -q 'gh pr create --base develop ' "$GH_LOG"
 }

@@ -37,6 +37,16 @@ proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target re
 # Default PR base: the branch spawn recorded (#176), else ORCH_BASE_BRANCH/main. --base wins.
 if [ -z "$base" ]; then
   base="$(worker_recorded_base_branch "$id")"
+  # A recorded branch since deleted/pruned upstream can't be a PR base: fall back.
+  # An origin/<b> record must still exist as origin/<b>; a local <b> record as <b>.
+  rec_ref="refs/remotes/origin/$base"
+  case "$(jq -r '.base // empty' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
+    origin/*) ;; *) rec_ref="refs/heads/$base" ;;
+  esac
+  if [ -n "$base" ] && ! git -C "$proj" rev-parse -q --verify "$rec_ref" >/dev/null 2>&1; then
+    say "merge $id: recorded base '$base' no longer exists; using ${ORCH_BASE_BRANCH:-main}" >&2
+    base=""
+  fi
   base="${base:-${ORCH_BASE_BRANCH:-main}}"
 fi
 branch="$(worker_branch "$id")"
