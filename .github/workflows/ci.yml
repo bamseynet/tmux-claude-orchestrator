@@ -128,7 +128,24 @@ jobs:
           # teardown(), the hook bats actually guarantees runs. Re-enabling
           # scale here on top of that fix.
           ORCH_TEST_TIMEOUT_SCALE: "3"
-        run: bats tests/
+        run: |
+          set -o pipefail
+          # --tap explicitly: the report step below parses TAP result lines.
+          bats --tap --timing tests/ | tee bats-timing.tap
+
+      # #191: surface the slowest tests so a suite-time regression is visible
+      # in the log instead of only as a job timeout. Warn-only (a single slow
+      # test on a noisy runner must not fail the build).
+      - name: Slowest tests (report only)
+        if: always()
+        run: |
+          [ -f bats-timing.tap ] || exit 0
+          # --timing appends " in <N>ms" to every result line.
+          grep -E '^(not )?ok [0-9]+ .* in [0-9]+ms$' bats-timing.tap \
+            | sed -E 's/^(.*) in ([0-9]+)ms$/\2\t\1/' | sort -rn > bats-timing.tsv
+          echo "Top 15 slowest tests:"
+          head -15 bats-timing.tsv | awk -F'\t' '{printf "%7.1fs  %s\n", $1/1000, $2}'
+          awk -F'\t' '$1 > 5000 {printf "::warning::slow test (%.1fs > 5s): %s\n", $1/1000, $2}' bats-timing.tsv
 
   escape-guard:
     # #162: the issue125 escape-guard property test (nested whole-suite bats
