@@ -189,8 +189,40 @@ export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 # old hash; same override precedent as SESSION_NAME above.
 : "${ORCH_HASH:=$(_orch_session_hash "${ORCH_ROOT%/}")}"
 
+# Issue #149: the path also keys on the TARGET repo (a hash of its realpath), so one
+# install driving sibling repos never maps the same worker id to one directory.
+# Layout: <repo>/../wt/<ORCH_HASH>/<repo-hash>/<id>.
 worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
-  printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"
+  local real
+  real="$(cd "$1" 2>/dev/null && pwd -P)" || real="${1%/}"
+  printf '%s/../wt/%s/%s/%s' "$1" "$ORCH_HASH" "$(_orch_session_hash "$real")" "$2"
+}
+
+# The #86 layout (<repo>/../wt/<ORCH_HASH>/<id>), before #149 keyed on the repo.
+# Kept so workers created before the upgrade still resolve.
+v86_worker_wdir() { printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"; } # <project_root> <id>
+
+# _git_common_dir <dir> -> canonical absolute git common dir, nonzero if not a git dir
+_git_common_dir() {
+  local cd_
+  cd_="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  case "$cd_" in /*) ;; *) cd_="$1/$cd_" ;; esac
+  (cd "$cd_" 2>/dev/null && pwd -P)
+}
+
+# resolve_worker_wdir <project_root> <id>: the worktree dir to use for <id>. The
+# current layout wins; a pre-#149 (#86 layout) dir is used only when it exists AND
+# is a worktree of THIS repo, so another repo's leftover is never picked up.
+resolve_worker_wdir() {
+  local proj="$1" id="$2" new old a b
+  new="$(worker_wdir "$proj" "$id")"
+  if [ ! -e "$new" ]; then
+    old="$(v86_worker_wdir "$proj" "$id")"
+    if [ -d "$old" ]; then
+      a="$(_git_common_dir "$old")" && b="$(_git_common_dir "$proj")" && [ "$a" = "$b" ] && { printf '%s' "$old"; return 0; }
+    fi
+  fi
+  printf '%s' "$new"
 }
 
 worker_branch() { # <id> -> this install's branch name for <id>
@@ -1246,6 +1278,10 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
   done < <(git -C "$expected" worktree list --porcelain 2>/dev/null; printf '\n')
 
   [ "$matched" -eq 0 ] || return 1
+  # Issue #149: the path being in OUR worktree list is not enough -- a stale
+  # registration can point at a directory another repo has since checked out.
+  local wc ec
+  wc="$(_git_common_dir "$real_wdir")" && ec="$(_git_common_dir "$expected")" && [ "$wc" = "$ec" ] || return 1
   [ -z "$(git -C "$real_wdir" status --porcelain 2>/dev/null)" ] || return 1
   return 0
 }
@@ -1259,7 +1295,7 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
 prune_dead_worktree() { # <project_root> <id>
   local proj="$1" id="$2"
   local wdir branch owned_by_other=0
-  wdir="$(worker_wdir "$proj" "$id")"
+  wdir="$(resolve_worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
   if [ -d "$wdir" ]; then
     # Never remove a path this install did not stamp itself — namespacing means

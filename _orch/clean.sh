@@ -42,7 +42,7 @@ done
 require_valid_session_name
 S="$SESSION_NAME"
 proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
-wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)
+wdir="$(resolve_worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issues #86, #149)
 branch="$(worker_branch "$id")"
 legacy_wdir="$(legacy_worker_wdir "$proj" "$id")"     # pre-#86 layout, see above
 legacy_branch="$(legacy_worker_branch "$id")"
@@ -78,6 +78,7 @@ if [ -d "$wdir" ]; then
   # This install's own namespace dir ($proj/../wt/<hash>) is otherwise never
   # cleaned up once the last worker under it is retired.
   rmdir "$(dirname "$wdir")" 2>/dev/null || true
+  rmdir "$(dirname "$(dirname "$wdir")")" 2>/dev/null || true   # <hash> dir, once its last repo dir is gone (#149)
 fi
 # Back-compat (issue #86): the pre-namespacing ../wt/<id> layout is swept ONLY
 # on explicit --sweep-legacy (see the header comment above for why this is not

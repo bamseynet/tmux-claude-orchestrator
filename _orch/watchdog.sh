@@ -126,7 +126,7 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 # (e.g. hermetic test repos with no remote at all).
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   local proj="$1" id="$2" wdir base
-  wdir="$(worker_wdir "$proj" "$id")"
+  wdir="$(resolve_worker_wdir "$proj" "$id")"
   # Back-compat (issue #86): a worker spawned before this install upgraded to
   # the namespaced layout still lives at the pre-#86 ../wt/<id> worktree.
   [ -d "$wdir" ] || wdir="$(legacy_worker_wdir "$proj" "$id")"
