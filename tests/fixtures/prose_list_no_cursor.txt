@@ -1,0 +1,7 @@
+● Options:
+  Do you want to pick one?
+  1. Yes, the first approach
+  2. No, the second approach
+╭──────────────╮
+│ ❯            │
+╰──────────────╯

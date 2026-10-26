@@ -27,7 +27,7 @@ setup() {
 
 @test "pane_has_permission_dialog detects the tool-permission dialog" {
   fake_tmux_set_pane "orch" "orchestrator" 'Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
  2. No'
   run pane_has_permission_dialog "orch:orchestrator"
   [ "$status" -eq 0 ]
@@ -60,7 +60,7 @@ setup() {
 
 @test "pane_has_dialog is true for either dialog" {
   fake_tmux_set_pane "orch" "orchestrator" 'Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
  2. No'
   run pane_has_dialog "orch:orchestrator"
   [ "$status" -eq 0 ]
@@ -84,7 +84,7 @@ esc to interrupt'
   fake_tmux_set_pane "orch" "orchestrator" '✻ Welcome to Claude Code!
 
 Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
  2. No'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -eq 0 ]
@@ -96,7 +96,7 @@ Do you want to proceed?
   # not from falling through to is_ready() by coincidence.
   fake_tmux_set_pane "orch" "orchestrator" 'Bash command
 Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
  2. No'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -eq 0 ]

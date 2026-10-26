@@ -126,7 +126,7 @@ case "\${1:-}" in
 ✻ Welcome to Claude Code!
 
 Do you want to proceed?
- 1. Yes
+ ❯ 1. Yes
  2. No
 PANE
     ;;
