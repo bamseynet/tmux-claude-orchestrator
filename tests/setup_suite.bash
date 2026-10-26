@@ -2,7 +2,7 @@
 # every file in this directory, and the exported env reaches `run bash -c`
 # children.
 #
-# ~51 test files write an inline `$STUBBIN/tmux` that `exit 0`s on subcommands
+# Dozens of test files write an inline `$STUBBIN/tmux` that `exit 0`s on subcommands
 # it does not know, so `tmux show-buffer` always "succeeds" and send_prompt's
 # paste-buffer poll (_orch/lib.sh) runs to its 50 x 0.1s cap on every stubbed
 # spawn (~5.5s each). One poll is enough for a stub: the real-tmux semantics

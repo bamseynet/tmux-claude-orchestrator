@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # #191: tests/setup_suite.bash caps send_prompt's paste-buffer poll for the
-# whole suite, because ~51 inline tmux stubs answer `show-buffer` with success
+# whole suite, because dozens of inline tmux stubs answer `show-buffer` with success
 # forever and every stubbed spawn.sh otherwise burns the 50x0.1s cap (~5.5s).
 
 # What a `run bash -c` child sees after setup_suite ran with the given caller
