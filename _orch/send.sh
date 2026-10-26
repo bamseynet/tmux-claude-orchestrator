@@ -29,14 +29,23 @@ wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
 # Issue #189: the AskUserQuestion selector ignores a pasted digit, and the
 # paste's Enter then answers with the HIGHLIGHTED option -- "orch send <id> 2"
 # picked 1. A typed digit selects (and advances) on its own, so type exactly one
-# and no Enter; a second digit would answer the next question unseen.
+# and no Enter; a second digit would answer the next question unseen. In a
+# multi-select question the digit only toggles that option. Free text is pasted
+# (with Enter) only once the cursor is on the "Type something." row, whose
+# footer adds the ctrl+g editor hint: there the paste fills the row and Enter
+# submits it (all live-checked on 2.1.310).
 if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
+  if pane_has_askuser_text_entry "$S:$id" && [[ "$msg" =~ [^[:space:]] ]]; then
+    send_prompt "$S:$id" "$msg"
+    say "sent as the free-text answer on $id"
+    exit 0
+  fi
   if ! [[ "$msg" =~ ^[[:space:]]*([1-9])[[:space:]]*$ ]]; then
-    say "$id is showing a question selector; not sending. Answer it with one option number, e.g. \`orch send $id 1\`"
+    say "$id is showing a question selector; not sending. Answer it with one option number, e.g. \`orch send $id 1\` (pick its \"Type something.\" number first to send free text)"
     exit 1
   fi
   tmux send-keys -t "$S:$id" -l "${BASH_REMATCH[1]}"
-  say "selected option ${BASH_REMATCH[1]} on $id"
+  say "typed option ${BASH_REMATCH[1]} into $id's question selector (a multi-select question only toggles it; check the pane)"
   exit 0
 fi
 if [ "$wr" -eq 2 ] && ! [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then

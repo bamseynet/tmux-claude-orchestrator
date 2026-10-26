@@ -537,6 +537,32 @@ EOF2
   grep -Fq 'worker w9: dialog on screen; not re-pasting' "$LOGF"
 }
 
+@test "an AskUserQuestion selector that renders only after the last poll counts as landed in the last resort (#189)" {
+  # Same shape as the permission-dialog case above, with the real #189
+  # selector capture: only a running turn can render it, so the last resort
+  # must count it as landed, not spawn-failed.
+  printf '%s\n' '✻ Welcome to Claude Code!' '│ ❯                              │' > "$PANE_FILE"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  SLEEPS="$BATS_TEST_TMPDIR/sleeps"
+  FIX="$BATS_TEST_DIRNAME/fixtures/askuser_selector.txt"
+  cat > "$STUBBIN/sleep" <<EOF2
+#!/usr/bin/env bash
+if grep -q 'retry 2/2' "$LOGF" 2>/dev/null; then
+  n=\$(( \$(cat "$SLEEPS" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$SLEEPS"
+  [ "\$n" -ge 15 ] && cp "$FIX" "$PANE_FILE"
+fi
+exit 0
+EOF2
+  chmod +x "$STUBBIN/sleep"
+
+  run "$SPAWN" w9 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w9 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  grep -Fq 'worker w9: dialog on screen; not re-pasting' "$LOGF"
+}
+
 @test "claude exiting during startup never gets the first send pasted into the shell" {
   # claude died before the first send (e.g. a bad --resume id); the shell
   # prompt's "❯" satisfies wait_ready. The first send must not paste the task

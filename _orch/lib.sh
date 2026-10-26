@@ -639,6 +639,8 @@ TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quic
 # Submit answers"), where Enter submits every answer -- matched too.
 TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*(Enter to select.*Esc to cancel|Ready to submit your answers\?)')"
 TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.')"
+# Cursor on the selector's "Type something." row: the footer adds an editor hint.
+TUI_ASKUSER_TEXT_REGEX="$(_tui_pattern askuser_text_entry_regex '^[[:space:]│]*Enter to select.*ctrl\+g to edit.*Esc to cancel')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
 
@@ -750,6 +752,7 @@ pane_has_postaccept_dialog() {
 # typed digit, not a paste: Claude Code ignores a pasted digit there and the
 # paste's Enter then picks the highlighted option (live-checked on 2.1.310).
 pane_has_askuser_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"; }
+pane_has_askuser_text_entry() { pane_tail "$1" 25 | grep -qE "$TUI_ASKUSER_TEXT_REGEX"; }
 
 # Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
 # send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --

@@ -104,6 +104,18 @@ STUB
   ! grep -qE 'paste-buffer|load-buffer|Enter' "$CALLS"
 }
 
+# Live-checked: typing the "Type something." number moves the cursor onto a
+# text row (footer gains "ctrl+g to edit in Vim"); paste + Enter there submits
+# the text as the answer.
+@test "send.sh pastes free text (with Enter) once the cursor is on Type something" {
+  stub_tmux "$BATS_TEST_DIRNAME/fixtures/askuser_text_entry.txt"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w "blue fish"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"free-text answer"* ]]
+  grep -q 'paste-buffer' "$CALLS"
+  grep -qx 'send-keys -t orch:w Enter' "$CALLS"
+}
+
 @test "send.sh refuses a multi-digit answer on the selector (would answer the next question)" {
   stub_tmux "$FIX"
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 12
