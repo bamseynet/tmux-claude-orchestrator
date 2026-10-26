@@ -55,7 +55,11 @@ BG='{"background_tasks":[{"type":"shell","status":"running"}],"session_crons":[]
 
 @test "C6: without --hook report.sh never reads stdin (no block)" {
   # An open pipe that never closes: a stray cat would hang until timeout kills it.
-  run timeout 10 bash -c "'$REPORT' w1 done < <(sleep 30 2>/dev/null)"
+  # The writer must not inherit bats' fd 3 (or stderr): bats waits for every
+  # holder of fd 3 to exit, so an orphaned `sleep 30` stalled the file run for
+  # ~30s while --timing reported the test itself as fast. Close fd 3 and reap
+  # the writer by its captured PID ($! of the process substitution).
+  run timeout 10 bash -c "exec 4< <(exec sleep 30 3>&- 2>/dev/null); w=\$!; '$REPORT' w1 done <&4; rc=\$?; kill \"\$w\" 2>/dev/null; exit \$rc"
   [ "$status" -eq 0 ]
   [ "$(jq -r .status "$WJ")" = "done" ]
   run timeout 10 "$REPORT" w1 dead </dev/null

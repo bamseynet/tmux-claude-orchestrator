@@ -10,4 +10,6 @@
 # unsetting the knob itself. `:-` keeps a caller-exported value.
 setup_suite() {
   export ORCH_SEND_POLL_TRIES="${ORCH_SEND_POLL_TRIES:-1}"
+  # Lets issue191_suite_poll_knob.bats prove this hook ran at all.
+  export _ORCH_TEST_SETUP_SUITE_RAN=1
 }

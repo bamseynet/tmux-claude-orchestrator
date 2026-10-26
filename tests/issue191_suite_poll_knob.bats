@@ -21,11 +21,10 @@ poll_tries_after_setup_suite() {
   [ "$output" = "7" ]
 }
 
-@test "setup_suite is actually loaded: the knob is set inside the suite" {
-  [ -n "${ORCH_SEND_POLL_TRIES-}" ]
-}
-
-@test "runtime default stays 50 (setup_suite must not touch _orch/)" {
-  run grep -n '^_ORCH_SEND_POLL_TRIES_DEFAULT=50$' "$BATS_TEST_DIRNAME/../_orch/lib.sh"
-  [ "$status" -eq 0 ]
+@test "setup_suite is actually loaded: its marker is set inside the suite" {
+  # A caller-exported ORCH_SEND_POLL_TRIES would satisfy a check on the knob
+  # itself even with setup_suite.bash gone; the marker only setup_suite sets
+  # cannot. (The runtime 50 default is pinned behaviourally by
+  # core_send_prompt.bats "defaults ORCH_SEND_POLL_TRIES to 50 when unset".)
+  [ "${_ORCH_TEST_SETUP_SUITE_RAN-}" = 1 ]
 }

@@ -130,7 +130,8 @@ jobs:
           ORCH_TEST_TIMEOUT_SCALE: "3"
         run: |
           set -o pipefail
-          bats --timing tests/ | tee bats-timing.tap
+          # --tap explicitly: the report step below parses TAP result lines.
+          bats --tap --timing tests/ | tee bats-timing.tap
 
       # #191: surface the slowest tests so a suite-time regression is visible
       # in the log instead of only as a job timeout. Warn-only (a single slow
