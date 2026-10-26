@@ -194,7 +194,7 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   ORCH_LOCK_TIMEOUT=1 run "$SPAWN" w1 sonnet "t"
   kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
   [ "$status" -eq 0 ]
-  grep -q 'git fetch origin failed' "$ROOT/_orch/state/orch.log"
+  grep -q 'fetch lock busy' "$ROOT/_orch/state/orch.log"
   # lock held => no fetch => X not yet in the project's refs
   ! git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null
 }

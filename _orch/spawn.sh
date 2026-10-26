@@ -236,17 +236,25 @@ _fetch_spawn_base() { # <proj> <id>
     local fetch_env=(GIT_TERMINAL_PROMPT=0)
     if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -z "${GIT_SSH:-}" ] \
        && ! git -C "$proj" config --get core.sshCommand >/dev/null 2>&1; then
-      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=$secs")
+      # ServerAlive* bounds a stalled ssh transfer after connect (ConnectTimeout
+      # only covers the handshake) where no timeout(1) exists.
+      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=$secs -o ServerAliveInterval=$(( (secs + 2) / 3 )) -o ServerAliveCountMax=3")
     fi
-    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
     # http.lowSpeed* bounds a stalled HTTPS transfer even where no timeout(1)
     # exists (stock macOS); GIT_TERMINAL_PROMPT only suppresses prompts.
     # Serialised: concurrent spawns (heartbeat queue drain, back-to-back
     # `orch spawn`) would otherwise race on origin's ref locks and the loser
     # would silently branch from stale refs. Lock timeout => skip, not hang.
-    if ! ( with_lock "$WORKERS_DIR/.spawn-fetch.lock" || exit 1
-           env "${fetch_env[@]}" $to git -C "$proj" -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$secs" \
-             fetch --quiet origin </dev/null >/dev/null 2>&1 ) 2>/dev/null; then
+    # 200>&-: don't leak with_lock's flock fd to git — fetch's detached auto-gc/
+    # maintenance (or an ssh ControlPersist master) would hold the lock long after.
+    local rc=0
+    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
+    ( with_lock "$WORKERS_DIR/.spawn-fetch.lock" || exit 3
+      env "${fetch_env[@]}" $to git -C "$proj" -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$secs" \
+        fetch --quiet origin </dev/null >/dev/null 2>&1 200>&- ) 2>/dev/null || rc=$?
+    if [ "$rc" -eq 3 ]; then
+      log "spawn $id: fetch lock busy (another spawn fetching); skipping git fetch origin, using last-known remote refs"
+    elif [ "$rc" -ne 0 ]; then
       log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
     fi
   fi
