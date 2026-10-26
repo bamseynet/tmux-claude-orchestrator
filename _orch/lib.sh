@@ -1428,6 +1428,15 @@ root_baseline_file() { # <project_root> <id>
   real="$(_phys_dir "$1")" || real="${1%/}"
   printf '%s/root-baseline/%s.%s' "$STATE_DIR" "$(_orch_session_hash "$real")" "$2"
 }
+# Physical checkout top level of <project_root>: nearest ancestor holding .git,
+# found in shell (no git call per tick). Porcelain paths are relative to it.
+root_toplevel() { # <project_root>
+  local rd top
+  rd="$(_phys_dir "$1")" || return 1
+  top="$rd"
+  while [ -n "$top" ] && [ ! -e "$top/.git" ]; do top="${top%/*}"; done
+  printf '%s' "${top:-$rd}"
+}
 # File-level status of <project_root> (untracked files listed individually).
 root_porcelain() { # <project_root>
   # --no-optional-locks: run every tick against the operator's live checkout, a
@@ -1443,16 +1452,15 @@ root_porcelain() { # <project_root>
   # subdirectory (--repo <repo>/pkg) still gets whole-repo status, so a state dir
   # beside it (<repo>/_orch/state) must be excluded too. Walk up in shell for the
   # top level rather than paying a second git call every tick.
-  local sd rd top ps=()
-  if sd="$(_phys_dir "$STATE_DIR")" && rd="$(_phys_dir "$1")"; then
-    top="$rd"
-    while [ -n "$top" ] && [ ! -e "$top/.git" ]; do top="${top%/*}"; done
-    [ -n "$top" ] || top="$rd"
+  local sd top ps=()
+  if sd="$(_phys_dir "$STATE_DIR")" && top="$(root_toplevel "$1")"; then
     case "$sd" in "$top"/*) ps=(-- ':/' ":(top,exclude,literal)${sd#"$top"/}") ;; esac
   fi
   # shellcheck disable=SC2086  # $to is intentionally word-split (empty or "timeout N")
   # ${ps[@]+...}: an empty "${ps[@]}" is unbound under bash 3.2 + set -u (spawn.sh).
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE $to git --no-optional-locks -C "$1" status --porcelain -uall ${ps[@]+"${ps[@]}"} 2>/dev/null
+  # GIT_LITERAL_PATHSPECS=1 in the operator's env would read ':/' as a file name
+  # and report a dirty checkout as clean.
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_LITERAL_PATHSPECS $to git --no-optional-locks -C "$1" status --porcelain -uall ${ps[@]+"${ps[@]}"} 2>/dev/null
 }
 root_baseline_write() { # <project_root> <id>
   local f; f="$(root_baseline_file "$1" "$2")"

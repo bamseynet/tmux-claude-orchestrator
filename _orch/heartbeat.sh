@@ -467,7 +467,7 @@ root_dirty_tick() {
     pairs+="$real"$'\t'"$id"$'\n'
   done
   [ -n "$pairs" ] && repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
-  local all cur new bl union bfs bk rep_f paths wl ev wids
+  local all cur new bl union bfs bk rep_f paths wl ev wids top
   [ -z "$repos" ] || mkdir -p "$STATE_DIR/root-dirty"
   while IFS= read -r real; do
     [ -n "$real" ] || continue
@@ -514,7 +514,10 @@ root_dirty_tick() {
     # build into an unignored root dir lists thousands of files under -uall.
     paths="$(printf '%s\n' "$new" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
-    ev="$(jq -nc --arg r "$real" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
+    # Porcelain paths are relative to the checkout's top level, which differs from
+    # $real for a subdirectory target: name the top so the paths resolve.
+    top="$(root_toplevel "$real")" || top="$real"
+    ev="$(jq -nc --arg r "$top" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
       '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p[:50],paths_total:($p|length),workers:$w,ts:$ts,
         note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
     printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
@@ -522,7 +525,7 @@ root_dirty_tick() {
     # Record only once the event is out: a failed event build above leaves the
     # record untouched so the next tick retries instead of silently dropping it.
     printf '%s' "$all" > "$rep_f"
-    log "root-dirty: new entries in $real while worktree workers live: $(jq -r '.paths_total|tostring' <<<"$ev") path(s): $(jq -r '.paths|join(" ")' <<<"$ev")"
+    log "root-dirty: new entries in $top while worktree workers live: $(jq -r '.paths_total|tostring' <<<"$ev") path(s): $(jq -r '.paths|join(" ")' <<<"$ev")"
   done <<<"$repos"
   # Forget reported entries of repos with no live worktree worker: a stale record
   # would silence a later worker re-dirtying the same path after it was reverted.

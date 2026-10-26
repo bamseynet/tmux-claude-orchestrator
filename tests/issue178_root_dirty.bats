@@ -349,3 +349,25 @@ inbox() { nlines "$INBOX"; }
   root_dirty_tick
   [ "$(events)" -eq 2 ]
 }
+
+@test "GIT_LITERAL_PATHSPECS in the env does not blind the in-repo-state check" {
+  STATE_DIR="$PROJ/_orch/state"; WORKERS_DIR="$STATE_DIR/workers"; INBOX="$STATE_DIR/inbox.jsonl"
+  mkdir -p "$WORKERS_DIR"; : > "$INBOX"
+  baseline w1; worker w1 worktree      # pathspec form: state dir is inside the checkout
+  echo y >> "$PROJ/f.sh"
+  GIT_LITERAL_PATHSPECS=1 root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" == *'"f.sh"'* ]]
+}
+
+@test "subdirectory target: event names the checkout top the paths are relative to" {
+  mkdir -p "$PROJ/pkg"; echo a > "$PROJ/pkg/a"
+  git -C "$PROJ" add pkg; git -C "$PROJ" commit -q -m pkg
+  worker w1 worktree "$PROJ/pkg"; baseline w1 "$PROJ/pkg"
+  echo b >> "$PROJ/pkg/a"
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  ev="$(tail -1 "$STATE_DIR/events.jsonl")"
+  [ "$(jq -r .repo <<<"$ev")" = "$(_phys_dir "$PROJ")" ]
+  [ -f "$(jq -r .repo <<<"$ev")/$(jq -r '.paths[0]' <<<"$ev")" ]
+}
