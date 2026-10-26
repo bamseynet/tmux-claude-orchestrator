@@ -23,7 +23,7 @@ fi
 
 # Issue #155: a paste's trailing Enter selects a dialog's highlighted choice (the
 # trust dialog's default exits the session). Refuse free text while a dialog is up;
-# a bare numeric answer ("orch send <id> 1") is the deliberate way to answer one.
+# a bare option number ("orch send <id> 1") answers a permission dialog or selector (typed, #192).
 # The wait ends early on a dialog, so one that renders mid-wait is caught too.
 wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
 # Issue #189: the AskUserQuestion selector ignores a pasted digit, and the
@@ -53,17 +53,7 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
   opt="${BASH_REMATCH[1]}"
   # The selector silently ignores a digit with no matching row; reporting it as
   # typed would leave the caller believing a still-blocked worker was answered.
-  # Only the cursor row's own option block counts (from the last blank row above
-  # the cursor down): numbered prose or a submitted "1. ..." prompt higher up in
-  # the tail would otherwise vouch for a digit the selector ignores.
-  if ! pane_tail "$S:$id" 25 | OPT="$opt" CUR="$TUI_ASKUSER_CHOICE_REGEX" awk '
-      { r[NR] = $0 } $0 ~ ENVIRON["CUR"] { c = NR }
-      END {
-        if (!c) exit 1
-        s = 0; for (i = 1; i < c; i++) if (r[i] !~ /[^[:space:]]/) s = i
-        for (i = s + 1; i <= NR; i++) if (r[i] ~ ("^[[:space:]│❯]*" ENVIRON["OPT"] "\\.")) exit 0
-        exit 1
-      }'; then
+  if ! pane_option_visible "$S:$id" "$opt"; then
     say "$id's question selector shows no option $opt; not sending. Check the pane for the option numbers"
     exit 1
   fi
@@ -71,18 +61,37 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
   say "typed option $opt into $id's question selector (a multi-select question only toggles it; check the pane)"
   exit 0
 fi
-# The selector check above re-captures the pane; if it failed only because the
-# pane changed in between, the numeric paste below could still land on a
-# selector (whose paste+Enter picks the highlighted option). Paste a number only
-# onto a dialog this capture still shows -- and never onto a selector, which
-# pane_has_dialog counts as a dialog too.
-if [ "$wr" -eq 2 ] && { ! pane_has_dialog "$S:$id" || pane_has_askuser_dialog "$S:$id"; }; then
-  say "$id's screen changed while sending; not sending. Check the pane and retry"
-  exit 1
-fi
-if [ "$wr" -eq 2 ] && ! [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
-  say "$id is showing a dialog (not ready); not sending. Answer it with a number, e.g. \`orch send $id 1\`"
-  exit 1
+# Issue #192: the permission and trust dialogs ignore a PASTED digit too, and the
+# paste's Enter then takes the highlighted default ("1. Yes" approved a tool call
+# meant to be refused with 4; "No, exit" killed the worker). No dialog is ever
+# answered by paste. Permission: type the digit as a keypress (no Enter) once its
+# own option block shows it. Trust: it has no digit hotkeys, and mapping N to
+# arrow presses blind is the same act-on-a-guess hazard, so refuse.
+if [ "$wr" -eq 2 ]; then
+  if pane_has_trust_dialog "$S:$id"; then
+    say "$id is showing the folder-trust dialog; not sending. It has no number keys and its default is \"No, exit\": answer it in the pane (Down, then Enter)"
+    exit 1
+  fi
+  if ! pane_has_permission_dialog "$S:$id" || pane_has_askuser_dialog "$S:$id"; then
+    say "$id's screen changed while sending; not sending. Check the pane and retry"
+    exit 1
+  fi
+  if pane_has_pending_paste "$S:$id"; then
+    say "$id has an unsent paste in its input box; not sending. Clear it (or press Enter) first"
+    exit 1
+  fi
+  if ! [[ "$msg" =~ ^[[:space:]]*([1-9])[[:space:]]*$ ]]; then
+    say "$id is showing a permission dialog; not sending. Answer it with one option number, e.g. \`orch send $id 1\`"
+    exit 1
+  fi
+  opt="${BASH_REMATCH[1]}"
+  if ! pane_option_visible "$S:$id" "$opt"; then
+    say "$id's permission dialog shows no option $opt; not sending. Check the pane for the option numbers"
+    exit 1
+  fi
+  tmux send-keys -t "$S:$id" -l "$opt"
+  say "typed option $opt into $id's permission dialog (no Enter needed; option 3 may switch the worker's permission mode)"
+  exit 0
 fi
 [ "$wr" -ne 1 ] || say "(warning: $id looks busy; sending anyway)"
 # Issue #179: an unsent paste chip is not a dialog, but our paste + Enter would

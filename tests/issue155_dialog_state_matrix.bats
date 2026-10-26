@@ -131,11 +131,14 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   no_keys_sent
 }
 
-@test "send.sh still delivers a dialog answer (orch send 1)" {
+# Issue #192: a pasted digit is ignored by the dialog and the paste's Enter takes
+# the highlighted default, so the answer is typed as a keypress instead.
+@test "send.sh answers a permission dialog (orch send 1) by typing the digit, no paste" {
   stub_tmux perm
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
   [ "$status" -eq 0 ]
-  grep -q 'paste-buffer' "$CALLS"
+  grep -qx 'send-keys -t orch:w -l 1' "$CALLS"
+  ! grep -qE 'paste-buffer|load-buffer|Enter' "$CALLS"
 }
 
 @test "ask.sh refuses to paste into a dialog" {
@@ -234,7 +237,7 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
   grep -q 'paste-buffer' "$CALLS"
 }
 
-@test "send.sh still answers a dialog (orch send 1) with a chip echoed above it" {
+@test "send.sh refuses the trust dialog (orch send 1) with a chip echoed above it" {
   # Real dialogs highlight a choice row with the glyph (see the 2.1.310 trust
   # capture), so that row, not the chip echo above it, is the last glyph row.
   # A glyph-less choice row would make send.sh refuse: fail-safe, not a submit.
@@ -244,8 +247,9 @@ $SCREEN_trust"
   fake_tmux_set_pane "orch" "w" "$SCREEN_dlgchip"; pane_has_dialog "$T"
   stub_tmux dlgchip
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
-  [ "$status" -eq 0 ]
-  grep -q 'paste-buffer' "$CALLS"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"trust dialog"* ]]
+  no_keys_sent
 }
 
 @test "send.sh refuses a numeric send when the live chip sits BELOW stale dialog text" {

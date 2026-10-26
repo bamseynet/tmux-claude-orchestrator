@@ -1,0 +1,9 @@
+ │ /tmp/claude-1000/-home-peter-repos-wt-0491482d-f5/2c6edd68-6f9b-42e4-b58b-bc8acc66e982/scratchpad/outside_probe.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to
+      /tmp/claude-1000/-home-peter-repos-wt-0491482d-f5/2c6edd68-6f9b-42e4-b58b-bc8acc66e982/scratchpad from this
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+ Esc to cancel · Tab to amend
