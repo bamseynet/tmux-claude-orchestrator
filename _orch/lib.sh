@@ -4,6 +4,7 @@
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
 #           pane_has_permission_dialog(), pane_has_trust_dialog(), pane_has_dialog() (issues #132/#133),
+#           pane_has_postaccept_dialog() (issue #189),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -509,9 +510,16 @@ strip_ansi() {
   '
 }
 
-# Last N lines of a pane, de-ANSI'd.
+# Last N non-trailing-blank lines of a pane, de-ANSI'd. capture-pane -p emits
+# every row of the pane, so in a fresh session (TUI drawn from the top of a tall
+# pane) a plain tail is mostly the blank rows below the content, cutting off the
+# rows the detectors need -- e.g. the AskUserQuestion selector's cursor row sits
+# ~10 rows above its footer, so a 40-row pane showing the real #189 capture was
+# missed outright (issue #189 review).
 pane_tail() { # <target> [lines]
-  tmux capture-pane -t "$1" -p 2>/dev/null | tail -n "${2:-15}" | strip_ansi
+  tmux capture-pane -t "$1" -p 2>/dev/null \
+    | awk '{ r[NR] = $0 } /[^[:space:]]/ { n = NR } END { for (i = 1; i <= n; i++) print r[i] }' \
+    | tail -n "${2:-15}" | strip_ansi
 }
 
 # --- Claude Code launch env (issues #140, #144) ---------------------------------------
@@ -626,8 +634,10 @@ TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quic
 # option, so injecting into it answers a question the operator never saw. Real
 # capture (Claude Code 2.1.310): footer "Enter to select · ↑/↓ to navigate · Esc
 # to cancel" and a cursor row "❯ 1. <option>"; both are required, so a numbered
-# list in model prose never matches on its own.
-TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*Enter to select.*Esc to cancel')"
+# list in model prose never matches on its own. A multi-question selector ends
+# on a footerless review screen ("Ready to submit your answers?" over "❯ 1.
+# Submit answers"), where Enter submits every answer -- matched too.
+TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*(Enter to select.*Esc to cancel|Ready to submit your answers\?)')"
 TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
@@ -728,6 +738,19 @@ pane_has_permission_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_PERMISSIO
 # bare Enter (issues #132/#133).
 pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX"; }
 
+# A dialog that can only render after a prompt was accepted (permission or
+# AskUserQuestion)? (0 = visible). spawn.sh counts it as a landed task.
+pane_has_postaccept_dialog() {
+  local p; p="$(pane_tail "$1" 25)"
+  _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
+}
+
+# AskUserQuestion selector visible? (0 = visible). send.sh answers it with a
+# typed digit, not a paste: Claude Code ignores a pasted digit there and the
+# paste's Enter then picks the highlighted option (live-checked on 2.1.310).
+pane_has_askuser_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"; }
+
 # Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
 # send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --
 # while EITHER dialog is up: Enter is consumed as "select the highlighted
@@ -771,11 +794,10 @@ inject_confirmed() { # <target>  -> 0 if the injection looks accepted
   # #128 banner veto below would wrongly report a healthy worker blocked on a
   # dialog as "not confirmed", triggering a bogus retry/re-inject into the
   # dialog itself.
-  pane_has_permission_dialog "$1" && return 0
   # The AskUserQuestion selector (issue #189) is the same kind of evidence: only
   # a running turn can render it. Without this, is_ready refusing it would mark
   # a healthy worker that asks a question right away spawn-failed.
-  _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX" && return 0
+  pane_has_postaccept_dialog "$1" && return 0
   # Checked BEFORE pane_active/is_ready (issue #133): the trust dialog's
   # highlighted-choice arrow ("❯ No, exit") matches TUI_READY_REGEX's bare "❯",
   # so without an explicit veto here is_ready() would misread the dialog as a

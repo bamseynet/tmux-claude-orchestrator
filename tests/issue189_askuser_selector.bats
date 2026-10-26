@@ -24,6 +24,9 @@ setup() {
   SCREEN_ask="$(cat "$FIX")"
   SCREEN_ask2="$(sed -e 's/^❯ 1\./  1./' -e 's/^  2\. Merge now/❯ 2. Merge now/' "$FIX")"
   SCREEN_askmulti="$(sed 's/^ ☐ PR 165/ ☐ PR 165  ☐ Scope  ✔ Submit/' "$FIX")"
+  # Real capture, same session: the footerless review screen a multi-question
+  # selector ends on; Enter there submits every answer.
+  SCREEN_review="$(cat "$BATS_TEST_DIRNAME/fixtures/askuser_review.txt")"
   SCREEN_prose='● Options:
 1. Keep looping
 2. Merge now
@@ -49,6 +52,8 @@ cell() { # <screen> <detector> <Y|n>
 @test "pane_has_dialog: real AskUserQuestion selector Y"   { cell ask       pane_has_dialog Y; }
 @test "pane_has_dialog: cursor on option 2 Y"              { cell ask2      pane_has_dialog Y; }
 @test "pane_has_dialog: multi-question header Y"           { cell askmulti  pane_has_dialog Y; }
+@test "pane_has_dialog: multi-question review screen Y"    { cell review    pane_has_dialog Y; }
+@test "is_ready refuses the review screen"                 { cell review    is_ready n; }
 @test "pane_has_dialog: numbered prose above idle box n"   { cell prose     pane_has_dialog n; }
 @test "pane_has_dialog: idle prompt n"                     { cell idle      pane_has_dialog n; }
 @test "is_ready refuses the selector"                      { cell ask       is_ready n; }
@@ -84,5 +89,38 @@ STUB
   stub_tmux "$FIX"
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
   [ "$status" -ne 0 ]
+  [[ "$output" == *"showing a question selector"* ]]
   ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
+
+# Live-checked on 2.1.310: a PASTED digit is ignored by the selector and the
+# paste's Enter answers with the highlighted option (send 2 -> got option 1); a
+# TYPED digit selects on its own. So: one literal key, no paste, no Enter.
+@test "send.sh answers the selector by typing the digit, without paste or Enter" {
+  stub_tmux "$FIX"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 2
+  [ "$status" -eq 0 ]
+  grep -qx 'send-keys -t orch:w -l 2' "$CALLS"
+  ! grep -qE 'paste-buffer|load-buffer|Enter' "$CALLS"
+}
+
+@test "send.sh refuses a multi-digit answer on the selector (would answer the next question)" {
+  stub_tmux "$FIX"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 12
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"one option number"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
+
+# Real tmux emits every pane row: in a fresh, taller-than-content pane the rows
+# below the selector are blank, and a plain `tail -n 25` dropped the cursor row.
+@test "pane_has_dialog: selector at the top of a 40-row pane (trailing blank rows) Y" {
+  stub_tmux "$FIX"
+  for _ in $(seq 16); do echo; done >> "$PANE"
+  unset -f tmux
+  pane_has_dialog "$T"
+}
+
+@test "spawn ladder fallback: selector counts as post-acceptance evidence" {
+  cell ask pane_has_postaccept_dialog Y
 }
