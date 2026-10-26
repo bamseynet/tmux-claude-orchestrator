@@ -183,3 +183,39 @@ hook_cmd() { # <settings-file>
   [ "$status" -eq 2 ]
   grep -q "$TARGET/\\*\"" "$ORCH_ROOT/_orch/state/events.jsonl"
 }
+
+@test "hook resolves a symlink before .. (no bypass via <link-into-target>/..)" {
+  run spawn w1 sonnet "task"
+  [ "$status" -eq 0 ]
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  mkdir -p "$TARGET/sub" "$BATS_TEST_TMPDIR/elsewhere/in"
+  ln -s "$TARGET/sub" "$BATS_TEST_TMPDIR/lnk"
+  # physically $TARGET/f.txt; lexically $BATS_TEST_TMPDIR/f.txt
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$BATS_TEST_TMPDIR/lnk/../f.txt")"
+  [ "$status" -eq 2 ]
+  # and the reverse: lexically in the target, physically elsewhere -> allowed
+  ln -s "$BATS_TEST_TMPDIR/elsewhere/in" "$TARGET/out"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$TARGET/out/../x.txt")"
+  [ "$status" -eq 0 ]
+}
+
+@test "a denied write is also queued to the inbox for the master" {
+  run spawn w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$TARGET/f.txt")"
+  [ "$status" -eq 2 ]
+  grep -q '"id":"w1","event":"write-outside-worktree"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
+}
+
+@test "hook denies a write through a worktree file symlinked into the target" {
+  run spawn w1 sonnet "task"
+  wdir="$(jq -r .wdir "$WORKERS/w1.json")"
+  s="$wdir/.claude/settings.local.json"
+  ln -s "$TARGET/f.txt" "$wdir/link.txt"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/link.txt")"
+  [ "$status" -eq 2 ]
+  # a relative link hop resolves against the link's own directory
+  ln -s ../../../../target/f.txt "$wdir/rel.txt"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/rel.txt")"
+  [ "$status" -eq 2 ]
+}
