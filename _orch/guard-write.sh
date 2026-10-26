@@ -6,7 +6,8 @@
 # worker would be editing the shared checkout (the live toolkit when target ==
 # ORCH_ROOT). Paths elsewhere (scratchpad, /tmp) are allowed. Fails open on an
 # unparseable payload so it can never wedge a worker. Bash-made writes bypass
-# this hook; that is the heartbeat backstop's job.
+# this hook; catching them needs a heartbeat dirtiness check (#152 direction 2),
+# which is not implemented yet.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$here/lib.sh"
