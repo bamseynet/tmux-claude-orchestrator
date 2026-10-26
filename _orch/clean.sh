@@ -82,12 +82,7 @@ fi
 if [ -d "$wdir" ]; then
   git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
   log "clean $id: removed worktree $wdir"
-  # This install's own namespace dirs ($proj/../wt/<hash>/<repo-hash> and
-  # $proj/../wt/<hash>) are otherwise never cleaned up once the last worker under
-  # them is retired. Name <hash> explicitly: for a pre-#149 wdir, dirname(dirname)
-  # would be the shared ../wt itself.
-  rmdir "$(dirname "$wdir")" 2>/dev/null || true
-  rmdir "$proj/../wt/$ORCH_HASH" 2>/dev/null || true
+  rmdir_worker_ns "$proj" "$wdir"   # drop emptied namespace dirs (#149)
 fi
 # Back-compat (issue #86): the pre-namespacing ../wt/<id> layout is swept ONLY
 # on explicit --sweep-legacy (see the header comment above for why this is not

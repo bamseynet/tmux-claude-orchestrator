@@ -189,12 +189,16 @@ export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 # old hash; same override precedent as SESSION_NAME above.
 : "${ORCH_HASH:=$(_orch_session_hash "${ORCH_ROOT%/}")}"
 
+# _phys_dir <dir> -> physical (symlink-free) absolute path, nonzero if not a dir.
+# `cd -P`, not a logical cd: "<symlink>/../x" must climb the symlink's TARGET.
+_phys_dir() { (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
+
 # Issue #149: the path also keys on the TARGET repo (a hash of its realpath), so one
 # install driving sibling repos never maps the same worker id to one directory.
 # Layout: <repo>/../wt/<ORCH_HASH>/<repo-hash>/<id>.
 worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
   local real
-  real="$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P)" || real="${1%/}"
+  real="$(_phys_dir "$1")" || real="${1%/}"
   printf '%s/../wt/%s/%s/%s' "$1" "$ORCH_HASH" "$(_orch_session_hash "$real")" "$2"
 }
 
@@ -212,13 +216,26 @@ _git_common_dir() {
   local d
   d="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" rev-parse --git-common-dir 2>/dev/null)" && [ -n "$d" ] || return 1
   case "$d" in /*) ;; *) d="$1/$d" ;; esac
-  (CDPATH='' cd -- "$d" 2>/dev/null && pwd -P)
+  _phys_dir "$d"
 }
 
-# same_repo <dir_a> <dir_b> -> 0 iff both are checkouts sharing one git common dir
+# same_repo <checkout> <dir> -> 0 iff <checkout> is a checkout ROOT (has .git) sharing
+# <dir>'s git common dir. The .git test matters: a plain leftover dir under an
+# enclosing repo (e.g. ../wt inside a monorepo) would otherwise resolve to that
+# repo's common dir and count as "ours".
 same_repo() {
+  [ -e "$1/.git" ] || return 1
   local a b
   a="$(_git_common_dir "$1")" && b="$(_git_common_dir "$2")" && [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
+# rmdir_worker_ns <project_root> <wdir>: after removing <wdir>, drop this install's
+# now-empty namespace dirs (<repo-hash> since #149, and <ORCH_HASH>), which nothing
+# else ever cleans up. Name <ORCH_HASH> explicitly: for a pre-#149 wdir,
+# dirname(dirname) would be the shared ../wt itself.
+rmdir_worker_ns() {
+  rmdir "$(dirname "$2")" 2>/dev/null || true
+  rmdir "$1/../wt/$ORCH_HASH" 2>/dev/null || true
 }
 
 # resolve_worker_wdir <project_root> <id>: the worktree dir to use for <id>. The
@@ -251,7 +268,7 @@ foreign_checkout() {
     # <common>/worktrees itself may be gone too (git drops it once empty), so
     # canonicalize <common> -- which always exists -- and check the segment by name.
     if [ -n "$gd" ] && [ "$(basename "$(dirname "$gd")")" = worktrees ] \
-       && [ "$(CDPATH='' cd -- "$(dirname "$(dirname "$gd")")" 2>/dev/null && pwd -P)" = "$common" ]; then
+       && [ "$(_phys_dir "$(dirname "$(dirname "$gd")")")" = "$common" ]; then
       return 1
     fi
   fi
@@ -1346,9 +1363,7 @@ prune_dead_worktree() { # <project_root> <id>
     else
       git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
       log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
-      # Same empty namespace-dir cleanup as clean.sh (#149 adds a <repo-hash> level).
-      rmdir "$(dirname "$wdir")" 2>/dev/null || true
-      rmdir "$proj/../wt/$ORCH_HASH" 2>/dev/null || true
+      rmdir_worker_ns "$proj" "$wdir"
     fi
   fi
   git -C "$proj" worktree prune >/dev/null 2>&1 || true

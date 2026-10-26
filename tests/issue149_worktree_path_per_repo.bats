@@ -285,3 +285,17 @@ STUB
   [ ! -e "$(dirname "$wdir")" ]
   [ ! -e "$(dirname "$(dirname "$wdir")")" ]
 }
+
+@test "same_repo: a plain non-checkout dir inside the repo is not a checkout of it" {
+  mkdir -p "$A/plain"
+  run libcall same_repo "$A/plain" "$A"
+  [ "$status" -ne 0 ]
+  libcall same_repo "$A" "$A"
+}
+
+@test "_git_common_dir climbs a symlink's TARGET, not the link's logical parent" {
+  mkdir -p "$A/sub"
+  mkrepo "$R/l"                       # a repo sitting at the symlink's logical parent
+  ln -s "$A/sub" "$R/l/s"             # git prints ../.git for a subdir checkout
+  [ "$(libcall _git_common_dir "$R/l/s")" = "$(common_dir "$A")" ]
+}
