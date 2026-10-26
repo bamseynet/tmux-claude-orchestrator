@@ -43,7 +43,7 @@ cmd_level() { # stdin: one label per line
 }
 
 cmd_bump() { # [repo-dir]
-  local dir="${1:-.}" base sha labels="" cur level new out
+  local dir="${1:-.}" base sha shas labels="" cur level new out
   cd "$dir"
   base="$(git log -1 --format=%H -- VERSION)"
   [ -n "$base" ] || die "no commit touches VERSION"
@@ -53,6 +53,9 @@ cmd_bump() { # [repo-dir]
   if [ -z "$(git diff --name-only "$base" HEAD -- "${RUNTIME_PATHS[@]}")" ]; then
     return 0
   fi
+  # Capture first: a failing rev-list inside process substitution would be
+  # swallowed and silently yield "no labels" (patch).
+  shas="$(git rev-list "$base..HEAD" -- "${RUNTIME_PATHS[@]}")" || die "git rev-list failed"
   while IFS= read -r sha; do
     [ -n "$sha" ] || continue
     # A failed lookup must not silently downgrade a release:major/minor to patch.
@@ -60,7 +63,7 @@ cmd_bump() { # [repo-dir]
       --jq '.[] | select(.merged_at != null) | .labels[].name')" || die "label lookup failed for $sha"
     labels="$labels$out
 "
-  done < <(git rev-list "$base..HEAD" -- "${RUNTIME_PATHS[@]}")
+  done <<<"$shas"
   level="$(printf '%s' "$labels" | cmd_level)"
   new="$(cmd_next "$level" "$cur")"
   printf '%s\n' "$new" >VERSION
