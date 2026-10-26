@@ -279,3 +279,18 @@ hook_cmd() { # <settings-file>
   [ "$status" -eq 0 ]
   [ $((SECONDS - start)) -lt 20 ]
 }
+
+@test "hook expands a leading ~ in file_path to \$HOME" {
+  run spawn w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  run env HOME="$R" bash -c "$(hook_cmd "$s")" <<<"$(payload Write "~/target/f.txt")"
+  [ "$status" -eq 2 ]
+}
+
+@test "spawn guards the target's top level even with GIT_WORK_TREE exported" {
+  mkdir -p "$TARGET/pkg"; echo y > "$TARGET/pkg/g.txt"
+  git -C "$TARGET" add pkg; git -C "$TARGET" commit -q -m pkg
+  run env GIT_WORK_TREE="$ORCH_ROOT" PROJECT_ROOT="$TARGET/pkg" ORCH_ALLOW_UNRELATED_REPO=1 "$ORCH_DIR_SRC/spawn.sh" w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  [[ "$(hook_cmd "$s")" == *"$TARGET "* ]]
+}

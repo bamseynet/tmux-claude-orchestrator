@@ -66,6 +66,13 @@ canon() {
 under() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
 
 proj="$(canon "$proj")"; wdir="$(canon "$wdir")"
+# Claude Code expands a leading "~" in file_path (expandPath) before writing, so
+# "~/<repo>/x" must be read against $HOME, not as a relative "<wdir>/~/..." path.
+# shellcheck disable=SC2088  # matching a literal "~", not expanding one
+case "$path" in
+  "~") path="$HOME" ;;
+  "~/"*) path="$HOME/${path#"~/"}" ;;
+esac
 case "$path" in /*) ;; *) path="$wdir/$path" ;; esac
 # Two readings of the same string: the kernel's (symlinks before "..", canon) and a
 # writer that normalises the string first (path.resolve), whose ".." pops a symlink

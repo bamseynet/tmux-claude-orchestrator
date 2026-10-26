@@ -437,8 +437,11 @@ guard_cmd=""
 # Guard the checkout's top level, not just $proj: a target that resolved to a
 # subdirectory (cwd fallback, --repo <repo>/pkg) still gets a whole-repo worktree.
 if [ "$mode" != "--no-worktree" ]; then
-  guard_root="$(git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" || guard_root="$proj"
-  guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "${guard_root:-$proj}" "$wdir")"
+  # GIT_DIR & co stripped as in _git_common_dir (lib.sh): exported (git hooks,
+  # rebase --exec) they override -C and name some other checkout's top level.
+  guard_root="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" \
+    && [ -n "$guard_root" ] || guard_root="$proj"
+  guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "$guard_root" "$wdir")"
 fi
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" '
   {
