@@ -107,3 +107,32 @@ mkbranch() { # <id> <file-content>
   run jq 'has("error")' <<< "$output"
   [ "$output" = "false" ]
 }
+
+# Issue #153: spawn now branches workers from origin/<base> and records it in
+# the status file; collect must diff against that, not a stale local main.
+@test "collect.sh defaults to the base recorded by spawn, excluding upstream commits" {
+  echo upstream > "$PROJECT_ROOT/u.txt"
+  git -C "$PROJECT_ROOT" add u.txt; git -C "$PROJECT_ROOT" commit -q -m upstream
+  git -C "$PROJECT_ROOT" update-ref refs/remotes/origin/main HEAD
+  git -C "$PROJECT_ROOT" reset -q --hard HEAD~1   # local main is now stale
+  branch="$(worker_branch_for w4)"; wdir="$(worker_wdir_for w4)"
+  git -C "$PROJECT_ROOT" worktree add -q -b "$branch" "$wdir" origin/main >/dev/null
+  echo mine >> "$wdir/f.txt"; git -C "$wdir" commit -q -am mine
+  mkworker w4 '{"id":"w4","status":"done","base":"origin/main"}'
+
+  run "$COLLECT" w4
+  [ "$status" -eq 0 ]
+  json="$output"
+  run jq -r '.base' <<< "$json"; [ "$output" = "origin/main" ]
+  run jq -r '.diff' <<< "$json"
+  [[ "$output" == *"+mine"* ]]
+  [[ "$output" != *"u.txt"* ]]
+}
+
+@test "collect.sh falls back to main when the recorded base no longer resolves" {
+  mkworker w5 '{"id":"w5","status":"done","base":"origin/gone"}'
+  mkbranch w5 "change"
+  run "$COLLECT" w5
+  [ "$status" -eq 0 ]
+  run jq -r '.base' <<< "$output"; [ "$output" = "main" ]
+}

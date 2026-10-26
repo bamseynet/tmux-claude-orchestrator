@@ -54,8 +54,9 @@ _push_other() { # <branch> <file>
 _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir "$PROJECT_ROOT" '"$1"; }
 
 @test "stale local main: worker contains commit pushed to origin/main" {
+  # No pre-fetch: spawn's own fetch must bring X in.
   X="$(_push_other main x.txt)"
-  git -C "$PROJECT_ROOT" fetch -q origin
+  ! git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null
   run "$SPAWN" w1 sonnet "t"
   [ "$status" -eq 0 ]
   git -C "$(_wdir w1)" merge-base --is-ancestor "$X" HEAD
@@ -74,11 +75,16 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
 }
 
 @test "fetch failure: spawn still succeeds from last-known origin/main and logs it" {
+  # Make last-known origin/main differ from local main/HEAD so a HEAD fallback
+  # can't pass this test by accident.
+  _push_other main x.txt >/dev/null
+  git -C "$PROJECT_ROOT" fetch -q origin
+  [ "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" != "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" ]
   git -C "$PROJECT_ROOT" remote set-url origin "$BATS_TEST_TMPDIR/nonexistent.git"
   run "$SPAWN" w1 sonnet "t"
   [ "$status" -eq 0 ]
   [ -d "$(_wdir w1)" ]
-  grep -qi 'fetch' "$ROOT/_orch/state/orch.log"
+  grep -q 'git fetch origin failed' "$ROOT/_orch/state/orch.log"
   [ "$(git -C "$(_wdir w1)" rev-parse HEAD)" = "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" ]
 }
 
@@ -88,6 +94,15 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   run "$SPAWN" w1 sonnet "t"
   [ "$status" -eq 0 ]
   [ "$(git -C "$(_wdir w1)" rev-parse HEAD)" = "$H" ]
+  [ "$(jq -r .base "$ROOT/_orch/state/workers/w1.json")" = "main" ]
+  [ "$(jq -r .base_sha "$ROOT/_orch/state/workers/w1.json")" = "$H" ]
+}
+
+@test "worker branch does not track the remote base branch" {
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  br="$(git -C "$(_wdir w1)" rev-parse --abbrev-ref HEAD)"
+  [ -z "$(git -C "$PROJECT_ROOT" config --get "branch.$br.merge" || true)" ]
 }
 
 @test "ORCH_BASE_BRANCH=develop: based on origin/develop" {

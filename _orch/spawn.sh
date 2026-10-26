@@ -235,6 +235,36 @@ if ! check_spawn_gate; then
   exit 0
 fi
 
+# Issue #153: pick the commit a new worker worktree branches from — the remote
+# base (origin/${ORCH_BASE_BRANCH:-main}), not the target checkout's HEAD.
+# Sets globals base_ref/base_sha (base_ref stays empty if nothing resolves).
+_resolve_spawn_base() { # <proj> <id>
+  local proj="$1" id="$2" want="${ORCH_BASE_BRANCH:-main}" cand local_sha to=""
+  base_ref=""; base_sha=""
+  if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
+    # Bounded and non-interactive: a hung/credential-prompting remote must not
+    # stall spawn indefinitely.
+    command -v timeout >/dev/null 2>&1 && to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
+    if ! GIT_TERMINAL_PROMPT=0 $to git -C "$proj" fetch --quiet origin </dev/null >/dev/null 2>&1; then
+      log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
+    fi
+  fi
+  for cand in "origin/$want" origin/HEAD "$want" HEAD; do
+    if git -C "$proj" rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1; then
+      base_ref="$cand"; break
+    fi
+  done
+  [ -n "$base_ref" ] || return 0
+  base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
+  if [ "$base_ref" != "origin/$want" ]; then
+    log "spawn $id: origin/$want not found in $proj; basing worker on $base_ref"
+  elif local_sha="$(git -C "$proj" rev-parse -q --verify "refs/heads/$want" 2>/dev/null)" \
+       && [ "$local_sha" != "$base_sha" ]; then
+    log "spawn $id: local $want ($local_sha) differs from $base_ref ($base_sha); basing worker on $base_ref"
+  fi
+}
+
 # 1) working directory: isolated worktree (default) or the project root
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
@@ -273,25 +303,8 @@ else
       say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! { base_ref=""; base_sha=""
-           # Issue #153: branch from the remote base, not the target checkout's HEAD.
-           want="${ORCH_BASE_BRANCH:-main}"
-           if git -C "$proj" remote get-url origin >/dev/null 2>&1 \
-              && ! git -C "$proj" fetch --quiet origin >/dev/null 2>&1; then
-             log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
-           fi
-           for cand in "origin/$want" origin/HEAD "$want" HEAD; do
-             if git -C "$proj" rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1; then
-               base_ref="$cand"; break
-             fi
-           done
-           base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
-           if [ "${base_ref#origin/}" != "$base_ref" ] \
-              && local_main="$(git -C "$proj" rev-parse -q --verify "refs/heads/$want" 2>/dev/null)" \
-              && [ "$local_main" != "$base_sha" ]; then
-             log "spawn $id: local $want ($local_main) differs from $base_ref ($base_sha); basing worker on $base_ref"
-           fi
-           git -C "$proj" worktree add -B "$branch" "$wdir" "$base_ref" >/dev/null 2>&1; }; then
+  elif ! { _resolve_spawn_base "$proj" "$id"
+           git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_ref:+"$base_ref"} >/dev/null 2>&1; }; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
