@@ -183,3 +183,18 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   [ "$status" -eq 0 ]
   [ "$(jq -r .base "$ROOT/_orch/state/workers/w1.json")" = "origin/main" ]
 }
+
+@test "concurrent spawn fetches are serialised: a held fetch lock skips the fetch, never hangs" {
+  command -v flock >/dev/null || skip "flock(1) not available"
+  X="$(_push_other main x.txt)"
+  lock="$ROOT/_orch/state/workers/.spawn-fetch.lock"
+  mkdir -p "$(dirname "$lock")"
+  flock "$lock" sleep 20 & holder=$!
+  sleep 0.5
+  ORCH_LOCK_TIMEOUT=1 run "$SPAWN" w1 sonnet "t"
+  kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  grep -q 'git fetch origin failed' "$ROOT/_orch/state/orch.log"
+  # lock held => no fetch => X not yet in the project's refs
+  ! git -C "$PROJECT_ROOT" cat-file -e "$X^{commit}" 2>/dev/null
+}

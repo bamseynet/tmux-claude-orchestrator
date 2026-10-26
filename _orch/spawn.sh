@@ -221,12 +221,14 @@ fi
 # ORCH_SPAWN_FETCH_TIMEOUT s) network call does not sit between the gate's
 # live-worker count and this worker's status write, widening the max_workers race.
 _fetch_spawn_base() { # <proj> <id>
-  local proj="$1" id="$2" to=""
+  local proj="$1" id="$2" to="" secs="${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+  # A non-numeric value would make `timeout` exit 125 and every fetch "fail".
+  case "$secs" in ''|*[!0-9]*) secs=30 ;; esac
   if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
     # Bounded and non-interactive: a hung/credential-prompting remote must not
     # stall spawn indefinitely.
-    if command -v timeout >/dev/null 2>&1; then to="timeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
-    elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+    if command -v timeout >/dev/null 2>&1; then to="timeout $secs"
+    elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout $secs"
     fi
     # GIT_TERMINAL_PROMPT only covers HTTPS; ssh can still prompt on /dev/tty
     # (and there is no `timeout` on stock macOS), so force BatchMode unless the
@@ -234,10 +236,17 @@ _fetch_spawn_base() { # <proj> <id>
     local fetch_env=(GIT_TERMINAL_PROMPT=0)
     if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -z "${GIT_SSH:-}" ] \
        && ! git -C "$proj" config --get core.sshCommand >/dev/null 2>&1; then
-      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=${ORCH_SPAWN_FETCH_TIMEOUT:-30}")
+      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=$secs")
     fi
     # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
-    if ! env "${fetch_env[@]}" $to git -C "$proj" fetch --quiet origin </dev/null >/dev/null 2>&1; then
+    # http.lowSpeed* bounds a stalled HTTPS transfer even where no timeout(1)
+    # exists (stock macOS); GIT_TERMINAL_PROMPT only suppresses prompts.
+    # Serialised: concurrent spawns (heartbeat queue drain, back-to-back
+    # `orch spawn`) would otherwise race on origin's ref locks and the loser
+    # would silently branch from stale refs. Lock timeout => skip, not hang.
+    if ! ( with_lock "$WORKERS_DIR/.spawn-fetch.lock" || exit 1
+           env "${fetch_env[@]}" $to git -C "$proj" -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$secs" \
+             fetch --quiet origin </dev/null >/dev/null 2>&1 ) 2>/dev/null; then
       log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
     fi
   fi
@@ -283,6 +292,8 @@ _resolve_spawn_base() { # <proj> <id>
     base_ref="$(git -C "$proj" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/HEAD)"
   fi
   base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
+  # HEAD moves with the target checkout; pin the HEAD fallback to its sha.
+  [ "$base_ref" != HEAD ] || base_ref="$base_sha"
   if [ "$base_ref" != "origin/$want" ]; then
     log "spawn $id: origin/$want not found in $proj; basing worker on $base_ref"
   elif local_sha="$(git -C "$proj" rev-parse -q --verify "refs/heads/$want" 2>/dev/null)" \
@@ -422,7 +433,7 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
   --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
   '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}
-   + (if $base_sha == "" then {} else {base:(if $base == "HEAD" then $base_sha else $base end), base_sha:$base_sha} end)'
+   + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
