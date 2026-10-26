@@ -69,8 +69,8 @@ jobs:
               exit 0
             fi
             echo "Push rejected (attempt $attempt); rebasing onto main and recomputing."
-            git reset --hard HEAD~1
-            git pull --rebase origin main
+            git fetch origin main || exit 1
+            git reset --hard origin/main
           done
           echo "Failed to push the bump after 5 attempts." >&2
           exit 1

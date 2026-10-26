@@ -14,6 +14,7 @@ setup() {
   # listed in $LABELS_DIR/<sha> (one per line), if that file exists.
   cat > "$STUBBIN/gh" <<EOS
 #!/usr/bin/env bash
+[ -f "$BATS_TEST_TMPDIR/gh_fail" ] && { echo "HTTP 403" >&2; exit 1; }
 sha="\${2##*/commits/}"; sha="\${sha%%/*}"
 [ -f "$BATS_TEST_TMPDIR/labels/\$sha" ] && cat "$BATS_TEST_TMPDIR/labels/\$sha"
 exit 0
@@ -96,6 +97,20 @@ commit() { # <file> [label]
   run "$BUMP" bump "$R"
   [ "$output" = 1.3.0 ]
   [ "$(cat "$R/VERSION")" = 1.3.0 ]
+}
+
+@test "bump: failed label lookup fails loud, VERSION untouched" {
+  mkrepo; commit _orch/a.sh release:major
+  touch "$BATS_TEST_TMPDIR/gh_fail"
+  run "$BUMP" bump "$R"
+  [ "$status" -eq 1 ]
+  [ "$(cat "$R/VERSION")" = 1.2.3 ]
+}
+
+@test "bump: release label on a non-runtime commit is ignored" {
+  mkrepo; commit README.md release:major; commit _orch/a.sh
+  run "$BUMP" bump "$R"
+  [ "$output" = 1.2.4 ]
 }
 
 @test "bump: docs/tests/.github-only range -> no bump" {

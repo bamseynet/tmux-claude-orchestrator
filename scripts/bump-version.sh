@@ -10,7 +10,7 @@
 # `bump` takes base = the last commit that touched VERSION (a bump commit or a
 # hand-written release, so a manual value is never re-bumped), then looks at
 # base..HEAD: no runtime-path change -> prints nothing; otherwise the level is
-# the highest `release:*` PR label among those commits (default patch).
+# the highest `release:*` PR label among the runtime-touching commits (default patch).
 set -euo pipefail
 
 # Paths that ship in an install (keep in sync with on.push.paths in the workflow).
@@ -43,7 +43,7 @@ cmd_level() { # stdin: one label per line
 }
 
 cmd_bump() { # [repo-dir]
-  local dir="${1:-.}" base sha labels="" cur level new
+  local dir="${1:-.}" base sha labels="" cur level new out
   cd "$dir"
   base="$(git log -1 --format=%H -- VERSION)"
   [ -n "$base" ] || die "no commit touches VERSION"
@@ -55,10 +55,12 @@ cmd_bump() { # [repo-dir]
   fi
   while IFS= read -r sha; do
     [ -n "$sha" ] || continue
-    labels="$labels$(gh api "repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY unset}/commits/$sha/pulls" \
-      --jq '.[].labels[].name' 2>/dev/null || true)
+    # A failed lookup must not silently downgrade a release:major/minor to patch.
+    out="$(gh api "repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY unset}/commits/$sha/pulls" \
+      --jq '.[].labels[].name')" || die "label lookup failed for $sha"
+    labels="$labels$out
 "
-  done < <(git rev-list "$base..HEAD")
+  done < <(git rev-list "$base..HEAD" -- "${RUNTIME_PATHS[@]}")
   level="$(printf '%s' "$labels" | cmd_level)"
   new="$(cmd_next "$level" "$cur")"
   printf '%s\n' "$new" >VERSION
