@@ -235,16 +235,32 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
 }
 
 @test "send.sh still answers a dialog (orch send 1) with a chip echoed above it" {
-  # Dialog choice row without the glyph (the real perm render is unverified):
-  # the chip echo is then the last glyph row, but the answer goes to the dialog.
-  SCREEN_dlgchip='❯ [Pasted text #1 +5 lines]
- Bash command
-   rm -rf build
- Do you want to proceed?
- 1. Yes
-  2. No'
+  # Real dialogs highlight a choice row with the glyph (see the 2.1.310 trust
+  # capture), so that row, not the chip echo above it, is the last glyph row.
+  # A glyph-less choice row would make send.sh refuse: fail-safe, not a submit.
+  SCREEN_dlgchip="❯ [Pasted text #1 +5 lines]
+$SCREEN_trust"
   stub_tmux dlgchip
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
   [ "$status" -eq 0 ]
   grep -q 'paste-buffer' "$CALLS"
+}
+
+@test "send.sh refuses a numeric send when the live chip sits BELOW stale dialog text" {
+  # Dialog-shaped text in the transcript makes wait_ready_or_dialog return 2,
+  # but the real input box (with the stuck chip) is drawn below it: a real
+  # dialog hides the input box, so Enter here would submit the chip + "1".
+  SCREEN_stalechip=' Do you want to proceed?
+ 1. Yes
+  2. No
+● done
+╭──────────────╮
+│ ❯ [Pasted text #1 +5 lines] │
+╰──────────────╯
+  ? for shortcuts'
+  stub_tmux stalechip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
 }
