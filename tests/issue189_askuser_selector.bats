@@ -185,3 +185,27 @@ STUB
   [[ "$output" == *"shows no option 7"* ]]
   ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
 }
+
+# The reverse race: the selector branch's capture misses the selector (a
+# permission dialog is up), then the selector renders before the generic
+# numeric path's re-check. pane_has_dialog alone counts the selector as a
+# dialog, so the number would be pasted + Entered into it.
+@test "send.sh: selector appears after the selector branch -> refuses, no paste" {
+  stub_tmux "$FIX"
+  printf '%s\n' 'Do you want to proceed?' '❯ 1. Yes' '  2. No' > "$BATS_TEST_TMPDIR/perm"
+  sed -i "s|capture-pane) cat \"$PANE\" ;;|capture-pane) n=\$(( \$(cat $BATS_TEST_TMPDIR/n 2>/dev/null \|\| echo 0) + 1 )); echo \$n > $BATS_TEST_TMPDIR/n; if [ \$n -eq 2 ]; then cat $BATS_TEST_TMPDIR/perm; else cat \"$PANE\"; fi ;;|" "$STUBBIN/tmux"
+  grep -q 'perm' "$STUBBIN/tmux"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 2
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"screen changed"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
+
+@test "pane_has_postaccept_dialog: a trust dialog sharing the selector footer is not evidence" {
+  fake_tmux_set_pane "orch" "w" 'Do you trust the files in this folder?
+❯ 1. Yes, I trust this folder
+  2. No, exit
+Enter to select · ↑/↓ to navigate · Esc to cancel'
+  ! pane_has_postaccept_dialog "$T"
+  ! inject_confirmed "$T"
+}

@@ -744,6 +744,10 @@ pane_has_trust_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_TRUST_DIALOG_R
 # AskUserQuestion)? (0 = visible). spawn.sh counts it as a landed task.
 pane_has_postaccept_dialog() {
   local p; p="$(pane_tail "$1" 25)"
+  # The pre-acceptance trust dialog is never evidence, even if a future copy of
+  # it shares the selector's footer: inject_confirmed checks this BEFORE its
+  # trust veto, so a match there would report a parked worker as landed.
+  _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" && return 1
   _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
     _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
 }

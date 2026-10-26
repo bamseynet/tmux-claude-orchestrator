@@ -74,8 +74,9 @@ fi
 # The selector check above re-captures the pane; if it failed only because the
 # pane changed in between, the numeric paste below could still land on a
 # selector (whose paste+Enter picks the highlighted option). Paste a number only
-# onto a dialog this capture still shows.
-if [ "$wr" -eq 2 ] && ! pane_has_dialog "$S:$id"; then
+# onto a dialog this capture still shows -- and never onto a selector, which
+# pane_has_dialog counts as a dialog too.
+if [ "$wr" -eq 2 ] && { ! pane_has_dialog "$S:$id" || pane_has_askuser_dialog "$S:$id"; }; then
   say "$id's screen changed while sending; not sending. Check the pane and retry"
   exit 1
 fi
