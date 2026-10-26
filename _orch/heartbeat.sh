@@ -431,7 +431,7 @@ master_reset_tick() { # <session:window>
 root_dirty_tick() {
   shopt -s nullglob
   local f st mode repo id real
-  local pairs="" repos="" keep=" " wins="" wins_read=0 gc=1 bf
+  local pairs="" repos="" keep=" " wins="" wins_read=0 gc=1 bf rk
   for f in "$WORKERS_DIR"/*.json; do
     IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
     # dead: watchdog confirmed the window is gone, so it can write nothing.
@@ -454,8 +454,15 @@ root_dirty_tick() {
     printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
     # A live worker's repo that is momentarily unreachable (unmounted network FS)
     # is skipped, but its record must survive the GC below or every path already
-    # reported re-alerts once the repo is back.
-    [ -d "$repo" ] || { gc=0; continue; }
+    # reported re-alerts once the repo is back. Keep just that repo's record (keyed
+    # on its realpath, unresolvable now: try the recorded path); only when it can't
+    # be identified keep every record, since a stale record of an unrelated repo
+    # would silence a later worker re-dirtying a path reported there before.
+    if [ ! -d "$repo" ]; then
+      rk="$(_orch_session_hash "${repo%/}")"
+      if [ -e "$STATE_DIR/root-dirty/$rk" ]; then keep+="$rk "; else gc=0; fi
+      continue
+    fi
     real="$(_phys_dir "$repo")" || real="$repo"
     pairs+="$real"$'\t'"$id"$'\n'
   done
@@ -497,15 +504,11 @@ root_dirty_tick() {
       fi
       union+="$(printf '%s\n' "$bk" | cut -c4- | grep -v '^$' || true)"$'\n'
     done <<<"$bfs"
-    union="$(printf '%s' "$union" | grep -v '^$' || true)"
-    # Never hand grep an empty pattern (an empty union / record): BSD grep can
-    # treat an empty pattern as matching every line, even under -x.
-    cur="$all"
-    [ -z "$union" ] || cur="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s\n' "$union") || true)"
-    new="$cur"
-    if [ -n "$cur" ] && [ -s "$rep_f" ]; then
-      new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
-    fi
+    # One filter: baselines + the already-reported record. Never hand grep an empty
+    # pattern (BSD grep can treat it as matching every line, even under -x).
+    union="$( { printf '%s\n' "$union"; [ ! -f "$rep_f" ] || cat "$rep_f"; } | grep -v '^$' || true)"
+    new="$all"
+    [ -z "$union" ] || [ -z "$all" ] || new="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s\n' "$union") || true)"
     [ -n "$new" ] || { printf '%s' "$all" > "$rep_f"; continue; }
     # Capped: the event is pasted into the master's pane, and one `npm install` or
     # build into an unignored root dir lists thousands of files under -uall.

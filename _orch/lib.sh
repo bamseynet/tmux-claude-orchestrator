@@ -1439,9 +1439,16 @@ root_porcelain() { # <project_root>
   elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"; fi
   # The toolkit's own state dir inside the checkout (a vendored copy whose repo does
   # not ignore _orch/state/) changes on every spawn and tick: never report it.
-  local sd rd ps=()
+  # Relative to the checkout's top level, not <project_root>: a target that is a
+  # subdirectory (--repo <repo>/pkg) still gets whole-repo status, so a state dir
+  # beside it (<repo>/_orch/state) must be excluded too. Walk up in shell for the
+  # top level rather than paying a second git call every tick.
+  local sd rd top ps=()
   if sd="$(_phys_dir "$STATE_DIR")" && rd="$(_phys_dir "$1")"; then
-    case "$sd" in "$rd"/*) ps=(-- ':/' ":(exclude,literal)${sd#"$rd"/}") ;; esac
+    top="$rd"
+    while [ -n "$top" ] && [ ! -e "$top/.git" ]; do top="${top%/*}"; done
+    [ -n "$top" ] || top="$rd"
+    case "$sd" in "$top"/*) ps=(-- ':/' ":(top,exclude,literal)${sd#"$top"/}") ;; esac
   fi
   # shellcheck disable=SC2086  # $to is intentionally word-split (empty or "timeout N")
   # ${ps[@]+...}: an empty "${ps[@]}" is unbound under bash 3.2 + set -u (spawn.sh).

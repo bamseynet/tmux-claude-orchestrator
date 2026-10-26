@@ -22,7 +22,7 @@ setup() {
   echo dirty >> "$PROJ/_orch/config.json"   # operator's own uncommitted edit
   # Hermetic tmux: session $SESSION_NAME exists; its windows are $STUB_WINS.
   tb="$BATS_TEST_TMPDIR/tmuxbin"; mkdir -p "$tb"
-  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) [ -n \"$STUB_NOSESS\" ] || echo \"$SESSION_NAME\";; list-windows) [ -z \"$STUB_NOSESS\" ] || exit 1; printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) [ -n \"$STUB_NOSESS\" ] || echo \"$SESSION_NAME\";; list-windows) [ -z \"$STUB_NOSESS$STUB_LWFAIL\" ] || exit 1; printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
   chmod +x "$tb/tmux"; PATH="$tb:$PATH"; export STUB_WINS=""
 }
 
@@ -305,4 +305,47 @@ inbox() { nlines "$INBOX"; }
   root_dirty_tick
   [ "$(events)" -eq 1 ]
   [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *_orch/state* ]]
+}
+
+@test "a listed session whose window listing fails skips the tick and keeps the record" {
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  STUB_LWFAIL=1 root_dirty_tick        # session exists; only list-windows fails
+  [ -s "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+}
+
+@test "toolkit state beside a subdirectory target is excluded too" {
+  mkdir -p "$PROJ/pkg"; echo a > "$PROJ/pkg/a"
+  git -C "$PROJ" add pkg; git -C "$PROJ" commit -q -m pkg
+  STATE_DIR="$PROJ/_orch/state"; WORKERS_DIR="$STATE_DIR/workers"; INBOX="$STATE_DIR/inbox.jsonl"
+  mkdir -p "$WORKERS_DIR"; : > "$INBOX"
+  baseline w1 "$PROJ/pkg"; worker w1 worktree "$PROJ/pkg"
+  root_dirty_tick; root_dirty_tick
+  [ "$(events)" -eq 0 ]
+  echo y >> "$PROJ/f.sh"               # positive control
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *_orch/state* ]]
+}
+
+@test "an unreachable repo does not keep another repo's stale record alive" {
+  other="$R/other"; git init -q -b main "$other"
+  git -C "$other" -c user.email=t@e -c user.name=t commit -q --allow-empty -m i
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  worker wo worktree "$other"; baseline wo "$other"
+  root_dirty_tick                       # other repo gets its own record
+  STUB_WINS=" wo"                       # w1 leaves; operator reverts
+  git -C "$PROJ" checkout -q f.sh
+  mv "$other" "$other.away"             # the other live worker's repo is unreachable
+  root_dirty_tick
+  mv "$other.away" "$other"
+  worker w2 worktree; baseline w2
+  echo y >> "$PROJ/f.sh"                # w2 re-dirties the path w1 was reported for
+  root_dirty_tick
+  [ "$(events)" -eq 2 ]
 }
