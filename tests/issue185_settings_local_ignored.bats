@@ -117,4 +117,11 @@ _first_spawn() {
   run "$SPAWN" w1 sonnet t
   [ "$status" -eq 0 ]
   [ "$(cat "$(_wdir)/.claude/.gitignore")" = mine ]
+  # The tracked file does not cover settings.local.json: spawn must say so.
+  grep -q "settings.local.json is not git-ignored" "$ROOT/_orch/state/orch.log"
+}
+
+@test "no not-ignored warning when spawn's own .gitignore applies" {
+  _first_spawn
+  ! grep -q "is not git-ignored" "$ROOT/_orch/state/orch.log"
 }
