@@ -50,8 +50,15 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
     say "$id is showing a question selector; not sending. Answer it with one option number, e.g. \`orch send $id 1\` (pick its \"Type something.\" number first to send free text)"
     exit 1
   fi
-  tmux send-keys -t "$S:$id" -l "${BASH_REMATCH[1]}"
-  say "typed option ${BASH_REMATCH[1]} into $id's question selector (a multi-select question only toggles it; check the pane)"
+  opt="${BASH_REMATCH[1]}"
+  # The selector silently ignores a digit with no matching row; reporting it as
+  # typed would leave the caller believing a still-blocked worker was answered.
+  if ! pane_tail "$S:$id" 25 | grep -qE "^[[:space:]│❯]*${opt}\."; then
+    say "$id's question selector shows no option $opt; not sending. Check the pane for the option numbers"
+    exit 1
+  fi
+  tmux send-keys -t "$S:$id" -l "$opt"
+  say "typed option $opt into $id's question selector (a multi-select question only toggles it; check the pane)"
   exit 0
 fi
 # The selector check above re-captures the pane; if it failed only because the

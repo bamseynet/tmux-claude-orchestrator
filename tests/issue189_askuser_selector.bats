@@ -143,6 +143,14 @@ STUB
   ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
 }
 
+@test "send.sh refuses an option number the selector does not show" {
+  stub_tmux "$FIX"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 7
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"shows no option 7"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
+
 @test "send.sh refuses a multi-digit answer on the selector (would answer the next question)" {
   stub_tmux "$FIX"
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 12
