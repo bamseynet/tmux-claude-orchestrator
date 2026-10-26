@@ -39,7 +39,7 @@ background_wait="$(jq -r '.watchdog.background_wait_seconds // 1800' "$cfg")"
 # below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
 realert_max="$(jq -r '.watchdog.realert_max_seconds // 1800' "$cfg")"
-rl_regex="$(jq -r '.watchdog.rate_limit_regex // "rate limit|429|overloaded|too many requests|usage limit"' "$cfg")"
+rl_regex="$(jq -r '.watchdog.rate_limit_regex // "^[[:space:]]*(⎿[[:space:]]*|●[[:space:]]*)?(API Error[^a-z]*(429|529|rate limit|overloaded)|(Claude (AI )?)?usage limit reached|[0-9]+-hour limit reached|Weekly limit reached|Request rejected .429.)"' "$cfg")"
 # reap_after: how long a terminal (done/spawn-failed) worker's state file survives
 # before the sweep reaps it (issue #46). Retention, not instant delete, so
 # `orch status` still shows recent history instead of vanishing the moment a
@@ -92,8 +92,10 @@ live_windows() { # -> prints newline-separated window names; returns 1 if $S is 
 }
 
 # Pure predicate (no tmux, no fs): does this pane text show a rate-limit error?
-# Broadened beyond "rate limit"/429/overloaded to also catch phrasing like
-# "usage limit reached" that providers use instead of a literal "rate limit".
+# Issue #182: rl_regex is line-anchored on Claude Code's error/limit renderings
+# (optional leading glyph), so prose, diffs, PR numbers and log lines that merely
+# contain "rate limit"/"429" do not count. Nothing here may match the nudge below.
+WATCHDOG_RL_NUDGE="The API briefly throttled you; that was transient, not a bug in your work. Check whether your last action actually completed before retrying it, and do NOT use a workaround."
 rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
   printf '%s\n' "$1" | grep -qiE "$rl_regex"
 }
@@ -315,7 +317,7 @@ sweep_window() { # <window> <cooldown_seconds>
           # command" would run that command a second time.
           log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
-          send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
+          send_prompt "$S:$w" "$WATCHDOG_RL_NUDGE"
           log "rate limit cleared on '$w'; sent retry nudge"
         fi
         ;;

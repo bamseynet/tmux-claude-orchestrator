@@ -22,7 +22,7 @@ setup() {
   # Stub out pane_tail so sweep_window (when it doesn't short-circuit) sees a
   # rate-limited pane without needing a real tmux session.
   # shellcheck disable=SC2317  # invoked indirectly via sweep_window, not called directly here
-  pane_tail() { printf '%s' "429 too many requests"; }
+  pane_tail() { printf '%s' "API Error: 429 too many requests"; }
 }
 
 rl_file() { echo "$STATE_DIR/.rl-$1"; }
