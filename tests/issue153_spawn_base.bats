@@ -164,3 +164,14 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   [ "$(jq -r .status "$ROOT/_orch/state/workers/w1.json")" = queued ]
   [ "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" = "$X" ]
 }
+
+@test "reused clean worktree still records base and base_sha" {
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  rm -f "$ROOT/_orch/state/workers/w1.json"
+  run "$SPAWN" w1 sonnet "t"
+  [ "$status" -eq 0 ]
+  f="$ROOT/_orch/state/workers/w1.json"
+  [ "$(jq -r .base "$f")" = "origin/main" ]
+  [ "$(jq -r .base_sha "$f")" = "$(git -C "$PROJECT_ROOT" rev-parse origin/main)" ]
+}

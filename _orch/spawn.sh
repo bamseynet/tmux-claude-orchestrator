@@ -232,7 +232,7 @@ _fetch_spawn_base() { # <proj> <id>
     local fetch_env=(GIT_TERMINAL_PROMPT=0)
     if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -z "${GIT_SSH:-}" ] \
        && ! git -C "$proj" config --get core.sshCommand >/dev/null 2>&1; then
-      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=${ORCH_SPAWN_FETCH_TIMEOUT:-30}")
     fi
     # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
     if ! env "${fetch_env[@]}" $to git -C "$proj" fetch --quiet origin </dev/null >/dev/null 2>&1; then
@@ -313,6 +313,12 @@ else
     elif worktree_matches_expected "$proj" "$wdir" "$branch"; then
       log "worktree add: $wdir already a clean worktree of $proj on $branch; reusing"
       stamp_worktree_owner "$wdir" || true
+      # Still record base/base_sha (#153) so collect does not fall back to a
+      # stale local main for a reused worktree; base_sha is the fork point.
+      _resolve_spawn_base "$proj" "$id"
+      if [ -n "$base_ref" ]; then
+        base_sha="$(git -C "$proj" merge-base "$base_ref" "refs/heads/$branch" 2>/dev/null || true)"
+      fi
     else
       log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on $branch"
       update_worker_status "$id" '.status="spawn-failed"'

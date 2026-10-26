@@ -136,3 +136,12 @@ mkbranch() { # <id> <file-content>
   [ "$status" -eq 0 ]
   run jq -r '.base' <<< "$output"; [ "$output" = "main" ]
 }
+
+@test "collect.sh falls back to recorded base_sha when the recorded base ref is gone" {
+  mkbranch w6 "change"
+  sha="$(git -C "$PROJECT_ROOT" rev-parse main)"
+  mkworker w6 "{\"id\":\"w6\",\"status\":\"done\",\"base\":\"origin/gone\",\"base_sha\":\"$sha\"}"
+  run "$COLLECT" w6
+  [ "$status" -eq 0 ]
+  run jq -r '.base' <<< "$output"; [ "$output" = "$sha" ]
+}
