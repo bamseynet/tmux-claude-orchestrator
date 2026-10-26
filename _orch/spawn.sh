@@ -428,7 +428,22 @@ notif_matcher="permission_prompt|elicitation_dialog|elicitation_url_dialog|agent
 #
 # issue #144: awaySummaryEnabled is the documented settings key that suppresses
 # the session recap row, belt-and-braces alongside ORCH_GHOST_ENV (lib.sh).
-jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" '
+#
+# issue #152: worktree-mode workers also get a PreToolUse guard that denies
+# Edit/Write/MultiEdit/NotebookEdit on a path in the target repo's main checkout
+# but outside $wdir. Not installed for --no-worktree (wdir IS the root there).
+# worker-settings.template.json mirrors this (checked by tests/issue152_write_guard.bats).
+guard_cmd=""
+# Guard the checkout's top level, not just $proj: a target that resolved to a
+# subdirectory (cwd fallback, --repo <repo>/pkg) still gets a whole-repo worktree.
+if [ "$mode" != "--no-worktree" ]; then
+  # GIT_DIR & co stripped as in _git_common_dir (lib.sh): exported (git hooks,
+  # rebase --exec) they override -C and name some other checkout's top level.
+  guard_root="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$proj" rev-parse --show-toplevel 2>/dev/null)" \
+    && [ -n "$guard_root" ] || guard_root="$proj"
+  guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "$guard_root" "$wdir")"
+fi
+jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" '
   {
     awaySummaryEnabled: false,
     hooks: {
@@ -437,6 +452,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
       SubagentStop: [{hooks:[{type:"command", command:"\($r) \($id) subagent-done"}]}]
     }
   }
+  * (if $g == "" then {}
+     else {hooks: {PreToolUse: [{matcher:"Edit|Write|MultiEdit|NotebookEdit", hooks:[{type:"command", command:$g}]}]}}
+     end)
   + (if $allow == "" then {}
      else {permissions: {allow: ($allow | split(",") | map(gsub("^\\s+|\\s+$"; ""))
        | map(select(length > 0))
@@ -451,7 +469,8 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" --arg r "$proj" \
   --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
-  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u, target_repo:$r}
+  --arg wdir "$wdir" --arg wmode "$([ "$mode" = "--no-worktree" ] && echo no-worktree || echo worktree)" \
+  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u, target_repo:$r, wdir:$wdir, mode:$wmode}
    + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session
