@@ -248,3 +248,40 @@ mk_v86() { # <repo> <id>: a worker created at the current (pre-#149) layout
   rel="$(cd "$R" && CDPATH="$R" bash -c 'source "$1"; worker_wdir a lift' _ "$LIB")"
   [ "$(basename "$(dirname "$abs")")" = "$(basename "$(dirname "$rel")")" ]
 }
+
+@test "same_repo/foreign_checkout stay correct on git < 2.31 (no --path-format)" {
+  # Emulate old git: it echoes the unknown --path-format flag back and prints a
+  # relative ".git" for a main checkout, so two top-level repos would look "same".
+  real_git="$(command -v git)"
+  OLDGIT="$BATS_TEST_TMPDIR/oldgit"; mkdir -p "$OLDGIT"
+  cat > "$OLDGIT/git" <<STUB
+#!/usr/bin/env bash
+args=()
+for a in "\$@"; do
+  case "\$a" in --path-format=*) printf '%s\n' "\$a" ;; *) args+=("\$a") ;; esac
+done
+exec "$real_git" "\${args[@]}"
+STUB
+  chmod +x "$OLDGIT/git"
+  wdir="$(libcall worker_wdir "$A" lift)"
+  mkdir -p "$(dirname "$wdir")"
+  git -C "$A" worktree add -q -B "$(libcall worker_branch lift)" "$wdir"
+  run env PATH="$OLDGIT:$PATH" bash -c 'source "$1"; same_repo "$2" "$3"' _ "$LIB" "$B" "$A"
+  [ "$status" -ne 0 ]
+  run env PATH="$OLDGIT:$PATH" bash -c 'source "$1"; foreign_checkout "$2" "$3"' _ "$LIB" "$B" "$A"
+  [ "$status" -eq 0 ]
+  run env PATH="$OLDGIT:$PATH" bash -c 'source "$1"; same_repo "$2" "$3"' _ "$LIB" "$wdir" "$A"
+  [ "$status" -eq 0 ]
+}
+
+@test "prune_dead_worktree removes the emptied <repo-hash> and <ORCH_HASH> namespace dirs" {
+  wdir="$(libcall worker_wdir "$A" lift)"
+  mkdir -p "$(dirname "$wdir")"
+  git -C "$A" worktree add -q -B "$(libcall worker_branch lift)" "$wdir"
+  export PROJECT_ROOT="$A"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/watchdog.sh"
+  prune_dead_worktree "$A" lift
+  [ ! -e "$(dirname "$wdir")" ]
+  [ ! -e "$(dirname "$(dirname "$wdir")")" ]
+}

@@ -202,11 +202,18 @@ worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
 # Kept so workers created before the upgrade still resolve.
 v86_worker_wdir() { printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"; } # <project_root> <id>
 
-# _git_common_dir <dir> -> canonical absolute git common dir, nonzero if not a git dir
-# (same --path-format=absolute form ensure_related_repo uses; it resolves symlinks)
+# _git_common_dir <dir> -> canonical (pwd -P) absolute git common dir, nonzero if
+# not a git dir. Canonicalized here rather than via --path-format=absolute: git
+# < 2.31 echoes that unknown flag back and prints a RELATIVE ".git" for any main
+# checkout, which would make every two top-level repos compare "same".
 # Strip GIT_DIR & co: if exported (git hooks, rebase --exec) they override -C and
 # every directory would report the same common dir.
-_git_common_dir() { env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
+_git_common_dir() {
+  local d
+  d="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" rev-parse --git-common-dir 2>/dev/null)" && [ -n "$d" ] || return 1
+  case "$d" in /*) ;; *) d="$1/$d" ;; esac
+  (CDPATH='' cd -- "$d" 2>/dev/null && pwd -P)
+}
 
 # same_repo <dir_a> <dir_b> -> 0 iff both are checkouts sharing one git common dir
 same_repo() {
@@ -235,15 +242,16 @@ resolve_worker_wdir() {
 # is ours (an orphan to tear down), not foreign.
 foreign_checkout() {
   [ -e "$1/.git" ] || return 1
-  same_repo "$1" "$2" && return 1
-  local gd common
-  if [ -f "$1/.git" ] && common="$(_git_common_dir "$2")"; then
+  local gd common theirs
+  common="$(_git_common_dir "$2")" || return 0
+  theirs="$(_git_common_dir "$1")" && [ "$theirs" = "$common" ] && return 1
+  if [ -f "$1/.git" ]; then
     gd="$(sed -n 's/^gitdir: //p' "$1/.git" 2>/dev/null)"
     case "$gd" in /*) ;; ?*) gd="$1/$gd" ;; esac
     # <common>/worktrees itself may be gone too (git drops it once empty), so
     # canonicalize <common> -- which always exists -- and check the segment by name.
     if [ -n "$gd" ] && [ "$(basename "$(dirname "$gd")")" = worktrees ] \
-       && [ "$(cd "$(dirname "$(dirname "$gd")")" 2>/dev/null && pwd -P)" = "$common" ]; then
+       && [ "$(CDPATH='' cd -- "$(dirname "$(dirname "$gd")")" 2>/dev/null && pwd -P)" = "$common" ]; then
       return 1
     fi
   fi
@@ -1338,6 +1346,9 @@ prune_dead_worktree() { # <project_root> <id>
     else
       git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
       log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+      # Same empty namespace-dir cleanup as clean.sh (#149 adds a <repo-hash> level).
+      rmdir "$(dirname "$wdir")" 2>/dev/null || true
+      rmdir "$proj/../wt/$ORCH_HASH" 2>/dev/null || true
     fi
   fi
   git -C "$proj" worktree prune >/dev/null 2>&1 || true
