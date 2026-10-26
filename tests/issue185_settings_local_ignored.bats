@@ -125,3 +125,13 @@ _first_spawn() {
   _first_spawn
   ! grep -q "is not git-ignored" "$ROOT/_orch/state/orch.log"
 }
+
+@test "a tracked .claude/settings.local.json is reported as not ignored" {
+  mkdir -p "$PROJECT_ROOT/.claude"
+  echo '{}' > "$PROJECT_ROOT/.claude/settings.local.json"
+  git -C "$PROJECT_ROOT" add -f .claude/settings.local.json
+  git -C "$PROJECT_ROOT" commit -q -m sl
+  run "$SPAWN" w1 sonnet t
+  [ "$status" -eq 0 ]
+  grep -q "settings.local.json is not git-ignored" "$ROOT/_orch/state/orch.log"
+}
