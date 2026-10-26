@@ -219,3 +219,23 @@ hook_cmd() { # <settings-file>
   run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/rel.txt")"
   [ "$status" -eq 2 ]
 }
+
+@test "hook re-resolves a symlink reached only after lexical .. in a missing tail" {
+  run spawn w1 sonnet "task"
+  wdir="$(jq -r .wdir "$WORKERS/w1.json")"
+  s="$wdir/.claude/settings.local.json"
+  ln -s "$TARGET/f.txt" "$wdir/link.txt"
+  # "nosuch" does not exist, so the kernel cannot see the link through it; the
+  # writer normalises lexically to $wdir/link.txt and writes through into $TARGET
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/nosuch/../link.txt")"
+  [ "$status" -eq 2 ]
+}
+
+@test "hook follows a dangling directory symlink in the path" {
+  run spawn w1 sonnet "task"
+  wdir="$(jq -r .wdir "$WORKERS/w1.json")"
+  s="$wdir/.claude/settings.local.json"
+  ln -s "$TARGET/newdir" "$wdir/dl"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/dl/x.txt")"
+  [ "$status" -eq 2 ]
+}

@@ -38,21 +38,30 @@ norm() {
 # worktree. Comparing lexically would let a symlinked repo path bypass the guard,
 # so resolve the longest existing ancestor with cd -P and re-append the rest.
 # That ancestor is resolved BEFORE lexical normalisation: "<symlink>/../x" must
-# climb the symlink's target (see _phys_dir), so only the non-existent tail -- which
-# holds no symlinks -- is normalised lexically.
-# A symlinked final component (cd -P only resolves dirs) is followed with plain
-# readlink, hop by hop, so "<wdir>/link -> <proj>/f" cannot write through.
+# climb the symlink's target (see _phys_dir), so only the non-existent tail is
+# normalised lexically.
+# The walk also stops at a symlink that is not a directory (a link to a file, or a
+# dangling link -- cd -P cannot resolve either): it is followed with readlink and
+# the result re-canonicalised, so "<wdir>/link -> <proj>/f" and
+# "<wdir>/dangling -> <proj>/newdir" cannot write through.
+# A tail holding ".." ("<wdir>/missing/../link") normalises to a path the kernel
+# could not see through; it is re-canonicalised so a link it now names is followed.
+# Hops are capped at 40 (a link loop then falls back to lexical form).
 canon() {
-  local p="$1" d rest="" t n=0
-  while [ -L "$p" ] && [ "$n" -lt 40 ] && t="$(readlink -- "$p")"; do
-    case "$t" in /*) p="$t" ;; *) p="${p%/*}/$t" ;; esac; n=$((n + 1))
-  done
-  d="$p"
-  while [ "$d" != / ] && [ ! -d "$d" ]; do
+  local p="$1" n="${2:-0}" d="$1" rest="" t
+  [ "$n" -lt 40 ] || { norm "$p"; return 0; }
+  while [ "$d" != / ] && [ ! -d "$d" ] && [ ! -L "$d" ]; do
     rest="/${d##*/}$rest"; d="${d%/*}"; [ -n "$d" ] || d=/
   done
+  if [ ! -d "$d" ] && t="$(readlink -- "$d")"; then
+    case "$t" in /*) ;; *) t="${d%/*}/$t" ;; esac
+    canon "$t$rest" $((n + 1)); return 0
+  fi
   d="$(_phys_dir "$d")" || { norm "$p"; return 0; }
-  norm "$d$rest"
+  case "$rest" in
+    */../*|*/..) canon "$(norm "$d$rest")" $((n + 1)) ;;
+    *) norm "$d$rest" ;;
+  esac
 }
 under() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
 
