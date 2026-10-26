@@ -120,7 +120,7 @@ fi
 rm -f "$WORKERS_DIR/$id.json"
 rm -f "$STATE_DIR/.wd-$id"
 # the rate-limit cooldown marker too: a reused id would otherwise inherit a
-# past-due one and get a stale retry nudge on its first sweep (#155 re-arms it).
+# past-due one and get a stale retry nudge on its first sweep.
 rm -f "$STATE_DIR/.rl-$id"
 rm -f "$STATE_DIR/settings/$id.json"
 
