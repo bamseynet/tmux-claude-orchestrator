@@ -172,12 +172,49 @@ drain_in() { # <project_root>: source heartbeat and drain once under that PROJEC
   [ -d "$DRAIN_WDIR" ]
 }
 
-@test "queue drain without an override record still refuses unrelated repos" {
+queue_record() { # <id> <target> <allow_unrelated>: a post-#148 --after-w1 queue record
+  jq -nc --arg id "$1" --arg t "$2" --arg u "$3" \
+    '{id:$id, model:"sonnet", task:"task", mode:"", resume:"", allow_csv:"", ts:"2000-01-01T00:00:00Z", reason:"dep", after:"w1", target_repo:$t, allow_unrelated:$u}' \
+    >> "$ORCH_ROOT/_orch/state/queue.jsonl"
+  jq -n --arg id "$1" --arg t "$2" '{id:$id,status:"queued",target_repo:$t}' > "$WORKERS/$1.json"
+}
+
+@test "queue drain does not leak the heartbeat's own unrelated-repo override into a record without one" {
   echo '{"id":"w1","status":"done"}' > "$WORKERS/w1.json"
-  run env PROJECT_ROOT="$TARGET" "$ORCH_DIR_SRC/spawn.sh" w2 sonnet "task" --after w1
-  # the original spawn is itself refused by guard 0 (unrelated), nothing queued
-  [ "$status" -ne 0 ]
+  queue_record w2 "$TARGET" ""
+  # the heartbeat itself runs with the override (e.g. inherited from `orch up`)
+  export ORCH_ALLOW_UNRELATED_REPO=1 PROJECT_ROOT="$OTHER"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/heartbeat.sh"
+  drain_queue_if_room
+  wait
+  # the drain really ran: the record left the queue
   [ ! -s "$ORCH_ROOT/_orch/state/queue.jsonl" ]
+  # ...but the spawn was refused by guard 0: nothing created in the queued repo
+  [ ! -e "$(libcall worker_wdir "$TARGET" w2)" ]
+  ! git -C "$TARGET" show-ref --verify --quiet "refs/heads/$(libcall worker_branch w2)"
+}
+
+@test "queue drain of a record whose target repo vanished marks it spawn-failed, not queued forever" {
+  echo '{"id":"w1","status":"done"}' > "$WORKERS/w1.json"
+  queue_record w2 "$R/gone" "1"
+  export PROJECT_ROOT="$OTHER"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/heartbeat.sh"
+  drain_queue_if_room
+  wait
+  [ ! -s "$ORCH_ROOT/_orch/state/queue.jsonl" ]
+  [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
+  [ "$(git -C "$OTHER" worktree list | wc -l)" -eq 1 ]
+}
+
+@test "orch --repo <other> prune does not claim to reap a worker clean.sh refused" {
+  mkworker "$TARGET" lift
+  run env ORCH_ALLOW_UNRELATED_REPO=1 "$ORCH" --repo "$OTHER" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not reaped lift"* ]]
+  [ -e "$WORKERS/lift.json" ]
+  [ -d "$(libcall worker_wdir "$TARGET" lift)" ]
 }
 
 @test "orch --repo <other> clean refuses when it disagrees with the recorded repo" {
@@ -216,4 +253,7 @@ drain_in() { # <project_root>: source heartbeat and drain once under that PROJEC
   run env PROJECT_ROOT="$OTHER" ORCH_REPO_EXPLICIT=1 "$ORCH_DIR_SRC/merge.sh" lift
   [ "$status" -ne 0 ]
   [[ "$output" == *"$TARGET"* ]]
+  # the refusal is a no-op: the worker's branch and status file survive
+  git -C "$TARGET" show-ref --verify --quiet "refs/heads/$(libcall worker_branch lift)"
+  [ -e "$WORKERS/lift.json" ]
 }

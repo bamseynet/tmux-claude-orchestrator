@@ -324,7 +324,7 @@ sweep_window() { # <window> <cooldown_seconds>
 # {"id","event":"dead","ts"} + status=dead — so the master is notified once and the
 # now-"dead" status keeps later ticks from re-emitting.
 dead_sweep() { # <live_windows>
-  local windows="$1" f id status dm misses
+  local windows="$1" f id status dm misses dproj
   for f in "$WORKERS_DIR"/*.json; do
     [ -e "$f" ] || continue
     id="$(basename "$f" .json)"
@@ -341,7 +341,12 @@ dead_sweep() { # <live_windows>
         # finished, unmerged commits (e.g. waiting-bg on a session cron, or a legacy
         # subagent-done left after the final Stop) -- keep them for the master.
         case "$status" in
-          spawning | working) prune_dead_worktree "$(resolve_worker_proj "$id")" "$id" ;;
+          # resolve_worker_proj can refuse (rc 1, empty output); never let an empty
+          # project root fall through to `git -C ""`, i.e. the loop's cwd repo.
+          spawning | working)
+            if dproj="$(resolve_worker_proj "$id")" && [ -n "$dproj" ]; then
+              prune_dead_worktree "$dproj" "$id"
+            fi ;;
         esac
         log "watchdog: worker '$id' dead (no live window, was $status); notified master"
       else
@@ -392,9 +397,15 @@ reap_terminal_workers() { # <retention_seconds> <live_windows> [now]
     ts="$(jq -r '.updated // .created // empty' "$f" 2>/dev/null)"
     epoch="$(date -u -d "$ts" +%s 2>/dev/null)" || epoch=0
     worker_is_reapable "$status" "$epoch" "$now" "$retention" || continue
-    "$here/clean.sh" "$id" >/dev/null 2>&1 || true
-    log "watchdog: reaped terminal worker '$id' (status=$status, retention=${retention}s)"
-    say "reaped $id"
+    # Report only what actually happened: clean.sh refuses (rc 1) e.g. a foreign-owned
+    # worktree or an explicit --repo that contradicts the recorded one (issue #148).
+    if "$here/clean.sh" "$id" >/dev/null 2>&1; then
+      log "watchdog: reaped terminal worker '$id' (status=$status, retention=${retention}s)"
+      say "reaped $id"
+    else
+      log "watchdog: clean.sh refused to reap terminal worker '$id' (status=$status); left in place"
+      say "not reaped $id (clean refused; see orch.log)"
+    fi
   done
 }
 

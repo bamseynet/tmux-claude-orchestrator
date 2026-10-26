@@ -217,6 +217,7 @@ resolve_worker_proj() {
   local id="$1" cur="${PROJECT_ROOT:-$(pwd)}" rec
   rec="$(worker_target_repo "$id")"
   if [ -z "$rec" ] || [ ! -d "$rec" ]; then
+    [ -z "$rec" ] || log "worker '$id': recorded target repo $rec no longer exists; falling back to $cur"
     printf '%s' "$cur"; return 0
   fi
   if [ "${ORCH_REPO_EXPLICIT:-}" = "1" ] \

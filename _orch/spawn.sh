@@ -335,7 +335,8 @@ else
     if worktree_owned_by_other "$wdir"; then
       owner="$(worktree_owner "$wdir")"
       log "spawn refused for $id: $wdir is owned by a different orch install ($owner)"
-      update_worker_status "$id" '.status="spawn-failed"'
+      # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+      update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
@@ -352,7 +353,8 @@ else
       fi
     else
       log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on $branch"
-      update_worker_status "$id" '.status="spawn-failed"'
+      # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+      update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
       sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
       printf '%s\n' "$sf_line" >> "$INBOX"
       printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
@@ -365,7 +367,8 @@ else
   # be this worker's actual fork point.
   elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_sha:+"$base_sha"} >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
-    update_worker_status "$id" '.status="spawn-failed"'
+    # shellcheck disable=SC2016  # $r is a jq --arg var, not shell
+    update_worker_status "$id" --arg r "$proj" '.status="spawn-failed" | .target_repo=$r'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
     printf '%s\n' "$sf_line" >> "$INBOX"
     printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"

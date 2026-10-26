@@ -105,12 +105,23 @@ drain_queue_if_room() {
   # issue #148: launch against the repo the spawn was queued for, not the
   # heartbeat's own PROJECT_ROOT, and carry the queue-time unrelated-repo override.
   # Records queued before #148 carry neither field: old behaviour.
-  local target unrel
+  # A post-#148 record states the override exactly (empty = none), so the
+  # heartbeat's own ORCH_ALLOW_UNRELATED_REPO must not leak into its spawn.
+  local target unrel has_unrel
   target="$(jq -r '.target_repo // empty' <<<"$item")"
   unrel="$(jq -r '.allow_unrelated // empty' <<<"$item")"
+  has_unrel="$(jq -r 'has("allow_unrelated")' <<<"$item")"
+  if [ -n "$target" ] && [ ! -d "$target" ]; then
+    # spawn.sh would exit before writing any status, leaving the worker "queued"
+    # forever with its queue record already popped.
+    log "queue drain: target repo $target for queued worker $id no longer exists; marking spawn-failed"
+    update_worker_status "$id" '.status="spawn-failed"' || true
+    return 0
+  fi
   log "queue drain: spawning queued worker $id${target:+ (target repo $target)}"
   (
     [ -z "$target" ] || export PROJECT_ROOT="$target"
+    [ "$has_unrel" != "true" ] || unset ORCH_ALLOW_UNRELATED_REPO
     [ -z "$unrel" ] || export ORCH_ALLOW_UNRELATED_REPO="$unrel"
     exec "$here/spawn.sh" "${args[@]}" >> "$LOG" 2>&1
   ) &
