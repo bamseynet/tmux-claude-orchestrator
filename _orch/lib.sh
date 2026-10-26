@@ -1430,7 +1430,9 @@ root_baseline_file() { # <project_root> <id>
 }
 # File-level status of <project_root> (untracked files listed individually).
 root_porcelain() { # <project_root>
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" status --porcelain -uall 2>/dev/null
+  # --no-optional-locks: run every tick against the operator's live checkout, a
+  # plain `git status` takes index.lock and can fail the operator's own git commands.
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git --no-optional-locks -C "$1" status --porcelain -uall 2>/dev/null
 }
 root_baseline_write() { # <project_root> <id>
   local f; f="$(root_baseline_file "$1" "$2")"

@@ -145,3 +145,23 @@ inbox() { nlines "$INBOX"; }
   root_dirty_tick
   [ "$(events)" -eq 0 ]
 }
+
+@test "operator staging a baseline entry does not alert (paths compared, not XY codes)" {
+  worker w1 worktree; baseline w1
+  git -C "$PROJ" add _orch/config.json
+  root_dirty_tick
+  [ "$(events)" -eq 0 ]
+}
+
+@test "reported record is forgotten once no worktree worker is live" {
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  jq '.status="done"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  git -C "$PROJ" checkout -q f.sh
+  root_dirty_tick
+  worker w2 worktree; baseline w2
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 2 ]
+}

@@ -463,6 +463,12 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
      end)
 ' > "$settings_file"
 
+# 2b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
+# root_dirty_tick can tell a worker's Bash write from the operator's own edits.
+# Written BEFORE the status file so a heartbeat tick never pairs this live
+# worker with a missing or stale (same id, earlier run) baseline.
+[ "$mode" = "--no-worktree" ] || root_baseline_write "$proj" "$id" || true
+
 # 3) initial status file
 # `created` is stamped once here so downstream tools (orch status, hud.sh) can
 # compute worker age; report.sh's later writes only ever touch `updated`.
@@ -472,10 +478,6 @@ write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg 
   --arg wdir "$wdir" --arg wmode "$([ "$mode" = "--no-worktree" ] && echo no-worktree || echo worktree)" \
   '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u, target_repo:$r, wdir:$wdir, mode:$wmode}
    + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
-
-# 3b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
-# root_dirty_tick can tell a worker's Bash write from the operator's own edits.
-[ "$mode" = "--no-worktree" ] || root_baseline_write "$proj" "$id" || true
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"

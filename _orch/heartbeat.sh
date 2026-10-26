@@ -422,13 +422,14 @@ master_reset_tick() { # <session:window>
 # ids without claiming which one wrote. A repo where any such worker lacks a
 # baseline (spawned before this existed) is skipped rather than guessed at.
 # Reported entries are persisted per repo so a second tick is silent; an entry
-# that clears and returns re-alerts. Known limitation: a Bash `git commit` /
+# that clears and returns re-alerts. Entries compare by path, so a write to a path
+# already dirty in a baseline is not seen. Known limitation: a Bash `git commit` /
 # `checkout` into the root leaves it clean and is NOT detected (a HEAD comparison
 # would false-positive on an operator `git pull`).
 root_dirty_tick() {
   shopt -s nullglob
   local f st mode repo id real
-  local pairs="" repos=""
+  local pairs="" repos="" keep=" "
   for f in "$WORKERS_DIR"/*.json; do
     IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
     case "$st" in done|spawn-failed|queued|"") continue ;; esac
@@ -437,28 +438,31 @@ root_dirty_tick() {
     real="$(_phys_dir "$repo")" || real="$repo"
     pairs+="$real"$'\t'"$id"$'\n'
   done
-  [ -n "$pairs" ] || return 0
-  repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
+  [ -n "$pairs" ] && repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
   local cur new bl union rep_f paths wl ev wids
+  [ -z "$repos" ] || mkdir -p "$STATE_DIR/root-dirty"
   while IFS= read -r real; do
+    [ -n "$real" ] || continue
+    rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
+    keep+="${rep_f##*/} "
     wids="$(printf '%s' "$pairs" | awk -F'\t' -v r="$real" '$1==r{print $2}')"
     union=""; bl=1
     while IFS= read -r id; do
       f="$(root_baseline_file "$real" "$id")"
       [ -f "$f" ] || { bl=0; break; }
-      union+="$(cat "$f")"$'\n'
+      union+="$(cut -c4- "$f")"$'\n'
     done <<<"$wids"
     [ "$bl" = 1 ] || continue
-    cur="$(root_porcelain "$real" | grep -vxFf <(printf '%s' "$union") || true)"
-    rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
-    mkdir -p "$STATE_DIR/root-dirty"
+    # Compare PATHS, not whole porcelain lines: an operator `git add` turns a
+    # baseline " M f" into "M  f" and must not be blamed on a worker.
+    cur="$(root_porcelain "$real" | cut -c4- | grep -vxFf <(printf '%s' "$union") || true)"
     new="$cur"
     if [ -n "$cur" ] && [ -f "$rep_f" ]; then
       new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
     fi
     printf '%s' "$cur" > "$rep_f"
     [ -n "$new" ] || continue
-    paths="$(printf '%s\n' "$new" | cut -c4- | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    paths="$(printf '%s\n' "$new" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     ev="$(jq -nc --arg r "$real" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
       '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p,workers:$w,ts:$ts,
@@ -467,6 +471,11 @@ root_dirty_tick() {
     printf '%s\n' "$ev" >> "$INBOX"
     log "root-dirty: new entries in $real while worktree workers live: $(jq -r '.paths|join(" ")' <<<"$ev")"
   done <<<"$repos"
+  # Forget reported entries of repos with no live worktree worker: a stale record
+  # would silence a later worker re-dirtying the same path after it was reverted.
+  for f in "$STATE_DIR"/root-dirty/*; do
+    case "$keep" in *" ${f##*/} "*) ;; *) rm -f "$f" ;; esac
+  done
   return 0
 }
 heartbeat_main() {
