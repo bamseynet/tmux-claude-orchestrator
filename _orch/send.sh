@@ -67,8 +67,8 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
 fi
 # Issue #192: the permission and trust dialogs ignore a PASTED digit too, and the
 # paste's Enter then takes the highlighted default ("1. Yes" approved a tool call
-# meant to be refused with 4; "No, exit" killed the worker). No dialog is ever
-# answered by paste. Permission: type the digit as a keypress (no Enter) once its
+# meant to be refused with 4; "No, exit" killed the worker). No dialog option is
+# ever picked by paste. Permission: type the digit as a keypress (no Enter) once its
 # own option block shows it. Trust: its digit handling is unverified (the 2.1.310
 # capture has no numbers), and mapping N to arrow presses blind is the same
 # act-on-a-guess hazard, so refuse.

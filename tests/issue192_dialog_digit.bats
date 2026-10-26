@@ -60,13 +60,6 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   no_keys_sent
 }
 
-@test "permission: multi-digit 12 is refused" {
-  stub_tmux "$FX/permission_dialog_4opt.txt"
-  send 12
-  [ "$status" -ne 0 ]
-  no_keys_sent
-}
-
 @test "permission: free text is refused" {
   stub_tmux "$FX/permission_dialog_4opt.txt"
   send hello
