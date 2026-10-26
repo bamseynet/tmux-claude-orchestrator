@@ -28,21 +28,9 @@ setup() {
   source "$BATS_TEST_DIRNAME/helpers/fake-tmux.bash"
   fake_tmux_install_stub "$STUBBIN"
 
-  # git stub: worktree remove deletes the target dir like real git; everything
-  # else (branch show-ref/-D, worktree prune) is a graceful no-op.
-  cat > "$STUBBIN/git" <<'EOF'
-#!/usr/bin/env bash
-args=("$@"); i=0
-[ "${args[0]:-}" = "-C" ] && i=2
-case "${args[$i]:-}" in
-  worktree)
-    if [ "${args[$((i+1))]:-}" = "remove" ]; then
-      rm -rf "${args[${#args[@]}-1]}"
-    fi ;;
-  show-ref) exit 1 ;;
-esac
-exit 0
-EOF
+  # shellcheck disable=SC1091  # runtime-resolved path; not followed by shellcheck
+  source "$BATS_TEST_DIRNAME/helpers/fake-git.bash"
+  install_fake_git "$STUBBIN" remove-noref
   chmod +x "$STUBBIN/tmux" "$STUBBIN/git"
   PATH="$STUBBIN:$PATH"
 
