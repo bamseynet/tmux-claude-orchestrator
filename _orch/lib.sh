@@ -191,7 +191,7 @@ export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 
 # _phys_dir <dir> -> physical (symlink-free) absolute path, nonzero if not a dir.
 # `cd -P`, not a logical cd: "<symlink>/../x" must climb the symlink's TARGET.
-_phys_dir() { (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
+_phys_dir() { [ -n "$1" ] && (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
 
 # Issue #149: the path also keys on the TARGET repo (a hash of its realpath), so one
 # install driving sibling repos never maps the same worker id to one directory.
@@ -226,7 +226,7 @@ _git_common_dir() {
 same_repo() {
   [ -e "$1/.git" ] || return 1
   local a b
-  a="$(_git_common_dir "$1")" && b="$(_git_common_dir "$2")" && [ -n "$a" ] && [ "$a" = "$b" ]
+  a="$(_git_common_dir "$1")" && b="$(_git_common_dir "$2")" && [ "$a" = "$b" ]
 }
 
 # rmdir_worker_ns <project_root> <wdir>: after removing <wdir>, drop this install's
