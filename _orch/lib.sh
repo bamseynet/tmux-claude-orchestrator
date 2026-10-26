@@ -189,8 +189,90 @@ export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 # old hash; same override precedent as SESSION_NAME above.
 : "${ORCH_HASH:=$(_orch_session_hash "${ORCH_ROOT%/}")}"
 
+# _phys_dir <dir> -> physical (symlink-free) absolute path, nonzero if not a dir.
+# `cd -P`, not a logical cd: "<symlink>/../x" must climb the symlink's TARGET.
+_phys_dir() { [ -n "$1" ] && (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P); }
+
+# Issue #149: the path also keys on the TARGET repo (a hash of its realpath), so one
+# install driving sibling repos never maps the same worker id to one directory.
+# Layout: <repo>/../wt/<ORCH_HASH>/<repo-hash>/<id>.
 worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
-  printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"
+  local real
+  real="$(_phys_dir "$1")" || real="${1%/}"
+  printf '%s/../wt/%s/%s/%s' "$1" "$ORCH_HASH" "$(_orch_session_hash "$real")" "$2"
+}
+
+# The #86 layout (<repo>/../wt/<ORCH_HASH>/<id>), before #149 keyed on the repo.
+# Kept so workers created before the upgrade still resolve.
+v86_worker_wdir() { printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"; } # <project_root> <id>
+
+# _git_common_dir <dir> -> canonical (pwd -P) absolute git common dir, nonzero if
+# not a git dir. Canonicalized here rather than via --path-format=absolute: git
+# < 2.31 echoes that unknown flag back and prints a RELATIVE ".git" for any main
+# checkout, which would make every two top-level repos compare "same".
+# Strip GIT_DIR & co: if exported (git hooks, rebase --exec) they override -C and
+# every directory would report the same common dir.
+_git_common_dir() {
+  local d
+  d="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" rev-parse --git-common-dir 2>/dev/null)" && [ -n "$d" ] || return 1
+  case "$d" in /*) ;; *) d="$1/$d" ;; esac
+  _phys_dir "$d"
+}
+
+# same_repo <checkout> <dir> -> 0 iff <checkout> is a checkout ROOT (has .git) sharing
+# <dir>'s git common dir. The .git test matters: a plain leftover dir under an
+# enclosing repo (e.g. ../wt inside a monorepo) would otherwise resolve to that
+# repo's common dir and count as "ours".
+same_repo() {
+  [ -e "$1/.git" ] || return 1
+  local a b
+  a="$(_git_common_dir "$1")" && b="$(_git_common_dir "$2")" && [ "$a" = "$b" ]
+}
+
+# rmdir_worker_ns <project_root> <wdir>: after removing <wdir>, drop this install's
+# now-empty namespace dirs (<repo-hash> since #149, and <ORCH_HASH>), which nothing
+# else ever cleans up. Name <ORCH_HASH> explicitly: for a pre-#149 wdir,
+# dirname(dirname) would be the shared ../wt itself.
+rmdir_worker_ns() {
+  rmdir "$(dirname "$2")" 2>/dev/null || true
+  rmdir "$1/../wt/$ORCH_HASH" 2>/dev/null || true
+}
+
+# resolve_worker_wdir <project_root> <id>: the worktree dir to use for <id>. The
+# current layout wins; a pre-#149 (#86 layout) dir is used only when it exists AND
+# is a worktree of THIS repo, so another repo's leftover is never picked up.
+resolve_worker_wdir() {
+  local proj="$1" id="$2" new old
+  new="$(worker_wdir "$proj" "$id")"
+  if [ ! -e "$new" ]; then
+    old="$(v86_worker_wdir "$proj" "$id")"
+    [ -d "$old" ] && same_repo "$old" "$proj" && { printf '%s' "$old"; return 0; }
+  fi
+  printf '%s' "$new"
+}
+
+# foreign_checkout <dir> <project_root> -> 0 iff <dir> is a git checkout of a
+# DIFFERENT repo (issue #149). `git worktree remove` fails on such a path and the
+# teardown's `rm -rf` fallback would then destroy another repo's work.
+# A linked worktree of THIS repo whose admin dir (.git/worktrees/<name>) is gone no
+# longer resolves at all; its `.git` file still points into our common dir, so it
+# is ours (an orphan to tear down), not foreign.
+foreign_checkout() {
+  [ -e "$1/.git" ] || return 1
+  local gd common theirs
+  common="$(_git_common_dir "$2")" || return 0
+  theirs="$(_git_common_dir "$1")" && [ "$theirs" = "$common" ] && return 1
+  if [ -f "$1/.git" ]; then
+    gd="$(sed -n 's/^gitdir: //p' "$1/.git" 2>/dev/null)"
+    case "$gd" in /*) ;; ?*) gd="$1/$gd" ;; esac
+    # <common>/worktrees itself may be gone too (git drops it once empty), so
+    # canonicalize <common> -- which always exists -- and check the segment by name.
+    if [ -n "$gd" ] && [ "$(basename "$(dirname "$gd")")" = worktrees ] \
+       && [ "$(_phys_dir "$(dirname "$(dirname "$gd")")")" = "$common" ]; then
+      return 1
+    fi
+  fi
+  return 0
 }
 
 worker_branch() { # <id> -> this install's branch name for <id>
@@ -1246,12 +1328,15 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
   done < <(git -C "$expected" worktree list --porcelain 2>/dev/null; printf '\n')
 
   [ "$matched" -eq 0 ] || return 1
+  # Issue #149: the path being in OUR worktree list is not enough -- a stale
+  # registration can point at a directory another repo has since checked out.
+  same_repo "$real_wdir" "$expected" || return 1
   [ -z "$(git -C "$real_wdir" status --porcelain 2>/dev/null)" ] || return 1
   return 0
 }
 
 # --- Dead-worker worktree pruning (issue #37) ---------------------------------------
-# A killed/crashed worker leaves its ../wt/<id> worktree and orch/<id> branch behind
+# A killed/crashed worker leaves its worktree (see worker_wdir) and branch behind
 # (no Stop hook fires to tear anything down). Mirrors clean.sh's worktree+branch
 # teardown so a dead worker's path frees up the same way an explicit `orch clean
 # <id>` would, without waiting for an operator to notice. Idempotent: a missing
@@ -1259,7 +1344,7 @@ worktree_matches_expected() { # <expected_repo_root> <wdir> <expected_branch> ->
 prune_dead_worktree() { # <project_root> <id>
   local proj="$1" id="$2"
   local wdir branch owned_by_other=0
-  wdir="$(worker_wdir "$proj" "$id")"
+  wdir="$(resolve_worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
   if [ -d "$wdir" ]; then
     # Never remove a path this install did not stamp itself — namespacing means
@@ -1272,9 +1357,13 @@ prune_dead_worktree() { # <project_root> <id>
     if worktree_owned_by_other "$wdir"; then
       owned_by_other=1
       log "prune_dead_worktree: refusing to touch $wdir for $id — owned by a different orch install ($(worktree_owner "$wdir"))"
+    elif foreign_checkout "$wdir" "$proj"; then
+      owned_by_other=1
+      log "prune_dead_worktree: refusing to touch $wdir for $id — it is not a worktree of $proj"
     else
       git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
       log "prune_dead_worktree: removed worktree $wdir for dead worker $id"
+      rmdir_worker_ns "$proj" "$wdir"
     fi
   fi
   git -C "$proj" worktree prune >/dev/null 2>&1 || true

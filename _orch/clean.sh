@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # _orch/clean.sh <id> [--sweep-legacy] — retire a SINGLE worker and every
 # artifact it leaks. Removes, in order: the tmux window, the git worktree at
-# ../wt/<hash>/<id>, the branch orch/<hash>/<id> (issue #86: <hash> namespaces
+# ../wt/<hash>/<repo-hash>/<id> (#149), the branch orch/<hash>/<id> (issue #86: <hash> namespaces
 # the git layer per orch install), the status file workers/<id>.json, the
 # watchdog scratch .wd-<id>, and (issue #43) the --no-worktree worker's
 # private settings file settings/<id>.json.
@@ -42,7 +42,7 @@ done
 require_valid_session_name
 S="$SESSION_NAME"
 proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
-wdir="$(worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issue #86)
+wdir="$(resolve_worker_wdir "$proj" "$id")"      # spawn.sh worktree layout (issues #86, #149)
 branch="$(worker_branch "$id")"
 legacy_wdir="$(legacy_worker_wdir "$proj" "$id")"     # pre-#86 layout, see above
 legacy_branch="$(legacy_worker_branch "$id")"
@@ -54,6 +54,13 @@ legacy_branch="$(legacy_worker_branch "$id")"
 if [ -d "$wdir" ] && worktree_owned_by_other "$wdir"; then
   say "clean $id: refusing to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))" >&2
   log "clean $id: refused to remove $wdir — owned by a different orch install ($(worktree_owner "$wdir"))"
+  exit 1
+fi
+# Issue #149: same all-or-nothing refusal when the path holds another repo's
+# checkout -- `worktree remove` would fail and the rm -rf fallback destroy it.
+if [ -d "$wdir" ] && foreign_checkout "$wdir" "$proj"; then
+  say "clean $id: refusing to remove $wdir — it is not a worktree of $proj" >&2
+  log "clean $id: refused to remove $wdir — not a worktree of $proj"
   exit 1
 fi
 
@@ -75,15 +82,19 @@ fi
 if [ -d "$wdir" ]; then
   git -C "$proj" worktree remove --force "$wdir" >/dev/null 2>&1 || rm -rf "$wdir"
   log "clean $id: removed worktree $wdir"
-  # This install's own namespace dir ($proj/../wt/<hash>) is otherwise never
-  # cleaned up once the last worker under it is retired.
-  rmdir "$(dirname "$wdir")" 2>/dev/null || true
+  rmdir_worker_ns "$proj" "$wdir"   # drop emptied namespace dirs (#149)
 fi
 # Back-compat (issue #86): the pre-namespacing ../wt/<id> layout is swept ONLY
 # on explicit --sweep-legacy (see the header comment above for why this is not
 # automatic). Without the flag, just tell the operator it's there.
 if [ -d "$legacy_wdir" ]; then
-  if [ "$sweep_legacy" -eq 1 ]; then
+  # Issue #149: ../wt/<id> is shared by every sibling repo, so a legacy dir may be
+  # ANOTHER repo's worktree; `worktree remove` would fail and the rm -rf fallback
+  # would destroy it. Only ever touch it when it is a checkout of THIS repo.
+  if foreign_checkout "$legacy_wdir" "$proj"; then
+    say "clean $id: leaving legacy $legacy_wdir in place — it is not a worktree of $proj" >&2
+    log "clean $id: legacy $legacy_wdir belongs to another repo, not removed"
+  elif [ "$sweep_legacy" -eq 1 ]; then
     git -C "$proj" worktree remove --force "$legacy_wdir" >/dev/null 2>&1 || rm -rf "$legacy_wdir"
     log "clean $id: removed legacy worktree $legacy_wdir (--sweep-legacy)"
   else
