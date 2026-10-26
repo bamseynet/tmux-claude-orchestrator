@@ -193,6 +193,9 @@ queue_record() { # <id> <target> <allow_unrelated>: a post-#148 --after-w1 queue
   # ...but the spawn was refused by guard 0: nothing created in the queued repo
   [ ! -e "$(libcall worker_wdir "$TARGET" w2)" ]
   ! git -C "$TARGET" show-ref --verify --quiet "refs/heads/$(libcall worker_branch w2)"
+  # the refused drain is surfaced, not left "queued" forever with its record popped
+  [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
+  grep -q '"id":"w2","event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
 }
 
 @test "queue drain of a record whose target repo vanished marks it spawn-failed, not queued forever" {
@@ -206,6 +209,34 @@ queue_record() { # <id> <target> <allow_unrelated>: a post-#148 --after-w1 queue
   [ ! -s "$ORCH_ROOT/_orch/state/queue.jsonl" ]
   [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
   [ "$(git -C "$OTHER" worktree list | wc -l)" -eq 1 ]
+  # master is notified, and retention counts from the failure, not the 2000 queue ts
+  grep -q '"id":"w2","event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
+  [ "$(jq -r .updated "$WORKERS/w2.json")" != "2000-01-01T00:00:00Z" ]
+  [ "$(jq -r .updated "$WORKERS/w2.json")" != "null" ]
+}
+
+@test "queue drain of a vanished-target record with no status file still records spawn-failed" {
+  echo '{"id":"w1","status":"done"}' > "$WORKERS/w1.json"
+  queue_record w2 "$R/gone" "1"
+  rm -f "$WORKERS/w2.json"
+  export PROJECT_ROOT="$OTHER"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/heartbeat.sh"
+  drain_queue_if_room
+  wait
+  [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
+  [ "$(jq -r .id "$WORKERS/w2.json")" = "w2" ]
+  [ "$(jq -r .target_repo "$WORKERS/w2.json")" = "$R/gone" ]
+}
+
+@test "watchdog dead_sweep prunes a dead worker's worktree in the recorded repo" {
+  mkworker "$TARGET" lift
+  jq '.status="working"' "$WORKERS/lift.json" > "$WORKERS/lift.json.tmp" && mv "$WORKERS/lift.json.tmp" "$WORKERS/lift.json"
+  export PROJECT_ROOT="$ORCH_ROOT" DEAD_CONFIRM_TICKS=1
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/watchdog.sh"
+  dead_sweep ""
+  assert_clean_of "$TARGET" lift
 }
 
 @test "orch --repo <other> prune does not claim to reap a worker clean.sh refused" {

@@ -111,20 +111,33 @@ drain_queue_if_room() {
   target="$(jq -r '.target_repo // empty' <<<"$item")"
   unrel="$(jq -r '.allow_unrelated // empty' <<<"$item")"
   has_unrel="$(jq -r 'has("allow_unrelated")' <<<"$item")"
-  if [ -n "$target" ] && [ ! -d "$target" ]; then
-    # spawn.sh would exit before writing any status, leaving the worker "queued"
-    # forever with its queue record already popped.
-    log "queue drain: target repo $target for queued worker $id no longer exists; marking spawn-failed"
-    update_worker_status "$id" '.status="spawn-failed"' || true
-    return 0
-  fi
   log "queue drain: spawning queued worker $id${target:+ (target repo $target)}"
   (
     [ -z "$target" ] || export PROJECT_ROOT="$target"
     [ "$has_unrel" != "true" ] || unset ORCH_ALLOW_UNRELATED_REPO
     [ -z "$unrel" ] || export ORCH_ALLOW_UNRELATED_REPO="$unrel"
-    exec "$here/spawn.sh" "${args[@]}" >> "$LOG" 2>&1
+    "$here/spawn.sh" "${args[@]}" >> "$LOG" 2>&1 && exit 0
+    # spawn.sh can refuse before writing any status (target repo vanished, guard 0
+    # unrelated-repo refusal, duplicate window, ...). The queue record is already
+    # popped, so a worker still reading "queued" (or with no status file at all)
+    # here would stay queued/invisible forever.
+    case "$(_worker_status "$id")" in queued | "") ;; *) exit 0 ;; esac
+    _drain_spawn_failed "$id" "$target"
   ) &
+}
+
+# _drain_spawn_failed <id> <target>: mark a queued worker whose drained spawn was
+# refused as spawn-failed and notify the master the same way spawn.sh does. `updated`
+# is bumped so the reaper's retention counts from the failure, not from queue time.
+_drain_spawn_failed() {
+  local id="$1" target="$2" sf_line
+  log "queue drain: spawn.sh refused queued worker $id${target:+ (target repo $target)}; marking spawn-failed"
+  # shellcheck disable=SC2016  # $i/$u/$r are jq --arg vars, not shell
+  update_worker_status "$id" --arg i "$id" --arg u "$(date -u +%FT%TZ)" --arg r "$target" \
+    '.id=$i | .status="spawn-failed" | .updated=$u | (if $r == "" then . else .target_repo=$r end)' || true
+  sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
+  printf '%s\n' "$sf_line" >> "$INBOX"
+  printf '%s\n' "$sf_line" >> "$STATE_DIR/events.jsonl"
 }
 
 # --- Master-liveness alert (issue #15) -----------------------------------------
