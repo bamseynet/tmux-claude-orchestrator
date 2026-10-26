@@ -35,6 +35,10 @@ setup() {
 │ >            │
 ╰──────────────╯
   ? for shortcuts'
+  # Each half of the two-row match alone: the selector footer with no cursor
+  # row, and a "❯ 1." row (e.g. a submitted prompt starting "1.") with no footer.
+  SCREEN_footeronly="$(grep -v '^❯ 1\.' "$FIX")"
+  SCREEN_cursoronly="$(grep -v 'Enter to select' "$FIX")"
   SCREEN_idle='● done
 ╭──────────────╮
 │ ❯            │
@@ -55,6 +59,8 @@ cell() { # <screen> <detector> <Y|n>
 @test "pane_has_dialog: multi-question review screen Y"    { cell review    pane_has_dialog Y; }
 @test "is_ready refuses the review screen"                 { cell review    is_ready n; }
 @test "pane_has_dialog: numbered prose above idle box n"   { cell prose     pane_has_dialog n; }
+@test "pane_has_dialog: selector footer without a cursor row n" { cell footeronly pane_has_dialog n; }
+@test "pane_has_dialog: cursor row without the footer n"   { cell cursoronly pane_has_dialog n; }
 @test "pane_has_dialog: idle prompt n"                     { cell idle      pane_has_dialog n; }
 @test "is_ready refuses the selector"                      { cell ask       is_ready n; }
 @test "inject_confirmed: selector is positive evidence"    { cell ask       inject_confirmed Y; }
@@ -114,6 +120,27 @@ STUB
   [[ "$output" == *"free-text answer"* ]]
   grep -q 'paste-buffer' "$CALLS"
   grep -qx 'send-keys -t orch:w Enter' "$CALLS"
+}
+
+@test "send.sh refuses a bare digit on the free-text row (would submit it as the answer)" {
+  stub_tmux "$BATS_TEST_DIRNAME/fixtures/askuser_text_entry.txt"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 2
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"free-text row"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
+}
+
+# wait_ready_or_dialog sees the selector, then the pane changes before the
+# selector branch re-captures: the generic numeric path must not paste + Enter.
+@test "send.sh: selector gone between captures -> refuses, no paste" {
+  stub_tmux "$FIX"
+  printf '%s\n' '╭──────╮' '│ ❯    │' '╰──────╯' > "$BATS_TEST_TMPDIR/idle"
+  sed -i "s|capture-pane) cat \"$PANE\" ;;|capture-pane) if [ -e $BATS_TEST_TMPDIR/seen ]; then cat $BATS_TEST_TMPDIR/idle; else touch $BATS_TEST_TMPDIR/seen; cat \"$PANE\"; fi ;;|" "$STUBBIN/tmux"
+  grep -q 'seen' "$STUBBIN/tmux"
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 2
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"screen changed"* ]]
+  ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"
 }
 
 @test "send.sh refuses a multi-digit answer on the selector (would answer the next question)" {

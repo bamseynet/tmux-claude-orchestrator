@@ -35,7 +35,13 @@ wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
 # footer adds the ctrl+g editor hint: there the paste fills the row and Enter
 # submits it (all live-checked on 2.1.310).
 if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
-  if pane_has_askuser_text_entry "$S:$id" && [[ "$msg" =~ [^[:space:]] ]]; then
+  if pane_has_askuser_text_entry "$S:$id"; then
+    # A bare digit here is far likelier a change of mind ("pick option 2") than
+    # the intended free-text answer; submitting it as text would answer unseen.
+    if [[ "$msg" =~ ^[[:space:]]*[0-9]*[[:space:]]*$ ]]; then
+      say "$id's question selector is on its free-text row; not sending. Send the answer text, or move the cursor off that row in the pane first"
+      exit 1
+    fi
     send_prompt "$S:$id" "$msg"
     say "sent as the free-text answer on $id"
     exit 0
@@ -47,6 +53,14 @@ if [ "$wr" -eq 2 ] && pane_has_askuser_dialog "$S:$id"; then
   tmux send-keys -t "$S:$id" -l "${BASH_REMATCH[1]}"
   say "typed option ${BASH_REMATCH[1]} into $id's question selector (a multi-select question only toggles it; check the pane)"
   exit 0
+fi
+# The selector check above re-captures the pane; if it failed only because the
+# pane changed in between, the numeric paste below could still land on a
+# selector (whose paste+Enter picks the highlighted option). Paste a number only
+# onto a dialog this capture still shows.
+if [ "$wr" -eq 2 ] && ! pane_has_dialog "$S:$id"; then
+  say "$id's screen changed while sending; not sending. Check the pane and retry"
+  exit 1
 fi
 if [ "$wr" -eq 2 ] && ! [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
   say "$id is showing a dialog (not ready); not sending. Answer it with a number, e.g. \`orch send $id 1\`"
