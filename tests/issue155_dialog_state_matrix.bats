@@ -26,7 +26,8 @@ setup() {
 │ ❯            │
 ╰──────────────╯
   ? for shortcuts'
-  # Real capture, Claude Code 2.1.310 (per issue #179); note the leading space before ❯.
+  # Real capture, Claude Code 2.1.310, captured 2026-10-26 (quoted in issue #179;
+  # the issue elides the scratch path, so that one line is ours). Note the leading space before ❯.
   SCREEN_trust=' Accessing workspace:
  /tmp/scratch/fresh179-18039
  Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
@@ -218,4 +219,32 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
   [ "$status" -ne 0 ]
   [[ "$output" == *"unsent paste"* ]]
   no_keys_sent
+}
+
+@test "send.sh still sends when a chip is only in scrollback, not the input row" {
+  SCREEN_echo='❯ [Pasted text #1 +5 lines]
+● done
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
+  ? for shortcuts'
+  stub_tmux echo
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
+}
+
+@test "send.sh still answers a dialog (orch send 1) with a chip echoed above it" {
+  # Dialog choice row without the glyph (the real perm render is unverified):
+  # the chip echo is then the last glyph row, but the answer goes to the dialog.
+  SCREEN_dlgchip='❯ [Pasted text #1 +5 lines]
+ Bash command
+   rm -rf build
+ Do you want to proceed?
+ 1. Yes
+  2. No'
+  stub_tmux dlgchip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
 }

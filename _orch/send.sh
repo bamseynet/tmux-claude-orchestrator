@@ -34,7 +34,10 @@ fi
 # Issue #179: an unsent paste chip is not a dialog, but our paste + Enter would
 # submit the stuck chip together with the new text. Vetoed here rather than in
 # is_ready so spawn's send_task and the heartbeat is_ready checks are unchanged.
-if pane_has_pending_paste "$S:$id"; then
+# Skipped for a dialog answer (wr=2): its Enter goes to the dialog, not the input
+# box, and a chip echoed above a dialog whose choice row lacks the glyph would
+# otherwise be read as the live input row and block the deliberate answer.
+if [ "$wr" -ne 2 ] && pane_has_pending_paste "$S:$id"; then
   say "$id has an unsent paste in its input box; not sending. Clear it (or press Enter) first"
   exit 1
 fi
