@@ -217,6 +217,53 @@ if [ -n "$after_id" ]; then
   exit 0
 fi
 
+# Issue #153: refresh origin before the spawn gate, so the (up to
+# ORCH_SPAWN_FETCH_TIMEOUT s) network call does not sit between the gate's
+# live-worker count and this worker's status write, widening the max_workers race.
+_fetch_spawn_base() { # <proj> <id>
+  local proj="$1" id="$2" to="" secs="${ORCH_SPAWN_FETCH_TIMEOUT:-30}"
+  # A non-numeric value would make `timeout` exit 125 and every fetch "fail";
+  # 10# keeps a leading-zero value ("08") from aborting spawn as bad octal, and
+  # 0 would disable timeout(1)/lowSpeedTime/ConnectTimeout (unbounded fetch).
+  case "$secs" in ''|*[!0-9]*) secs=30 ;; esac
+  secs=$((10#$secs)); [ "$secs" -gt 0 ] || secs=30
+  if git -C "$proj" remote get-url origin >/dev/null 2>&1; then
+    # Bounded and non-interactive: a hung/credential-prompting remote must not
+    # stall spawn indefinitely.
+    if command -v timeout >/dev/null 2>&1; then to="timeout $secs"
+    elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout $secs"
+    fi
+    # GIT_TERMINAL_PROMPT only covers HTTPS; ssh can still prompt on /dev/tty
+    # (and there is no `timeout` on stock macOS), so force BatchMode unless the
+    # operator configured their own ssh command.
+    local fetch_env=(GIT_TERMINAL_PROMPT=0)
+    if [ -z "${GIT_SSH_COMMAND:-}" ] && [ -z "${GIT_SSH:-}" ] \
+       && ! git -C "$proj" config --get core.sshCommand >/dev/null 2>&1; then
+      # ServerAlive* bounds a stalled ssh transfer after connect (ConnectTimeout
+      # only covers the handshake) where no timeout(1) exists.
+      fetch_env+=("GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=$secs -o ServerAliveInterval=$(( (secs + 2) / 3 )) -o ServerAliveCountMax=3")
+    fi
+    # http.lowSpeed* bounds a stalled HTTPS transfer even where no timeout(1)
+    # exists (stock macOS); GIT_TERMINAL_PROMPT only suppresses prompts.
+    # Serialised: concurrent spawns (heartbeat queue drain, back-to-back
+    # `orch spawn`) would otherwise race on origin's ref locks and the loser
+    # would silently branch from stale refs. Lock timeout => skip, not hang.
+    # 200>&-: don't leak with_lock's flock fd to git — fetch's detached auto-gc/
+    # maintenance (or an ssh ControlPersist master) would hold the lock long after.
+    local rc=0
+    # shellcheck disable=SC2086  # $to is an intentional word-split prefix (or empty)
+    ( with_lock "$WORKERS_DIR/.spawn-fetch.lock" || exit 3
+      env "${fetch_env[@]}" $to git -C "$proj" -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$secs" \
+        fetch --quiet origin </dev/null >/dev/null 2>&1 200>&- ) 2>/dev/null || rc=$?
+    if [ "$rc" -eq 3 ]; then
+      log "spawn $id: fetch lock busy or unavailable (another spawn fetching?); skipping git fetch origin, using last-known remote refs"
+    elif [ "$rc" -ne 0 ]; then
+      log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
+    fi
+  fi
+}
+[ "$mode" = "--no-worktree" ] || _fetch_spawn_base "$proj" "$id"
+
 # Unified resource guard (issues #21 concurrency, #31 memory, #24 budget): refuse
 # to launch another full Claude Code session when any cap is at/over the line, and
 # persist the spawn to the pending queue instead. heartbeat.sh drains the queue as
@@ -235,7 +282,39 @@ if ! check_spawn_gate; then
   exit 0
 fi
 
+# Issue #153: pick the commit a new worker worktree branches from — the remote
+# base (origin/${ORCH_BASE_BRANCH:-main}), not the target checkout's HEAD.
+# Sets globals base_ref/base_sha (base_ref stays empty if nothing resolves).
+# Reads the remote-tracking refs _fetch_spawn_base refreshed before the gate.
+_resolve_spawn_base() { # <proj> <id>
+  local proj="$1" id="$2" want="${ORCH_BASE_BRANCH:-main}" cand local_sha
+  base_ref=""; base_sha=""
+  # An explicitly requested local $want beats the remote's default branch:
+  # origin/HEAD may be a different branch entirely (e.g. main vs develop).
+  for cand in "origin/$want" "$want" origin/HEAD HEAD; do
+    if git -C "$proj" rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1; then
+      base_ref="$cand"; break
+    fi
+  done
+  [ -n "$base_ref" ] || return 0
+  # origin/HEAD is a symref that `remote set-head` can repoint; record the
+  # concrete branch it names so collect diffs against the same branch later.
+  if [ "$base_ref" = origin/HEAD ]; then
+    base_ref="$(git -C "$proj" rev-parse --abbrev-ref origin/HEAD 2>/dev/null || echo origin/HEAD)"
+  fi
+  base_sha="$(git -C "$proj" rev-parse "$base_ref^{commit}" 2>/dev/null)"
+  # HEAD moves with the target checkout; pin the HEAD fallback to its sha.
+  [ "$base_ref" != HEAD ] || base_ref="$base_sha"
+  if [ "$base_ref" != "origin/$want" ]; then
+    log "spawn $id: origin/$want not found in $proj; basing worker on $base_ref"
+  elif local_sha="$(git -C "$proj" rev-parse -q --verify "refs/heads/$want" 2>/dev/null)" \
+       && [ "$local_sha" != "$base_sha" ]; then
+    log "spawn $id: local $want ($local_sha) differs from $base_ref ($base_sha); basing worker on $base_ref"
+  fi
+}
+
 # 1) working directory: isolated worktree (default) or the project root
+base_ref=""; base_sha=""
 if [ "$mode" = "--no-worktree" ]; then
   wdir="$proj"
 else
@@ -244,6 +323,7 @@ else
   # want the same path/branch for the same worker id.
   wdir="$(worker_wdir "$proj" "$id")"
   branch="$(worker_branch "$id")"
+  _resolve_spawn_base "$proj" "$id"
   # Guard (issue #37): a pre-existing path at $wdir must not be silently reused
   # just because `worktree add` failed on it. Decide deterministically instead:
   # reuse only if it is verifiably a clean worktree of THIS repo on $branch AND
@@ -263,6 +343,11 @@ else
     elif worktree_matches_expected "$proj" "$wdir" "$branch"; then
       log "worktree add: $wdir already a clean worktree of $proj on $branch; reusing"
       stamp_worktree_owner "$wdir" || true
+      # Still record base/base_sha (#153) so collect does not fall back to a
+      # stale local main for a reused worktree; base_sha is the fork point.
+      if [ -n "$base_ref" ]; then
+        base_sha="$(git -C "$proj" merge-base "$base_ref" "refs/heads/$branch" 2>/dev/null || true)"
+      fi
     else
       log "spawn refused for $id: $wdir exists and is not a clean worktree of $proj on $branch"
       update_worker_status "$id" '.status="spawn-failed"'
@@ -273,7 +358,10 @@ else
       say "Run 'orch clean $id' to remove it, or use a different id." >&2
       exit 1
     fi
-  elif ! git -C "$proj" worktree add -B "$branch" "$wdir" >/dev/null 2>&1; then
+  # Branch from the resolved base_sha, not the base_ref name: a concurrent spawn's
+  # fetch can move origin/<base> after resolution, and the recorded base_sha must
+  # be this worker's actual fork point.
+  elif ! git -C "$proj" worktree add --no-track -B "$branch" "$wdir" ${base_sha:+"$base_sha"} >/dev/null 2>&1; then
     log "spawn refused for $id: git worktree add failed for $wdir"
     update_worker_status "$id" '.status="spawn-failed"'
     sf_line="$(printf '{"id":"%s","event":"spawn-failed","ts":"%s"}' "$id" "$(date -u +%FT%TZ)")"
@@ -357,7 +445,9 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
 # compute worker age; report.sh's later writes only ever touch `updated`.
 # shellcheck disable=SC2016  # jq filter in single quotes; $id/$m/$t/$u are jq --arg vars, not shell
 write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg u "$(date -u +%FT%TZ)" \
-  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}'
+  --arg base "${base_ref:-}" --arg base_sha "${base_sha:-}" \
+  '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u}
+   + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"

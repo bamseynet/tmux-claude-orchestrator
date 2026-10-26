@@ -27,7 +27,13 @@ EOF
 args=("$@"); i=0
 [ "${args[0]:-}" = "-C" ] && i=2
 if [ "${args[$i]:-}" = "worktree" ] && [ "${args[$((i+1))]:-}" = "add" ]; then
-  mkdir -p "${args[$((${#args[@]}-1))]}"
+  # first positional after `add` is the path (skip -b/-B <branch> and flags);
+  # spawn passes a trailing <commit-ish> since #153, so not the last arg
+  j=$((i+2))
+  while [ $j -lt ${#args[@]} ]; do
+    case "${args[$j]}" in -b|-B) j=$((j+2)) ;; -*) j=$((j+1)) ;; *) break ;; esac
+  done
+  mkdir -p "${args[$j]}"
 fi
 exit 0
 EOF

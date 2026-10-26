@@ -9,7 +9,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$here/lib.sh"
 
 id=""
-base="${ORCH_BASE_BRANCH:-main}"
+base=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base="${2:?--base needs a branch name}"; shift 2 ;;
@@ -38,6 +38,21 @@ if [ -f "$status_file" ] && jq -e . "$status_file" >/dev/null 2>&1; then
   status_json="$(cat "$status_file")"
 else
   status_json="null"
+fi
+
+# Default base: the ref spawn recorded (issue #153 — workers branch from
+# origin/<base>, so diffing against a stale local main would sweep in upstream
+# commits), then ORCH_BASE_BRANCH/main. An explicit --base always wins.
+if [ -z "$base" ]; then
+  # A pruned/renamed recorded ref (e.g. origin/develop deleted) falls back to the
+  # recorded base_sha before the global default, which may be a different branch.
+  for rec_key in base base_sha; do
+    rec_base="$(jq -r --arg k "$rec_key" '.[$k] // empty' <<< "$status_json" 2>/dev/null || true)"
+    if [ -n "$rec_base" ] && git -C "$proj" rev-parse -q --verify "$rec_base^{commit}" >/dev/null 2>&1; then
+      base="$rec_base"; break
+    fi
+  done
+  [ -n "$base" ] || base="${ORCH_BASE_BRANCH:-main}"
 fi
 
 branch_exists=false

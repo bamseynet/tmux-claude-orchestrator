@@ -444,7 +444,8 @@ orch — tmux + Claude Code orchestrator
                                      (orch|human, see \`attach\`/\`detach\` above)
   ./orch collect <id> [--base <br>]  emit one JSON object: branch diff
                                      (git diff <base>...orch/<hash>/<id>, default
-                                     base: main) + the worker's status JSON —
+                                     base: the one spawn recorded, else
+                                     \$ORCH_BASE_BRANCH/main) + status JSON —
                                      the uniform deliverable surface for
                                      review/merge flows
   ./orch merge <id> [--auto] [--base <br>]
