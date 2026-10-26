@@ -77,19 +77,32 @@ v86_wdir() { printf '%s/../wt/%s/%s' "$1" "$(bash -c 'source "$1"; printf %s "$O
   [ "$status" -eq 0 ]
 }
 
-@test "B: a leftover lift in repo a does not block lift in sibling repo b" {
+@test "B: a leftover lift in repo a is refused in sibling b, leaving a's worktree, branch and record untouched (#177)" {
   run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/spawn.sh" lift sonnet "task"
   [ "$status" -eq 0 ]
   wa="$(libcall worker_wdir "$A" lift)"
   head_a="$(git -C "$wa" rev-parse HEAD)"
+  cp "$WORKERS/lift.json" "$BATS_TEST_TMPDIR/lift.before"
+  run env PROJECT_ROOT="$B" "$ORCH_DIR_SRC/spawn.sh" lift sonnet "task"
+  [ "$status" -ne 0 ]
+  cmp "$WORKERS/lift.json" "$BATS_TEST_TMPDIR/lift.before"
+  [ ! -e "$(libcall worker_wdir "$B" lift)" ]
+  [ -d "$wa" ]
+  [ "$(common_dir "$wa")" = "$(common_dir "$A")" ]
+  [ "$(git -C "$wa" rev-parse HEAD)" = "$head_a" ]
+}
+
+@test "B: after clean against a, lift spawns in sibling b and a's state stays gone (#177)" {
+  run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/spawn.sh" lift sonnet "task"
+  [ "$status" -eq 0 ]
+  run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/clean.sh" lift
+  [ "$status" -eq 0 ]
   run env PROJECT_ROOT="$B" "$ORCH_DIR_SRC/spawn.sh" lift sonnet "task"
   [ "$status" -eq 0 ]
   [[ "$output" != *spawn-failed* ]]
   wb="$(libcall worker_wdir "$B" lift)"
   [ "$(common_dir "$wb")" = "$(common_dir "$B")" ]
-  [ -d "$wa" ]
-  [ "$(common_dir "$wa")" = "$(common_dir "$A")" ]
-  [ "$(git -C "$wa" rev-parse HEAD)" = "$head_a" ]
+  [ "$(git -C "$A" worktree list | wc -l)" -eq 1 ]
 }
 
 @test "B: worker_wdir differs between sibling repos, equal for the same repo via symlink or trailing slash" {
