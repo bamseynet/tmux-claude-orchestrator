@@ -594,7 +594,7 @@ TUI_DRAFT_PLACEHOLDER_REGEX="$(_tui_pattern draft_placeholder_regex '^(Try "|for
 # The collapsed "[Pasted text ...]" chip the TUI shows for an unsent paste
 # still sitting in the input box (issue #128).
 TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?( \+[0-9]+ lines?)?\]')"
-# The tool-permission dialog ("Do you want to proceed?"). This can only ever
+# The tool-permission dialog ("Do you want to proceed?", or the file/fetch headers "Do you want to make this edit to X?" / "create X?" / "overwrite X?" / "allow Claude to fetch this content?" -- issue #196). This can only ever
 # render AFTER Claude Code has accepted a prompt and started acting on it, so
 # unlike every other signal above it is POSITIVE evidence an injection landed
 # (issue #133) -- never a reason to distrust the pane.
@@ -604,7 +604,7 @@ TUI_PASTE_CHIP_REGEX="$(_tui_pattern paste_chip_regex '\[Pasted text( #[0-9]+)?(
 # model prose, or in a --resume transcript sit inside other text -- an
 # unanchored match there would confirm a never-submitted task (positive
 # evidence below outranks the banner veto) or gate the injection forever.
-TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]│]*Do you want to proceed\?[[:space:]│]*$')"
+TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]│]*Do you want to [^?]*\?[[:space:]│]*$')"
 # The startup folder-trust dialog ("Is this a project you created or one you
 # trust?" / "trust this folder"). Unlike the permission dialog, this is a
 # PRE-acceptance gate -- it can appear before any prompt has ever reached
@@ -641,7 +641,7 @@ TUI_ASKUSER_DIALOG_REGEX="$(_tui_pattern askuser_dialog_regex '^[[:space:]│]*(
 TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.')"
 # Cursor on the selector's "Type something." row: the footer adds an editor hint.
 TUI_ASKUSER_TEXT_REGEX="$(_tui_pattern askuser_text_entry_regex '^[[:space:]│]*Enter to select.*ctrl\+g to edit.*Esc to cancel')"
-TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│❯]*1\.[[:space:]]*Yes')"
+TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*1\.[[:space:]]*Yes')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the

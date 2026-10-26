@@ -1,0 +1,6 @@
+● Here is what I found.
+  Do you want to keep going?
+  I can continue with the refactor.
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
