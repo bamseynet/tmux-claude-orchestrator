@@ -45,7 +45,9 @@ wait_for() { local _; for _ in $(seq 1 250); do "$@" && return 0; sleep 0.02; do
   wait_for grep -q 'master showing a dialog; requeued events' "$LOG"
   ! grep -q 'draft safety valve tripped' "$LOG" || return 1
   ! grep -qE 'send-keys|paste-buffer' "$CALLS" || return 1
-  grep -q '"id":"w1"' "$INBOX"
+  # The loop runs with normal_seconds=0, so each tick mv's the inbox away and
+  # requeues it: a single read can land in that gap. Poll instead.
+  wait_for grep -q '"id":"w1"' "$INBOX"
   # Selector answered: idle prompt, no draft -> delivered exactly once.
   printf '%s\n' '╭──────╮' '│ ❯    │' '╰──────╯' '  ? for shortcuts' > "$PANE"
   wait_for grep -q 'woke master with' "$LOG"
