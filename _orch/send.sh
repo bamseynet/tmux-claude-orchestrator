@@ -24,16 +24,12 @@ fi
 # Issue #155: a paste's trailing Enter selects a dialog's highlighted choice (the
 # trust dialog's default exits the session). Refuse free text while a dialog is up;
 # a bare numeric answer ("orch send <id> 1") is the deliberate way to answer one.
-if pane_has_dialog "$S:$id"; then
-  if [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
-    send_prompt "$S:$id" "$msg"
-    say "sent to $id"
-    exit 0
-  fi
+# The wait ends early on a dialog, so one that renders mid-wait is caught too.
+wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
+if [ "$wr" -eq 2 ] && ! [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
   say "$id is showing a dialog (not ready); not sending. Answer it with a number, e.g. \`orch send $id 1\`"
   exit 1
 fi
-
-wait_ready "$S:$id" 30 || say "(warning: $id looks busy; sending anyway)"
+[ "$wr" -ne 1 ] || say "(warning: $id looks busy; sending anyway)"
 send_prompt "$S:$id" "$msg"
 say "sent to $id"

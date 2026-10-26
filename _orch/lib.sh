@@ -611,6 +611,19 @@ wait_ready() { # <target> [timeout_s]
   return 1
 }
 
+# wait_ready, but a dialog ends the wait too (issue #155). is_ready refuses
+# dialogs, so a dialog that renders mid-wait would otherwise just run the clock
+# out -- and every caller's "sending anyway" fallback would then paste into it.
+wait_ready_or_dialog() { # <target> [timeout_s]  -> 0 ready, 2 dialog, 1 timeout
+  local t="${2:-60}" i=0
+  while :; do
+    pane_has_dialog "$1" && return 2
+    if is_ready "$1"; then sleep 0.4; return 0; fi
+    [ "$i" -lt "$t" ] || return 1
+    sleep 1; i=$((i+1))
+  done
+}
+
 # Spawn-time injection guards. When a send lands before the REPL is truly ready it
 # is silently lost and the worker sits idle at the startup screen. The startup
 # "Welcome" banner scrolls away once a prompt is actually accepted, so its absence

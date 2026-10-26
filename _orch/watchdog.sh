@@ -311,6 +311,11 @@ sweep_window() { # <window> <cooldown_seconds>
           log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
           wait_ready "$S:$w" 10 || true
+          if pane_has_dialog "$S:$w"; then
+            # a dialog can render during that wait (is_ready refuses dialogs)
+            log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
+            return 0
+          fi
           send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
           log "rate limit cleared on '$w'; sent retry nudge"
         fi

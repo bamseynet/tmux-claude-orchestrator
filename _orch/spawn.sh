@@ -472,16 +472,8 @@ tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' ${ORCH_GHOST_ENV
 #    Model is now set at launch via --model (see #30), so no slash-command dance.
 # A dialog counts as "arrived" here (issue #155: is_ready now refuses dialogs):
 # Guard 3 below owns waiting it out, and must not sit behind a 60s timeout first.
-_i=0
-until pane_has_dialog "$S:$id" || is_ready "$S:$id"; do
-  [ "$_i" -lt 60 ] || break
-  sleep 1; _i=$((_i+1))
-done
-if pane_has_dialog "$S:$id"; then :
-elif is_ready "$S:$id"; then sleep 0.4
-else
-  log "worker $id not ready in 60s; sending task anyway"
-fi
+_wr=0; wait_ready_or_dialog "$S:$id" 60 || _wr=$?
+[ "$_wr" -ne 1 ] || log "worker $id not ready in 60s; sending task anyway"
 
 # 6) inject the task.
 #    Guard 2 (anti-skill preamble): shape ONLY the injected prompt so the worker
@@ -494,10 +486,10 @@ preamble='[Orchestrated task — complete it directly. Do not invoke any skill u
 # (send_prompt) or a bare Enter into a pane showing a dialog. Both the permission
 # and folder-trust dialogs render a page of choices with a highlighted default, and
 # Enter selects it -- it does not "submit the input box". This matters even here,
-# BEFORE the first injection attempt: wait_ready()'s readiness regex includes the
-# bare "❯" glyph, which the trust dialog's highlighted-choice arrow ("❯ No, exit")
-# also matches, so wait_ready can report "ready" while the dialog -- not the REPL
-# prompt -- is actually on screen. That is #133's production repro: the trust
+# BEFORE the first injection attempt: the trust dialog's highlighted-choice arrow
+# ("❯ No, exit") matches the readiness regex's bare "❯" (is_ready vetoes dialogs
+# since #155, but the wait above returns on one either way), so a dialog -- not
+# the REPL prompt -- can be on screen here. That is #133's production repro: the trust
 # dialog's Enter is destructive (exits the session), and --dangerously-skip-permissions
 # does not suppress it. If a dialog is already up, skip this send entirely; the
 # retry loop below sends the task itself (a paste, not a bare Enter into an
@@ -598,7 +590,6 @@ hook_reported() {
 # a paste+Enter there would run the task text as shell commands. The shell is
 # checked before the REPL wait too, so an exited claude doesn't burn 15s first.
 # Returns 2 WITHOUT sending when a dialog is (back) on screen after that wait:
-# wait_ready's bare-"❯" match is satisfied by a dialog's highlighted choice, so
 # a dialog rendering during the wait would otherwise take the paste's Enter.
 send_task() {
   if shell_persists; then

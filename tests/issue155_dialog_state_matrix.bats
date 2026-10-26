@@ -93,7 +93,14 @@ echo "\$@" >> "$CALLS"
 case "\${1:-}" in
   list-sessions) echo "orch" ;;
   list-windows) printf '%s\n' orchestrator w ;;
-  capture-pane) cat "$PANE" ;;
+  capture-pane)
+    # optional screen switch after N captures (a dialog rendering mid-wait)
+    if [ -f "$PANE.next" ]; then
+      n=\$(( \$(cat "$PANE.count" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$PANE.count"
+      [ "\$n" -lt "\$(cat "$PANE.after")" ] || mv "$PANE.next" "$PANE"
+    fi
+    cat "$PANE" ;;
+  paste-buffer) [ -f "$PANE.onpaste" ] && mv "$PANE.onpaste" "$PANE" ;;
 esac
 exit 0
 STUB
@@ -130,7 +137,41 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   stub_tmux trust
   run bash "$BATS_TEST_DIRNAME/../_orch/ask.sh" w hi
   [ "$status" -ne 0 ]
+  [[ "$output" == *"dialog"* ]]
   no_keys_sent
+}
+
+# switch_after <n> <screen>: the stub pane shows <screen> from capture <n> on.
+switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n' "${!var}" > "$PANE.next"; }
+
+@test "send.sh refuses a dialog that renders while it waits for ready" {
+  stub_tmux busy
+  switch_after 4 perm
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"dialog"* ]]
+  [ -f "$PANE.count" ]   # the switch really happened mid-wait
+  no_keys_sent
+}
+
+@test "ask.sh returns at once when the answer stops on a dialog" {
+  stub_tmux idle
+  local var="SCREEN_perm"; printf '%s\n' "${!var}" > "$PANE.onpaste"
+  SECONDS=0
+  ORCH_ASK_TIMEOUT=30 run bash "$BATS_TEST_DIRNAME/../_orch/ask.sh" w hi
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"showing a dialog"* ]]
+  [ "$SECONDS" -lt 15 ]
+}
+
+@test "wait_ready_or_dialog: 2 on a dialog, 0 when ready, 1 on timeout" {
+  local rc
+  fake_tmux_set_pane "orch" "w" "$SCREEN_trust"
+  rc=0; wait_ready_or_dialog "$T" 0 || rc=$?; [ "$rc" -eq 2 ]
+  fake_tmux_set_pane "orch" "w" "$SCREEN_idle"
+  rc=0; wait_ready_or_dialog "$T" 0 || rc=$?; [ "$rc" -eq 0 ]
+  fake_tmux_set_pane "orch" "w" "$SCREEN_busy"
+  rc=0; wait_ready_or_dialog "$T" 0 || rc=$?; [ "$rc" -eq 1 ]
 }
 
 @test "send.sh still sends to an ordinary ready pane" {

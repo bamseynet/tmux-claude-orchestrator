@@ -549,6 +549,11 @@ heartbeat_main() {
         # of burning that timeout; master_dead_alert above already surfaced it.
         printf '%s\n' "$events" >> "$INBOX"
         log "master window down; requeued events"
+      elif pane_has_dialog "$S:$ORCH_WINDOW"; then
+        # issue #155: is_ready refuses dialogs, so wait_ready below would burn
+        # its whole 45s every tick on a dialog that never clears by itself.
+        printf '%s\n' "$events" >> "$INBOX"
+        log "master showing a dialog; requeued events"
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
       elif ! wait_ready "$S:$ORCH_WINDOW" 45; then
         # Master busy — requeue and try again next tick.

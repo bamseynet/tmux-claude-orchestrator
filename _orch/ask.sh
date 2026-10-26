@@ -25,14 +25,20 @@ if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id";
 fi
 
 # Issue #155: never paste into a dialog -- the trailing Enter selects its default.
-if pane_has_dialog "$S:$id"; then
+# The wait ends early on a dialog, so one that renders mid-wait is caught too.
+wr=0; wait_ready_or_dialog "$S:$id" 30 || wr=$?
+if [ "$wr" -eq 2 ]; then
   say "$id is showing a dialog (not ready); not asking"; exit 1
 fi
-
-wait_ready "$S:$id" 30 || say "(warning: $id looks busy; asking anyway)"
+[ "$wr" -ne 1 ] || say "(warning: $id looks busy; asking anyway)"
 send_prompt "$S:$id" "$msg"
 
-if ! wait_ready "$S:$id" "${ORCH_ASK_TIMEOUT:-120}"; then
+# A dialog raised while answering will not clear by itself: show it now
+# instead of sitting out the whole timeout.
+wr=0; wait_ready_or_dialog "$S:$id" "${ORCH_ASK_TIMEOUT:-120}" || wr=$?
+if [ "$wr" -eq 2 ]; then
+  say "(warning: $id is showing a dialog; showing pane as-is)"
+elif [ "$wr" -eq 1 ]; then
   say "(warning: $id did not return to ready within ${ORCH_ASK_TIMEOUT:-120}s; showing pane as-is)"
 fi
 
