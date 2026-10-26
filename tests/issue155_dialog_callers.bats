@@ -111,6 +111,9 @@ hb_run_with_event() {
 @test "heartbeat: a dialog rendering mid-wait requeues at once, not after 45s" {
   hb_setup; printf '%s\n' "$SCREEN_busy" > "$PANE"
   hb_run_with_event
+  # The event must be drained (the wait under way on the busy pane) before the
+  # dialog renders, or this only re-tests the already-up case.
+  wait_for test ! -s "$INBOX"
   sleep 1; printf '%s\n' "$SCREEN_perm" > "$PANE"
   wait_for grep -q 'master showing a dialog; requeued events' "$LOG"
   touch "$STATE_DIR/.stop"; wait "$HB_PID" 2>/dev/null || true

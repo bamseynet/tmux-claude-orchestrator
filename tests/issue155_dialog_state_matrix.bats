@@ -147,10 +147,24 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
 @test "send.sh refuses a dialog that renders while it waits for ready" {
   stub_tmux busy
   switch_after 4 perm
+  SECONDS=0
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
   [ "$status" -ne 0 ]
   [[ "$output" == *"dialog"* ]]
-  [ -f "$PANE.count" ]   # the switch really happened mid-wait
+  [ ! -f "$PANE.next" ]   # the switch really happened mid-wait
+  [ "$SECONDS" -lt 15 ]   # and ended the 30s wait early
+  no_keys_sent
+}
+
+@test "send.sh refuses a dialog that renders during the post-ready settle" {
+  stub_tmux idle
+  # captures 1-4 are the poll that finds the pane ready; 5 is the re-check
+  # after the settle sleep
+  switch_after 5 perm
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"dialog"* ]]
+  [ ! -f "$PANE.next" ]
   no_keys_sent
 }
 

@@ -618,7 +618,9 @@ wait_ready_or_dialog() { # <target> [timeout_s]  -> 0 ready, 2 dialog, 1 timeout
   local t="${2:-60}" i=0
   while :; do
     pane_has_dialog "$1" && return 2
-    if is_ready "$1"; then sleep 0.4; return 0; fi
+    # Re-check after the settle: a dialog rendering inside it would otherwise
+    # get a "ready" verdict and take the caller's paste+Enter.
+    if is_ready "$1"; then sleep 0.4; pane_has_dialog "$1" && return 2; return 0; fi
     [ "$i" -lt "$t" ] || return 1
     sleep 1; i=$((i+1))
   done
