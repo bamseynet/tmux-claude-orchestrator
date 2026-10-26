@@ -240,6 +240,8 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
   # A glyph-less choice row would make send.sh refuse: fail-safe, not a submit.
   SCREEN_dlgchip="❯ [Pasted text #1 +5 lines]
 $SCREEN_trust"
+  # Precondition: this must take the wr=2 (dialog) path, not a 30s timeout.
+  fake_tmux_set_pane "orch" "w" "$SCREEN_dlgchip"; pane_has_dialog "$T"
   stub_tmux dlgchip
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
   [ "$status" -eq 0 ]
@@ -258,6 +260,9 @@ $SCREEN_trust"
 │ ❯ [Pasted text #1 +5 lines] │
 ╰──────────────╯
   ? for shortcuts'
+  # Precondition: the stale text really is dialog-shaped, so the numeric send
+  # passes the dialog gate and only the chip veto can stop it.
+  fake_tmux_set_pane "orch" "w" "$SCREEN_stalechip"; pane_has_dialog "$T"
   stub_tmux stalechip
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
   [ "$status" -ne 0 ]
