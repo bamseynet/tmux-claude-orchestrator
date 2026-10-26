@@ -2,10 +2,10 @@
 # Issue #155: TUI state detectors keyed on one glyph ("❯") were fooled by dialogs.
 # Matrix of (screen x detector), plus call-site proof for send.sh / ask.sh.
 #
-# Fixture provenance: `trust` is the pane captured in issue #133's comment
-# (Claude Code folder-trust dialog, worker `lift`). `perm` is the tool-permission
-# dialog with a highlighted `❯ 1. Yes` row -- that row is our ASSUMPTION about the
-# real render (PR #154's fixture omitted it); re-capture when a real one is seen.
+# Fixture provenance: `trust` is a real capture (Claude Code 2.1.310, quoted in
+# issue #179 from a throwaway-socket launch in a fresh dir). `perm` is NOT a real
+# capture: the `❯ 1. Yes` row is our ASSUMPTION about the real render (PR #154's
+# fixture omitted it); no real permission dialog was captured (#179 A2 / part B).
 # banner/chip/busy/idle are shapes already used by injectfix_* / panestate_* tests.
 
 setup() {
@@ -26,11 +26,15 @@ setup() {
 │ ❯            │
 ╰──────────────╯
   ? for shortcuts'
-  SCREEN_trust=' Quick safety check: Is this a project you created or one you trust? ...
+  # Real capture, Claude Code 2.1.310 (per issue #179); note the leading space before ❯.
+  SCREEN_trust=' Accessing workspace:
+ /tmp/scratch/fresh179-18039
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what'"'"'s in this folder first.
  Claude Code'"'"'ll be able to read, edit, and execute files here.
  Security guide
-❯ No, exit
-  Yes, I trust this folder
+ ❯ No, exit
+   Yes, I trust this folder
  Enter to confirm · Esc to cancel'
   SCREEN_perm=' Bash command
    rm -rf build
@@ -193,4 +197,25 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
   [ "$status" -eq 0 ]
   grep -q 'paste-buffer' "$CALLS"
+}
+
+# --- #179 A: an unsent paste chip is not a dialog, but pasting + Enter onto it
+# would submit the stuck chip together with the new text. The veto lives in
+# send.sh/ask.sh (pane_has_pending_paste), NOT in is_ready, so spawn's send_task
+# and the heartbeat is_ready checks keep their behaviour; hence `is_ready: chip Y`.
+
+@test "send.sh refuses to paste onto an unsent paste chip" {
+  stub_tmux chip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
+}
+
+@test "ask.sh refuses to paste onto an unsent paste chip" {
+  stub_tmux chip
+  run bash "$BATS_TEST_DIRNAME/../_orch/ask.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
 }

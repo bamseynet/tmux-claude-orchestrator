@@ -31,5 +31,12 @@ if [ "$wr" -eq 2 ] && ! [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
   exit 1
 fi
 [ "$wr" -ne 1 ] || say "(warning: $id looks busy; sending anyway)"
+# Issue #179: an unsent paste chip is not a dialog, but our paste + Enter would
+# submit the stuck chip together with the new text. Vetoed here rather than in
+# is_ready so spawn's send_task and the heartbeat is_ready checks are unchanged.
+if pane_has_pending_paste "$S:$id"; then
+  say "$id has an unsent paste in its input box; not sending. Clear it (or press Enter) first"
+  exit 1
+fi
 send_prompt "$S:$id" "$msg"
 say "sent to $id"
