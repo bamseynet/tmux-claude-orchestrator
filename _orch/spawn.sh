@@ -397,6 +397,13 @@ if [ "$mode" = "--no-worktree" ]; then
 else
   mkdir -p "$wdir/.claude"
   settings_file="$wdir/.claude/settings.local.json"
+  # Issue #185: keep spawn's own file out of git status, so the #37 reuse guard
+  # does not refuse a respawn and `git add -A` cannot stage it. A self-ignoring
+  # .claude/.gitignore is per-worktree (info/exclude is shared with the main
+  # checkout). Never replace one the repo tracks.
+  if ! git -C "$wdir" ls-files --error-unmatch .claude/.gitignore >/dev/null 2>&1; then
+    printf '/settings.local.json\n/.gitignore\n' > "$wdir/.claude/.gitignore"
+  fi
 fi
 
 # --allow entries are translated into valid permissions.allow tool rules (issue #78):
