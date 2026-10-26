@@ -56,7 +56,9 @@ setup() {
            'Concurrent subagent limit reached. You can run 4 subagents at once.' \
            'Budget limit reached ($5.00)' \
            'HTTP 429 Too Many Requests' \
-           'the API is overloaded right now'; do
+           'the API is overloaded right now' \
+           '| API Error: 429 Too Many Requests' \
+           '● You'"'"'ve hit your first milestone, nice.'; do
     run rate_limited "$t"
     [ "$status" -ne 0 ] || { echo "false positive: $t"; return 1; }
   done

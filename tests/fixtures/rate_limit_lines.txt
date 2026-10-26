@@ -35,3 +35,5 @@ Usage limit reached · continuing automatically at 3pm · esc to cancel
 #   goal-mode pause reasons
 Goal paused · the request was rate limited · send a message to retry
 Goal paused · usage limit reached · send a message after it resets to continue
+#   "Fast limit reached and temporarily disabled · resets in ${t}"
+Fast limit reached and temporarily disabled · resets in 4m

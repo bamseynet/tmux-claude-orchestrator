@@ -60,7 +60,7 @@ wd_pane() {
 
 @test "watchdog: a nudge skipped for a dialog is dropped, not replayed later" {
   # A permission dialog follows a fresh tool call, so the worker has resumed; a
-  # deferred "re-run the exact same command" would re-run whatever it approved.
+  # deferred retry nudge would prompt a repeat of whatever it approved.
   wd_setup; wd_pane 1
   sweep_window w1 65 </dev/null >/dev/null 2>&1 || true
   [ ! -f "$SENT" ]

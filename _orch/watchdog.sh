@@ -39,7 +39,7 @@ background_wait="$(jq -r '.watchdog.background_wait_seconds // 1800' "$cfg")"
 # below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
 realert_max="$(jq -r '.watchdog.realert_max_seconds // 1800' "$cfg")"
-rl_regex="$(jq -r '.watchdog.rate_limit_regex // "^[^[:alnum:]+#>|-]*(API Error[^[:alnum:]]*(Request rejected[^[:alnum:]]*429|Server is temporarily limiting requests|Repeated 529|429|529|rate limit|overloaded)|Request rejected[^[:alnum:]]*429|[[:alpha:]]+ is experiencing high load|Fast mode overloaded|You.ve hit your |You.ve reached your [[:alpha:]]+ limit|You.re out of usage credits|Your org(anization)? is out of usage|(Claude (AI )?)?(Session|Weekly|Opus|Sonnet|Fable|Usage) limit reached|Goal paused[^[:alnum:]]+(the request was rate limited|usage limit reached))"' "$cfg")"
+rl_regex="$(jq -r '.watchdog.rate_limit_regex // "^[^[:alnum:]+#>|-]*(API Error[^[:alnum:]]*(Request rejected[^[:alnum:]]*429|Server is temporarily limiting requests|Repeated 529|429|529|rate limit|overloaded)|Request rejected[^[:alnum:]]*429|[[:alpha:]]+ is experiencing high load|Fast mode overloaded|You.ve hit your [^.]*(limit|budget)|You.ve reached your [[:alpha:]]+ limit|You.re out of usage credits|Your org(anization)? is out of usage|(Claude (AI )?)?(Session|Weekly|Opus|Sonnet|Fable|Usage|Fast) limit reached|Goal paused[^[:alnum:]]+(the request was rate limited|usage limit reached))"' "$cfg")"
 # reap_after: how long a terminal (done/spawn-failed) worker's state file survives
 # before the sweep reaps it (issue #46). Retention, not instant delete, so
 # `orch status` still shows recent history instead of vanishing the moment a
