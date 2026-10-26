@@ -55,7 +55,19 @@ snapshot() { # prints b's git state + queue
   git -C "$B" worktree list; git -C "$B" branch
   cat "$QUEUE" 2>/dev/null || true
 }
+# drop a repo's w1 worktree+branch so the next spawn creates fresh (a reused
+# worktree carries the first spawn's .claude/ settings and is not "clean" in CI)
+reset_wt() { # <repo>
+  local w; w="$(libcall worker_wdir "$1" w1)"
+  git -C "$1" worktree remove --force "$w" 2>/dev/null || true
+  git -C "$1" worktree prune
+  git -C "$1" branch -D "$(libcall worker_branch w1)" >/dev/null 2>&1 || true
+}
 log_file() { find "$ORCH_ROOT" -name orch.log -print -quit; }
+
+expect_spawned() { # diagnostics: show why a spawn that should succeed did not
+  [ "$status" -eq 0 ] || { echo "spawn rc=$status: $output" >&2; tail -5 "$(log_file)" >&2; return 1; }
+}
 
 assert_refused() { # cmd run already; compares to pre-snapshot
   [ "$status" -ne 0 ]
@@ -93,23 +105,23 @@ before() { cp "$WORKERS/w1.json" "$BATS_TEST_TMPDIR/w1.before"; snapshot > "$BAT
   for p in "$A" "$R/a-link" "$A/"; do
     rec done
     run spawn_in "$p" w1 sonnet "task"
-    [ "$status" -eq 0 ]
+    expect_spawned
     [[ "$output" != *refused* ]]
     [ "$(jq -r .status "$WORKERS/w1.json")" = "working" ]
-    git -C "$A" worktree prune
+    reset_wt "$A"
   done
 }
 
 @test "not blocked: no target_repo, vanished repo, or record cleaned" {
   rec working ""
   run spawn_in "$B" w1 sonnet "task"
-  [ "$status" -eq 0 ]
-  rm -f "$WORKERS/w1.json"
+  expect_spawned
+  rm -f "$WORKERS/w1.json"; reset_wt "$B"
   rec working "$R/gone"
   run spawn_in "$B" w1 sonnet "task"
-  [ "$status" -eq 0 ]
+  expect_spawned
   [ "$(jq -r .target_repo "$WORKERS/w1.json")" = "$B" ]
-  rm -f "$WORKERS/w1.json"
+  rm -f "$WORKERS/w1.json"; reset_wt "$B"
   run spawn_in "$B" w1 sonnet "task"
   [ "$status" -eq 0 ]
 }
