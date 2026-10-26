@@ -441,7 +441,7 @@ heartbeat_main() {
   # single misdetection (or a genuinely long-lived operator draft) must never be
   # able to starve delivery forever. Once EITHER bound trips — N consecutive
   # draft-ticks or T seconds since the first one — force-deliver regardless.
-  local max_draft_ticks max_draft_secs draft_requeue_count=0 draft_requeue_since=0
+  local max_draft_ticks max_draft_secs draft_requeue_count=0 draft_requeue_since=0 hb_wr=0
   max_draft_ticks="$(jq -r '.heartbeat.max_draft_requeue_ticks // 10' "$CONFIG")"
   max_draft_secs="$(jq -r '.heartbeat.max_draft_requeue_seconds // 300' "$CONFIG")"
 
@@ -550,10 +550,14 @@ heartbeat_main() {
         printf '%s\n' "$events" >> "$INBOX"
         log "master window down; requeued events"
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
-      elif ! wait_ready "$S:$ORCH_WINDOW" 45; then
-        # Master busy — requeue and try again next tick.
+      # issue #155: a dialog (already up, or rendering mid-wait) ends the wait at
+      # once -- is_ready refuses dialogs, so a plain wait_ready would burn its
+      # whole 45s every tick on a dialog that never clears by itself.
+      elif hb_wr=0; wait_ready_or_dialog "$S:$ORCH_WINDOW" 45 || hb_wr=$?; [ "$hb_wr" -ne 0 ]; then
+        # Master busy or on a dialog — requeue and try again next tick.
         printf '%s\n' "$events" >> "$INBOX"
-        log "master busy; requeued events"
+        if [ "$hb_wr" -eq 2 ]; then log "master showing a dialog; requeued events"
+        else log "master busy; requeued events"; fi
       else
         # Issue #38: an idle-looking input box can still hold the operator's
         # unsent draft. Injecting here would paste into it and submit it via the

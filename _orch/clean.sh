@@ -119,6 +119,9 @@ fi
 #    shared repo root; it must not outlive the worker either)
 rm -f "$WORKERS_DIR/$id.json"
 rm -f "$STATE_DIR/.wd-$id"
+# the rate-limit cooldown marker too: a reused id would otherwise inherit a
+# past-due one and get a stale retry nudge on its first sweep.
+rm -f "$STATE_DIR/.rl-$id"
 rm -f "$STATE_DIR/settings/$id.json"
 
 # 7) this worker's status-file lock (issue #79): _worker_lock_file() from lib.sh,

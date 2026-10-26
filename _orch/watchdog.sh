@@ -283,7 +283,7 @@ liveness_check() { # <w> <pane_text> <now>
 sweep_window() { # <window> <cooldown_seconds>
   local w="$1" cd="$2"
   [ "$w" = "$ORCH_WINDOW" ] && return 0
-  local pane now rl_result rl_hit
+  local pane now rl_result rl_hit wd_wr
   pane="$(pane_tail "$S:$w" 25)"
 
   now="$(date +%s)"
@@ -306,8 +306,15 @@ sweep_window() { # <window> <cooldown_seconds>
         # Still log (history/reporting unaffected), just don't inject.
         if is_human_managed "$w"; then
           log "rate limit cleared on '$w'; skipping retry nudge (human-managed)"
+        elif ! { wd_wr=0; wait_ready_or_dialog "$S:$w" 10 || wd_wr=$?; [ "$wd_wr" -ne 2 ]; }; then
+          # issue #155: the nudge's trailing Enter would select the dialog's
+          # default. The wait ends early on a dialog already up or rendering
+          # mid-wait (is_ready refuses dialogs). The nudge is dropped, not
+          # re-armed: a permission dialog only follows a fresh tool call, so the
+          # worker has already resumed -- a deferred "re-run the exact same
+          # command" would run that command a second time.
+          log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
-          wait_ready "$S:$w" 10 || true
           send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
           log "rate limit cleared on '$w'; sent retry nudge"
         fi

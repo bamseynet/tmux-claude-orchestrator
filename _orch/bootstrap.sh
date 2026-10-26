@@ -193,8 +193,12 @@ if ! session_exists "$S"; then
     fi
   fi
   tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}" Enter
-  if wait_ready "$S:$ORCH_WINDOW" 90; then
+  wr=0; wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
+  if [ "$wr" -eq 0 ]; then
     send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt "$here")"
+  elif [ "$wr" -eq 2 ]; then
+    # issue #155: e.g. the Bypass Permissions warning; its default exits claude.
+    log "master is showing a startup dialog; answer it in the window, then have it read $here/CLAUDE.md"
   else
     log "master not ready in 90s; open the window and read $here/CLAUDE.md manually"
   fi

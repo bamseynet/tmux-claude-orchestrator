@@ -594,6 +594,10 @@ is_busy() { # <target>  -> 0 if busy
 # Ready if not busy AND the input prompt box is visible.
 is_ready() { # <target>  -> 0 if idle & ready for input
   is_busy "$1" && return 1
+  # Issue #155: a dialog's highlighted choice ("❯ No, exit", "❯ 1. Yes") matches
+  # the bare "❯" in TUI_READY_REGEX, but Enter there selects that choice instead
+  # of submitting the input box. One veto here covers every wait_ready caller.
+  pane_has_dialog "$1" && return 1
   pane_tail "$1" 15 | grep -qE "$TUI_READY_REGEX"
 }
 
@@ -605,6 +609,21 @@ wait_ready() { # <target> [timeout_s]
     sleep 1; i=$((i+1))
   done
   return 1
+}
+
+# wait_ready, but a dialog ends the wait too (issue #155). is_ready refuses
+# dialogs, so a dialog that renders mid-wait would otherwise just run the clock
+# out -- and every caller's "sending anyway" fallback would then paste into it.
+wait_ready_or_dialog() { # <target> [timeout_s]  -> 0 ready, 2 dialog, 1 timeout
+  local t="${2:-60}" i=0
+  while :; do
+    pane_has_dialog "$1" && return 2
+    # Re-check after the settle: a dialog rendering inside it would otherwise
+    # get a "ready" verdict and take the caller's paste+Enter.
+    if is_ready "$1"; then sleep 0.4; pane_has_dialog "$1" && return 2; return 0; fi
+    [ "$i" -lt "$t" ] || return 1
+    sleep 1; i=$((i+1))
+  done
 }
 
 # Spawn-time injection guards. When a send lands before the REPL is truly ready it
