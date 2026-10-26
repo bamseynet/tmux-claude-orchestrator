@@ -473,6 +473,10 @@ write_worker_status "$id" --arg id "$id" --arg m "$model" --arg t "$task" --arg 
   '{id:$id, status:"spawning", model:$m, task:$t, created:$u, updated:$u, target_repo:$r, wdir:$wdir, mode:$wmode}
    + (if $base_sha == "" then {} else {base:$base, base_sha:$base_sha} end)'
 
+# 3b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
+# root_dirty_tick can tell a worker's Bash write from the operator's own edits.
+[ "$mode" = "--no-worktree" ] || root_baseline_write "$proj" "$id" || true
+
 # 4) new window + launch a full Claude Code session
 # (append after the last window; bare `-t "$S"` can fail with "index 0 in use"
 #  on base-index 0 sessions, so target an explicit end-of-session slot)

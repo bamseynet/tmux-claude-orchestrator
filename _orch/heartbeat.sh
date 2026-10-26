@@ -413,6 +413,62 @@ master_reset_tick() { # <session:window>
   _master_reset_event master-reset "$old_sid"
 }
 
+# Issue #178 (#152 direction 2): backstop for Bash-made writes into the target
+# repo's main checkout, which the PreToolUse guard cannot see. One call = one tick.
+# Per distinct target_repo with >=1 live mode:"worktree" worker, run ONE
+# `git status --porcelain` and alert on entries absent from the union of those
+# workers' spawn-time baselines (so an operator edit made between two spawns is
+# not blamed). Bash writes cannot be attributed: the event lists the live worker
+# ids without claiming which one wrote. A repo where any such worker lacks a
+# baseline (spawned before this existed) is skipped rather than guessed at.
+# Reported entries are persisted per repo so a second tick is silent; an entry
+# that clears and returns re-alerts. Known limitation: a Bash `git commit` /
+# `checkout` into the root leaves it clean and is NOT detected (a HEAD comparison
+# would false-positive on an operator `git pull`).
+root_dirty_tick() {
+  shopt -s nullglob
+  local f st mode repo id real
+  local pairs="" repos=""
+  for f in "$WORKERS_DIR"/*.json; do
+    IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
+    case "$st" in done|spawn-failed|queued|"") continue ;; esac
+    [ "$mode" = worktree ] && [ -n "$repo" ] && [ -d "$repo" ] || continue
+    [ -n "$id" ] || id="$(basename "$f" .json)"
+    real="$(_phys_dir "$repo")" || real="$repo"
+    pairs+="$real"$'\t'"$id"$'\n'
+  done
+  [ -n "$pairs" ] || return 0
+  repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
+  local cur new bl union rep_f paths wl ev wids
+  while IFS= read -r real; do
+    wids="$(printf '%s' "$pairs" | awk -F'\t' -v r="$real" '$1==r{print $2}')"
+    union=""; bl=1
+    while IFS= read -r id; do
+      f="$(root_baseline_file "$real" "$id")"
+      [ -f "$f" ] || { bl=0; break; }
+      union+="$(cat "$f")"$'\n'
+    done <<<"$wids"
+    [ "$bl" = 1 ] || continue
+    cur="$(root_porcelain "$real" | grep -vxFf <(printf '%s' "$union") || true)"
+    rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
+    mkdir -p "$STATE_DIR/root-dirty"
+    new="$cur"
+    if [ -n "$cur" ] && [ -f "$rep_f" ]; then
+      new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
+    fi
+    printf '%s' "$cur" > "$rep_f"
+    [ -n "$new" ] || continue
+    paths="$(printf '%s\n' "$new" | cut -c4- | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    ev="$(jq -nc --arg r "$real" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
+      '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p,workers:$w,ts:$ts,
+        note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
+    printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
+    printf '%s\n' "$ev" >> "$INBOX"
+    log "root-dirty: new entries in $real while worktree workers live: $(jq -r '.paths|join(" ")' <<<"$ev")"
+  done <<<"$repos"
+  return 0
+}
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -486,6 +542,7 @@ heartbeat_main() {
     if master_window_alive "$S:$ORCH_WINDOW"; then
       master_dead_clear
       master_reset_tick "$S:$ORCH_WINDOW"
+      root_dirty_tick
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi

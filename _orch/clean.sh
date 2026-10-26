@@ -123,6 +123,7 @@ rm -f "$STATE_DIR/.wd-$id"
 # past-due one and get a stale retry nudge on its first sweep.
 rm -f "$STATE_DIR/.rl-$id"
 rm -f "$STATE_DIR/settings/$id.json"
+rm -f "$(root_baseline_file "$proj" "$id")"   # issue #178
 
 # 7) this worker's status-file lock (issue #79): _worker_lock_file() from lib.sh,
 #    plus any mkdir-fallback ".lock.d" directory the portable lock shim (#76)

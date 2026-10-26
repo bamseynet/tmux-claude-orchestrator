@@ -1417,6 +1417,26 @@ clear_human_managed() { # <id>
 
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
+# --- Root-dirty baseline (issue #178, #152 direction 2) ------------------------------
+# A worktree-mode worker must not write the target repo's main checkout, but a Bash
+# write (sed -i, >, git apply) bypasses the PreToolUse hook. spawn snapshots the
+# checkout's `git status --porcelain` here; heartbeat's root_dirty_tick alerts on
+# entries absent from every live worker's baseline. Keyed on the repo (hash of its
+# realpath) AND the id, so a re-used id in another repo never reads this snapshot.
+root_baseline_file() { # <project_root> <id>
+  local real
+  real="$(_phys_dir "$1")" || real="${1%/}"
+  printf '%s/root-baseline/%s.%s' "$STATE_DIR" "$(_orch_session_hash "$real")" "$2"
+}
+# File-level status of <project_root> (untracked files listed individually).
+root_porcelain() { # <project_root>
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" status --porcelain -uall 2>/dev/null
+}
+root_baseline_write() { # <project_root> <id>
+  local f; f="$(root_baseline_file "$1" "$2")"
+  mkdir -p "$(dirname "$f")" && root_porcelain "$1" > "$f.tmp" && mv -f "$f.tmp" "$f"
+}
+
 # Workers actually holding a tmux window + claude process right now: every status
 # except done/spawn-failed (terminal — no process left) and queued (not launched
 # yet, so it holds no slot itself — counting it would deadlock the gate, since a
