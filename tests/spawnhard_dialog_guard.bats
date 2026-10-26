@@ -69,6 +69,14 @@ EOF
   PATH="$STUBBIN:$PATH"
 }
 
+teardown() {
+  # Kill by captured PID only (never by name).
+  if [ -n "${WRAP_PID:-}" ]; then
+    pkill -P "$WRAP_PID" 2>/dev/null || true
+    kill "$WRAP_PID" 2>/dev/null || true
+  fi
+}
+
 # A bare `send-keys -t <target> Enter` call, i.e. exactly the one that would be
 # consumed by a dialog as "select the highlighted choice" -- distinct from the
 # launch line's `send-keys ... claude ... Enter` and from a paste-buffer's own
@@ -579,6 +587,40 @@ EOF2
   run "$SPAWN" w10 sonnet "do the thing" --no-worktree
   [ "$status" -eq 0 ]
   [[ "$output" == *"spawned w10 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+}
+
+@test "claude behind a non-exec shell wrapper is not mistaken for an exited claude" {
+  # The pane's foreground command is the wrapper's bash, but a claude/node
+  # process runs under the pane: the task must be sent, not held back forever.
+  cp "$(command -v -p sleep 2>/dev/null || echo /bin/sleep)" "$BATS_TEST_TMPDIR/node"
+  bash -c '"$1" 300; true' _ "$BATS_TEST_TMPDIR/node" &
+  WRAP_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -P "$WRAP_PID" >/dev/null && break; /bin/sleep 0.1; done
+  echo '❯ ' > "$PANE_FILE"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message)
+    case "\$*" in
+      *pane_current_command*) echo bash ;;
+      *pane_pid*) echo "$WRAP_PID" ;;
+    esac ;;
+  capture-pane) cat "$PANE_FILE" 2>/dev/null ;;
+  paste-buffer) echo 'esc to interrupt' > "$PANE_FILE" ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w11 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w11 (sonnet)"* ]]
   paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
   [ "$paste_calls" -eq 1 ]
 }

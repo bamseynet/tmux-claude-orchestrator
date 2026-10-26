@@ -405,11 +405,29 @@ preamble='[Orchestrated task — complete it directly. Do not invoke any skill u
 # startup (bad --resume id, auth failure, ...) and a shell prompt glyph such as
 # "❯" satisfied wait_ready -- a paste+Enter there runs the task text as shell
 # commands. send_task() below re-checks before any later send.
+# A claude started through a shell wrapper that doesn't exec also leaves a shell
+# as the pane's foreground command, so a shell only counts once no claude/node
+# process is running anywhere under the pane.
 pane_runs_shell() {
+  local pid
   case "$(tmux display-message -p -t "$S:$id" '#{pane_current_command}' 2>/dev/null)" in
-    sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh|nu|xonsh|elvish|-sh|-bash|-zsh|-dash|-ksh|-fish|-tcsh|-csh) return 0 ;;
+    sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh|nu|xonsh|elvish|-sh|-bash|-zsh|-dash|-ksh|-fish|-tcsh|-csh) ;;
+    *) return 1 ;;
   esac
-  return 1
+  pid="$(tmux display-message -p -t "$S:$id" '#{pane_pid}' 2>/dev/null)"
+  [ -n "$pid" ] || return 0
+  # shellcheck disable=SC2016  # awk program, not shell
+  ps -A -o pid= -o ppid= -o comm= 2>/dev/null | awk -v root="$pid" '
+    { par[$1] = $2; c = $3; sub(/.*\//, "", c); name[$1] = c }
+    END {
+      for (x in par) {
+        if (name[x] != "claude" && name[x] != "node") continue
+        y = x
+        while ((y in par) && y != root && y > 1) y = par[y]
+        if (y == root) exit 1
+      }
+      exit 0
+    }'
 }
 # The shell is still there after a bounded grace window (0 = it persists). Right
 # after the launch line the pane is briefly still the shell -- and a "❯" prompt
