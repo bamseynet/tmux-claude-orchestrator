@@ -194,7 +194,7 @@ export SESSION_NAME SESSION_NAME_ERROR    # tmux session name
 # Layout: <repo>/../wt/<ORCH_HASH>/<repo-hash>/<id>.
 worker_wdir() { # <project_root> <id> -> this install's worktree path for <id>
   local real
-  real="$(cd "$1" 2>/dev/null && pwd -P)" || real="${1%/}"
+  real="$(CDPATH='' cd -- "$1" 2>/dev/null && pwd -P)" || real="${1%/}"
   printf '%s/../wt/%s/%s/%s' "$1" "$ORCH_HASH" "$(_orch_session_hash "$real")" "$2"
 }
 
@@ -204,7 +204,9 @@ v86_worker_wdir() { printf '%s/../wt/%s/%s' "$1" "$ORCH_HASH" "$2"; } # <project
 
 # _git_common_dir <dir> -> canonical absolute git common dir, nonzero if not a git dir
 # (same --path-format=absolute form ensure_related_repo uses; it resolves symlinks)
-_git_common_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
+# Strip GIT_DIR & co: if exported (git hooks, rebase --exec) they override -C and
+# every directory would report the same common dir.
+_git_common_dir() { env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
 
 # same_repo <dir_a> <dir_b> -> 0 iff both are checkouts sharing one git common dir
 same_repo() {
@@ -228,7 +230,25 @@ resolve_worker_wdir() {
 # foreign_checkout <dir> <project_root> -> 0 iff <dir> is a git checkout of a
 # DIFFERENT repo (issue #149). `git worktree remove` fails on such a path and the
 # teardown's `rm -rf` fallback would then destroy another repo's work.
-foreign_checkout() { [ -e "$1/.git" ] && ! same_repo "$1" "$2"; }
+# A linked worktree of THIS repo whose admin dir (.git/worktrees/<name>) is gone no
+# longer resolves at all; its `.git` file still points into our common dir, so it
+# is ours (an orphan to tear down), not foreign.
+foreign_checkout() {
+  [ -e "$1/.git" ] || return 1
+  same_repo "$1" "$2" && return 1
+  local gd common
+  if [ -f "$1/.git" ] && common="$(_git_common_dir "$2")"; then
+    gd="$(sed -n 's/^gitdir: //p' "$1/.git" 2>/dev/null)"
+    case "$gd" in /*) ;; ?*) gd="$1/$gd" ;; esac
+    # <common>/worktrees itself may be gone too (git drops it once empty), so
+    # canonicalize <common> -- which always exists -- and check the segment by name.
+    if [ -n "$gd" ] && [ "$(basename "$(dirname "$gd")")" = worktrees ] \
+       && [ "$(cd "$(dirname "$(dirname "$gd")")" 2>/dev/null && pwd -P)" = "$common" ]; then
+      return 1
+    fi
+  fi
+  return 0
+}
 
 worker_branch() { # <id> -> this install's branch name for <id>
   printf 'orch/%s/%s' "$ORCH_HASH" "$1"

@@ -209,3 +209,42 @@ mk_v86() { # <repo> <id>: a worker created at the current (pre-#149) layout
   [ "$status" -ne 0 ]
   [ "$output" = "0" ]
 }
+
+@test "clean and prune still remove this repo's own worktree whose admin dir is gone" {
+  wdir="$(libcall worker_wdir "$A" lift)"; branch="$(libcall worker_branch lift)"
+  mkdir -p "$(dirname "$wdir")"
+  git -C "$A" worktree add -q -B "$branch" "$wdir"
+  rm -rf "$(git -C "$A" rev-parse --path-format=absolute --git-common-dir)/worktrees"  # admin dir gone; .git file now dangles
+  run git -C "$wdir" rev-parse --git-dir
+  [ "$status" -ne 0 ]
+  run libcall foreign_checkout "$wdir" "$A"
+  [ "$status" -ne 0 ]
+  jq -n --arg t "$A" '{id:"lift",status:"done",updated:"2000-01-01T00:00:00Z",target_repo:$t}' > "$WORKERS/lift.json"
+  run env PROJECT_ROOT="$A" "$ORCH_DIR_SRC/clean.sh" lift
+  [ "$status" -eq 0 ]
+  [ ! -e "$wdir" ]
+  git -C "$A" worktree add -q -B "$branch" "$wdir"
+  rm -rf "$(git -C "$A" rev-parse --path-format=absolute --git-common-dir)/worktrees"
+  export PROJECT_ROOT="$A"
+  # shellcheck disable=SC1091
+  source "$ORCH_DIR_SRC/watchdog.sh"
+  prune_dead_worktree "$A" lift
+  [ ! -e "$wdir" ]
+}
+
+@test "a dangling worktree of ANOTHER repo at this repo's path is still foreign" {
+  wdir="$(libcall worker_wdir "$A" lift)"
+  mkdir -p "$(dirname "$wdir")"
+  git -C "$B" worktree add -q -B x "$wdir"
+  rm -rf "$(git -C "$B" rev-parse --path-format=absolute --git-common-dir)/worktrees"
+  run libcall foreign_checkout "$wdir" "$A"
+  [ "$status" -eq 0 ]
+}
+
+@test "same_repo ignores an exported GIT_DIR; worker_wdir ignores CDPATH" {
+  run env GIT_DIR="$A/.git" bash -c 'source "$1"; same_repo "$2" "$3"' _ "$LIB" "$A" "$B"
+  [ "$status" -ne 0 ]
+  abs="$(libcall worker_wdir "$A" lift)"
+  rel="$(cd "$R" && CDPATH="$R" bash -c 'source "$1"; worker_wdir a lift' _ "$LIB")"
+  [ "$(basename "$(dirname "$abs")")" = "$(basename "$(dirname "$rel")")" ]
+}

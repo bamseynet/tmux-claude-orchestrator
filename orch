@@ -54,7 +54,7 @@ if [ -n "${ORCH_ROOT:-}" ]; then
   # whose dirname differs from the real toolkit dir), /tmp vs /private/tmp-style
   # aliasing, and -- the case that actually broke this project's own worker
   # workflow -- two git worktrees of the SAME toolkit repo (this repo's workers
-  # each run from their own `../wt/<hash>/<id>` worktree, per worktree_owner()
+  # each run from their own `../wt/<hash>/<repo-hash>/<id>` worktree, per worktree_owner()
   # below, while often inheriting ORCH_ROOT pointing at the orchestrator's main
   # checkout). Fall back to repo-identity comparison, mirroring
   # ensure_related_repo()'s same-toplevel / shared-git-common-dir checks in
