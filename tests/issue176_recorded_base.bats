@@ -147,3 +147,35 @@ wd_vars() {
   PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
   grep -q 'gh pr create --base main ' "$GH_LOG"
 }
+
+@test "ahead: record wins over a conflicting ORCH_BASE_BRANCH" {
+  mkworker w1 origin/develop 1
+  ORCH_BASE_BRANCH=main run worker_branch_ahead "$P" w1
+  [ "$output" = "1" ]
+}
+
+@test "ahead: no record + ORCH_BASE_BRANCH names a local-only branch -> counts against it" {
+  git -C "$P" branch -q localdev origin/develop
+  mkworker w1 origin/develop 1
+  rm "$WORKERS_DIR/w1.json"
+  ORCH_BASE_BRANCH=localdev run worker_branch_ahead "$P" w1
+  [ "$output" = "1" ]
+}
+
+@test "collect: recorded develop base still drives the diff base" {
+  mkworker w1 origin/develop 1
+  run bash "$ORCH_ROOT/_orch/collect.sh" w1
+  [ "$(jq -r .base <<< "$output")" = "origin/develop" ]
+}
+
+@test "merge: record wins over a conflicting ORCH_BASE_BRANCH" {
+  mkworker w1 origin/develop 1
+  ORCH_BASE_BRANCH=trunk PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
+  grep -q 'gh pr create --base develop ' "$GH_LOG"
+}
+
+@test "merge: hex-looking branch name is still a branch, not a pinned sha" {
+  mkworker w1 origin/develop 1 origin/deadbeef
+  PATH="$STUB:$PATH" run bash "$ORCH_ROOT/_orch/merge.sh" w1
+  grep -q 'gh pr create --base deadbeef ' "$GH_LOG"
+}

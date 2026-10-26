@@ -295,14 +295,14 @@ worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
 # (issue #153/#176) that still resolves in <repo_dir>: `base`, else `base_sha`.
 # Prints nothing when there is no usable record.
 worker_recorded_base() {
-  local dir="$1" id="$2" f="$WORKERS_DIR/$2.json" key ref
+  local dir="$1" f="$WORKERS_DIR/$2.json" ref
   [ -f "$f" ] || return 0
-  for key in base base_sha; do
-    ref="$(jq -r --arg k "$key" '.[$k] // empty' "$f" 2>/dev/null || true)"
+  # One jq read yields both candidates in order (base, then base_sha).
+  while IFS= read -r ref; do
     if [ -n "$ref" ] && git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1; then
       printf '%s' "$ref"; return 0
     fi
-  done
+  done < <(jq -r '.base // empty, .base_sha // empty' "$f" 2>/dev/null || true)
 }
 
 # worker_recorded_base_branch <id>: the recorded `base` as a plain branch name for
@@ -313,11 +313,13 @@ worker_recorded_base_branch() {
   [ -f "$f" ] || return 0
   ref="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
   ref="${ref#origin/}"
+  case "$ref" in "" | HEAD) return 0 ;; esac
+  # spawn pins its HEAD fallback to a full sha (40 hex, 64 under sha256); only
+  # that exact shape is a sha -- a hex-looking branch like "deadbeef" is a branch.
   case "$ref" in
-    "" | HEAD | *[!A-Za-z0-9._/-]*) return 0 ;;
+    *[!0-9a-f]*) ;;
+    *) { [ "${#ref}" -eq 40 ] || [ "${#ref}" -eq 64 ]; } && return 0 ;;
   esac
-  # A bare hex string is a pinned sha, not a branch gh can target.
-  case "$ref" in *[!0-9a-f]*) ;; *) [ "${#ref}" -lt 7 ] || return 0 ;; esac
   printf '%s' "$ref"
 }
 

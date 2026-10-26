@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # _orch/merge.sh <id> [--auto] [--base <branch>]
 # Opt-in CI-gated auto-merge (issue #36): for a finished worker branch orch/<id>,
-# push it, open (or reuse) a PR against main, and — ONLY when explicitly opted in
+# push it, open (or reuse) a PR against its recorded base (else main), and — ONLY when explicitly opted in
 # via --auto or merge.auto in config.json — wait for required CI checks and
 # squash-merge (+ delete branch) once every required check is SUCCESS.
 #

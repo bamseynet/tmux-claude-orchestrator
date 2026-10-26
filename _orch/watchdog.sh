@@ -126,9 +126,10 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 # Pure-ish predicate (git only, no tmux): how many commits is <id>'s worktree
 # branch ahead of the upstream default branch? Prints 0 (and fails) when the
 # worktree does not exist, so callers can treat "no worktree" as "nothing to
-# review" without a separate existence check. Prefers origin/main, falling back to
-# origin/HEAD then a local `main` for repos without that exact remote branch
-# (e.g. hermetic test repos with no remote at all).
+# review" without a separate existence check. Counts against the base spawn
+# recorded (base, else base_sha; issue #176), then origin/$ORCH_BASE_BRANCH, then
+# origin/main, origin/HEAD and finally a local `main` for repos without that exact
+# remote branch (e.g. hermetic test repos with no remote at all).
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   local proj="$1" id="$2" wdir base
   wdir="$(resolve_worker_wdir "$proj" "$id")"
@@ -146,6 +147,9 @@ worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
   elif [ -n "${ORCH_BASE_BRANCH:-}" ] \
        && git -C "$wdir" rev-parse --verify -q "origin/$ORCH_BASE_BRANCH" >/dev/null 2>&1; then
     base="origin/$ORCH_BASE_BRANCH"
+  elif [ -n "${ORCH_BASE_BRANCH:-}" ] \
+       && git -C "$wdir" rev-parse --verify -q "refs/heads/$ORCH_BASE_BRANCH" >/dev/null 2>&1; then
+    base="$ORCH_BASE_BRANCH"   # spawn's local-$want fallback (no such remote branch)
   elif git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
     base="origin/main"
   elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
