@@ -154,3 +154,24 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   [[ "$output" == *"one option number"* ]]
   no_keys_sent
 }
+
+# An option's wrapped continuation row can start with a number too ("1.2.3",
+# "3.0/..."); only "N. " (number, dot, space) is an option row. Otherwise the
+# wrap vouches for an option the dialog lacks, or hides the real ones above it.
+@test "permission: a wrapped '3.0' continuation does not vouch for option 3 on a 2-option dialog" {
+  printf '%s\n' ' Do you want to proceed?' ' ❯ 1. Yes, and always allow access to /opt/tool/v' \
+    '      3.0/lib from this project' '   2. No' ' Esc to cancel · Tab to amend' > "$BATS_TEST_TMPDIR/wrap"
+  stub_tmux "$BATS_TEST_TMPDIR/wrap"
+  send 3
+  [ "$status" -ne 0 ]
+  no_keys_sent
+}
+
+@test "permission: a wrapped '1.2' continuation above the cursor does not hide option 2" {
+  printf '%s\n' ' Do you want to proceed?' '   1. Yes' '   2. Yes, and always allow npm install pkg@' \
+    '      1.2.3 from this project' ' ❯ 3. No' ' Esc to cancel · Tab to amend' > "$BATS_TEST_TMPDIR/wrap"
+  stub_tmux "$BATS_TEST_TMPDIR/wrap"
+  send 2
+  [ "$status" -eq 0 ]
+  grep -qx 'send-keys -t orch:w -l 2' "$CALLS"
+}
