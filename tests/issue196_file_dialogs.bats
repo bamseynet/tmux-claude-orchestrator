@@ -118,3 +118,43 @@ no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
   fake_tmux_set_pane orch w "$(cat "$FX/permission_create.txt")"
   inject_confirmed "$T"
 }
+
+# --- review pass 1: cursor off row 1, wrapped header, parity -------------------
+
+@test "cursor on option 2 or 3 is still a dialog; send refuses free text, types digits" {
+  for row in 2 3; do
+    sed -e 's/^ ❯ 1\./   1./' -e "s/^   $row\./ ❯ $row./" "$FX/permission_edit.txt" > "$BATS_TEST_TMPDIR/moved"
+    grep -q "^ ❯ $row\." "$BATS_TEST_TMPDIR/moved"
+    fake_tmux_set_pane orch w "$(cat "$BATS_TEST_TMPDIR/moved")"
+    pane_has_permission_dialog "$T" || { echo "missed cursor row $row"; return 1; }
+    stub_tmux "$BATS_TEST_TMPDIR/moved"
+    send hello
+    [ "$status" -ne 0 ]
+    no_keys_sent
+  done
+}
+
+@test "a header wrapped across lines (no closing ? on its first line) is still a dialog" {
+  printf '%s\n' ' Do you want to make this edit to /very/long/path/that/wraps/' ' beyond/the/pane/width.txt?' \
+    ' ❯ 1. Yes' '   2. Yes, and switch to accept edits' '   3. No' ' Esc to cancel' > "$BATS_TEST_TMPDIR/wraphdr"
+  fake_tmux_set_pane orch w "$(cat "$BATS_TEST_TMPDIR/wraphdr")"
+  pane_has_permission_dialog "$T"
+  stub_tmux "$BATS_TEST_TMPDIR/wraphdr"
+  send 3
+  grep -qx 'send-keys -t orch:w -l 3' "$CALLS"
+  ! grep -qE 'paste-buffer|load-buffer|Enter' "$CALLS"
+}
+
+@test "negative: 'Do you want to keep going? ...' mid-line prose with a cursor row is not a dialog" {
+  fake_tmux_set_pane orch w ' Do you want to keep going? Maybe.
+ ❯ 1. Yes
+   2. No'
+  ! pane_has_permission_dialog "$T"
+}
+
+@test "the lib.sh fallback regexes equal the shipped _orch/config.json values" {
+  for k in permission_dialog_regex permission_dialog_choice_regex; do
+    want="$(jq -r ".tui_patterns.$k" "$BATS_TEST_DIRNAME/../_orch/config.json")"
+    grep -qF -- "_tui_pattern $k '$want')" "$BATS_TEST_DIRNAME/../_orch/lib.sh" || { echo "drift: $k"; return 1; }
+  done
+}
