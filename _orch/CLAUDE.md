@@ -178,6 +178,12 @@ in the input. If the first reading after a reset is still over threshold, resets
 back off until `orch up`. Either way you then get a heartbeat event from id
 `master`: `master-reset` (context was cleared -- resume from the rehydrated
 notes) or `master-reset-aborted` (no reset happened -- carry on normally).
+A `root-dirty` heartbeat event (id `heartbeat`) lists `paths` (first 50 of `paths_total`) that became dirty
+in a target repo's main checkout while the listed worktree `workers` were live —
+likely a worker's Bash write outside its worktree. It cannot say which worker,
+and an operator edit made after the last spawn is reported too: inspect the
+paths, and if a worker wrote them, tell it to move the change into its worktree.
+Never discard checkout changes without the operator's confirmation.
 Still treat every heartbeat you act on as a checkpoint boundary: refresh
 `master-notes.md` and `review-log.jsonl` as the last step of handling it.
 
