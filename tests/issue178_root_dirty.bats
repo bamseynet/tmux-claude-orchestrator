@@ -4,6 +4,7 @@
 # Hermetic: scratch git repo, ORCH_ROOT in the bats tmp dir, no tmux, no claude.
 
 ORCH_DIR_SRC="$BATS_TEST_DIRNAME/../_orch"
+load helpers/refute.bash
 
 setup() {
   R="$BATS_TEST_TMPDIR/r"; mkdir -p "$R"
@@ -265,7 +266,7 @@ inbox() { nlines "$INBOX"; }
   worker w1 worktree; baseline w1                 # baseline holds _orch/config.json
   git -C "$PROJ" checkout -q _orch/config.json    # operator reverts their edit
   root_dirty_tick; [ "$(events)" -eq 0 ]
-  ! grep -q 'config.json' "$(root_baseline_file "$PROJ" w1)"   # dropped from baseline
+  refute_grep_in_existing 'config.json' "$(root_baseline_file "$PROJ" w1)"   # dropped from baseline
   echo w >> "$PROJ/_orch/config.json"             # worker's Bash write to the same path
   root_dirty_tick
   [ "$(events)" -eq 1 ]
