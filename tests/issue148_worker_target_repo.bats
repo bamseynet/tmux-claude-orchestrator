@@ -148,6 +148,7 @@ drain_in() { # <project_root>: source heartbeat and drain once under that PROJEC
   drain_queue_if_room
   local i=0
   while [ "$i" -lt 150 ] && [ ! -e "$DRAIN_WDIR" ]; do sleep 0.1; i=$((i+1)); done
+  wait   # let the drained spawn.sh finish before teardown removes the tmpdir
 }
 
 @test "queue drain under a different valid repo creates the worktree in the queued repo only" {
