@@ -193,10 +193,18 @@ hook_cmd() { # <settings-file>
   # physically $TARGET/f.txt; lexically $BATS_TEST_TMPDIR/f.txt
   run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$BATS_TEST_TMPDIR/lnk/../f.txt")"
   [ "$status" -eq 2 ]
-  # and the reverse: lexically in the target, physically elsewhere -> allowed
-  ln -s "$BATS_TEST_TMPDIR/elsewhere/in" "$TARGET/out"
-  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$TARGET/out/../x.txt")"
+}
+
+@test "hook denies <link-out-of-target>/.. that normalises lexically into the target" {
+  run spawn w1 sonnet "task"
   [ "$status" -eq 0 ]
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  mkdir -p "$BATS_TEST_TMPDIR/elsewhere/in"
+  ln -s "$BATS_TEST_TMPDIR/elsewhere/in" "$TARGET/out"
+  # physically elsewhere/x.txt, but a writer that normalises the path string first
+  # (as the missing-tail test above assumes) writes $TARGET/x.txt: deny either way
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$TARGET/out/../x.txt")"
+  [ "$status" -eq 2 ]
 }
 
 @test "a denied write is also queued to the inbox for the master" {

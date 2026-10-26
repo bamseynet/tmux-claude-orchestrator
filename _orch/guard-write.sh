@@ -44,8 +44,8 @@ norm() {
 # dangling link -- cd -P cannot resolve either): it is followed with readlink and
 # the result re-canonicalised, so "<wdir>/link -> <proj>/f" and
 # "<wdir>/dangling -> <proj>/newdir" cannot write through.
-# A tail holding ".." ("<wdir>/missing/../link") normalises to a path the kernel
-# could not see through; it is re-canonicalised so a link it now names is followed.
+# A tail holding ".." ("<wdir>/missing/../link") is covered by the lexical
+# candidate below (norm first, then canon), which follows the link it names.
 # Hops are capped at 40 (a link loop then falls back to lexical form).
 canon() {
   local p="$1" n="${2:-0}" d="$1" rest="" t
@@ -58,18 +58,21 @@ canon() {
     canon "$t$rest" $((n + 1)); return 0
   fi
   d="$(_phys_dir "$d")" || { norm "$p"; return 0; }
-  case "$rest" in
-    */../*|*/..) canon "$(norm "$d$rest")" $((n + 1)) ;;
-    *) norm "$d$rest" ;;
-  esac
+  norm "$d$rest"
 }
 under() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
 
+proj="$(canon "$proj")"; wdir="$(canon "$wdir")"
 case "$path" in /*) ;; *) path="$wdir/$path" ;; esac
-path="$(canon "$path")"; proj="$(canon "$proj")"; wdir="$(canon "$wdir")"
-
-under "$path" "$proj" || exit 0
-under "$path" "$wdir" && exit 0
+# Two readings of the same string: the kernel's (symlinks before "..", canon) and a
+# writer that normalises the string first (path.resolve), whose ".." pops a symlink
+# lexically ("<target>/<link-out>/../x" is <target>/x). Deny if either lands in the
+# main checkout outside the worktree.
+for cand in "$(canon "$path")" "$(canon "$(norm "$path")")"; do
+  under "$cand" "$proj" && ! under "$cand" "$wdir" && { path="$cand"; break; }
+  cand=""
+done
+[ -n "$cand" ] || exit 0
 
 # Dual-write (like every other emitter) so the heartbeat tells the master too.
 if line="$(jq -nc --arg id "$id" --arg p "$path" --arg ts "$(date -u +%FT%TZ)" \
