@@ -309,15 +309,11 @@ sweep_window() { # <window> <cooldown_seconds>
         elif ! { wd_wr=0; wait_ready_or_dialog "$S:$w" 10 || wd_wr=$?; [ "$wd_wr" -ne 2 ]; }; then
           # issue #155: the nudge's trailing Enter would select the dialog's
           # default. The wait ends early on a dialog already up or rendering
-          # mid-wait (is_ready refuses dialogs). rl_action already consumed the
-          # cooldown marker, so re-arm it (due now) or the nudge is lost for good
-          # once the dialog is answered.
-          echo "$now" > "$STATE_DIR/.rl-$w"
-          log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen); will retry next sweep"
-          # The re-armed marker would skip the liveness check below on every sweep
-          # the dialog stays up; a worker stuck on a dialog still needs its alerts.
-          liveness_check "$w" "$pane" "$now"
-          return 0
+          # mid-wait (is_ready refuses dialogs). The nudge is dropped, not
+          # re-armed: a permission dialog only follows a fresh tool call, so the
+          # worker has already resumed -- a deferred "re-run the exact same
+          # command" would run that command a second time.
+          log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
           send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
           log "rate limit cleared on '$w'; sent retry nudge"

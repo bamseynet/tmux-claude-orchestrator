@@ -96,12 +96,14 @@ EOF
   mkdir -p "$ORCH_ROOT/_orch/state/workers"
   echo '{"id":"w1"}' > "$ORCH_ROOT/_orch/state/workers/w1.json"
   echo x > "$ORCH_ROOT/_orch/state/.wd-w1"
+  echo 1 > "$ORCH_ROOT/_orch/state/.rl-w1"
   mkdir -p "$wdir"
 
   run "$ORCH_DIR/clean.sh" w1
   [ "$status" -eq 0 ]
   [ ! -e "$ORCH_ROOT/_orch/state/workers/w1.json" ]
   [ ! -e "$ORCH_ROOT/_orch/state/.wd-w1" ]
+  [ ! -e "$ORCH_ROOT/_orch/state/.rl-w1" ]
   [ ! -d "$wdir" ]
 
   # Second run against an already-clean id must still succeed (idempotent).
