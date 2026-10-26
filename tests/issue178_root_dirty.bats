@@ -22,11 +22,12 @@ setup() {
   echo dirty >> "$PROJ/_orch/config.json"   # operator's own uncommitted edit
   # Hermetic tmux: session $SESSION_NAME exists; its windows are $STUB_WINS.
   tb="$BATS_TEST_TMPDIR/tmuxbin"; mkdir -p "$tb"
-  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) echo "$SESSION_NAME";; list-windows) printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) [ -n \"$STUB_NOSESS\" ] || echo \"$SESSION_NAME\";; list-windows) printf "%%s\\n" $STUB_WINS;; esac\nexit 0\n' > "$tb/tmux"
   chmod +x "$tb/tmux"; PATH="$tb:$PATH"; export STUB_WINS=""
 }
 
-worker() { # <id> <mode> [repo]
+worker() { # <id> <mode> [repo]  (also opens its tmux window)
+  STUB_WINS="$STUB_WINS $1"
   jq -n --arg id "$1" --arg m "$2" --arg r "${3:-$PROJ}" \
     '{id:$id,status:"working",mode:$m,target_repo:$r}' > "$WORKERS_DIR/$1.json"
 }
@@ -57,6 +58,8 @@ inbox() { nlines "$INBOX"; }
   worker w1 worktree; baseline w1
   root_dirty_tick
   [ "$(events)" -eq 0 ]; [ "$(inbox)" -eq 0 ]
+  # positive control: the empty result came from a real check, not a skipped repo
+  [ -f "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
 }
 
 @test "no event with zero live workers" {
@@ -192,6 +195,10 @@ inbox() { nlines "$INBOX"; }
   git -C "$PROJ" add _orch/config.json
   root_dirty_tick
   [ "$(events)" -eq 0 ]
+  echo y >> "$PROJ/f.sh"               # positive control: the repo IS being checked
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *config.json* ]]
 }
 
 @test "reported record is forgotten once no worktree worker is live" {
@@ -199,10 +206,33 @@ inbox() { nlines "$INBOX"; }
   echo y >> "$PROJ/f.sh"
   root_dirty_tick; [ "$(events)" -eq 1 ]
   jq '.status="done"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  STUB_WINS=""                         # w1's window closed
   git -C "$PROJ" checkout -q f.sh
   root_dirty_tick
   worker w2 worktree; baseline w2
   echo y >> "$PROJ/f.sh"
   root_dirty_tick
   [ "$(events)" -eq 2 ]
+}
+
+@test "a non-done worker whose window is gone (needs-input, never marked dead) is not live" {
+  worker w1 worktree; baseline w1
+  jq '.status="needs-input"' "$WORKERS_DIR/w1.json" > "$WORKERS_DIR/t" && mv "$WORKERS_DIR/t" "$WORKERS_DIR/w1.json"
+  STUB_WINS="orch other"
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 0 ]
+  STUB_WINS="orch w1"                  # control: same worker with its window alerts
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+}
+
+@test "an unlistable tmux session skips the tick and keeps the reported record" {
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  STUB_NOSESS=1 root_dirty_tick
+  [ -s "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
 }

@@ -1432,7 +1432,13 @@ root_baseline_file() { # <project_root> <id>
 root_porcelain() { # <project_root>
   # --no-optional-locks: run every tick against the operator's live checkout, a
   # plain `git status` takes index.lock and can fail the operator's own git commands.
-  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE git --no-optional-locks -C "$1" status --porcelain -uall 2>/dev/null
+  # Bounded: heartbeat calls this every tick, and a hung git (network FS, huge
+  # untracked tree) would otherwise stall event delivery to the master.
+  local to=""
+  if command -v timeout >/dev/null 2>&1; then to="timeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"
+  elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"; fi
+  # shellcheck disable=SC2086  # $to is intentionally word-split (empty or "timeout N")
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE $to git --no-optional-locks -C "$1" status --porcelain -uall 2>/dev/null
 }
 root_baseline_write() { # <project_root> <id>
   local f; f="$(root_baseline_file "$1" "$2")"

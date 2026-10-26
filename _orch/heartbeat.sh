@@ -436,17 +436,20 @@ root_dirty_tick() {
     case "$st" in spawn-failed|queued|dead|"") continue ;; esac
     [ "$mode" = worktree ] && [ -n "$repo" ] && [ -d "$repo" ] || continue
     [ -n "$id" ] || id="$(basename "$f" .json)"
-    # report.sh's Stop hook writes "done" (merged/blocked likewise) at the end of
-    # EVERY turn and send.sh never resets it, so a worker on a follow-up turn
-    # still reads "done". Such a worker is live iff its window still exists
-    # (one list-windows per tick, only when a turn-ended worker is present).
-    case "$st" in done|merged|blocked)
-      if [ "$wins_read" = 0 ]; then
-        wins_read=1
-        session_exists "$SESSION_NAME" && wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)"
-      fi
-      printf '%s\n' "$wins" | grep -qxF -- "$id" || continue ;;
-    esac
+    # A worker is live iff its window exists, whatever its status says: report.sh
+    # writes "done" (merged/blocked likewise) at the end of EVERY turn and send.sh
+    # never resets it, so a follow-up turn still reads "done"; and a needs-input
+    # worker whose window was closed is never marked dead (dead_sweep only handles
+    # mid-turn statuses), so trusting the status would keep it "live" forever.
+    # One list-windows per tick, only once a worktree worker is seen. If the
+    # session can't be listed, skip the whole tick: treating every worker as gone
+    # would wipe the reported records below and re-alert them next tick.
+    if [ "$wins_read" = 0 ]; then
+      wins_read=1
+      session_exists "$SESSION_NAME" || return 0
+      wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)" || return 0
+    fi
+    printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
     real="$(_phys_dir "$repo")" || real="$repo"
     pairs+="$real"$'\t'"$id"$'\n'
   done
@@ -484,7 +487,7 @@ root_dirty_tick() {
         note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
     printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
     printf '%s\n' "$ev" >> "$INBOX"
-    log "root-dirty: new entries in $real while worktree workers live: $(jq -r '.paths|join(" ")' <<<"$ev")"
+    log "root-dirty: new entries in $real while worktree workers live: ${new//$'\n'/ }"
   done <<<"$repos"
   # Forget reported entries of repos with no live worktree worker: a stale record
   # would silence a later worker re-dirtying the same path after it was reverted.
