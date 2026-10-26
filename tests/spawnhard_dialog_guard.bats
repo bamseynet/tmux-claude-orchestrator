@@ -522,3 +522,63 @@ EOF2
   [ "$paste_calls" -eq 1 ]
   grep -Fq 'worker w9: dialog on screen; not re-pasting' "$LOGF"
 }
+
+@test "claude exiting during startup never gets the first send pasted into the shell" {
+  # claude died before the first send (e.g. a bad --resume id); the shell
+  # prompt's "❯" satisfies wait_ready. The first send must not paste the task
+  # (and its Enter) into that shell.
+  echo 'peter@host ~/proj ❯ ' > "$PANE_FILE"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message) case "\$*" in *pane_current_command*) echo zsh ;; esac ;;
+  capture-pane) cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w10 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawn-failed w10"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 0 ]
+  [ "$(bare_enter_count)" -eq 0 ]
+  grep -Fq 'worker w10: claude is not running in the pane (shell prompt) before first injection attempt; not sending' "$LOGF"
+}
+
+@test "a shell that is only briefly visible before claude starts does not fail the spawn" {
+  # A "❯" prompt theme satisfies wait_ready while claude has not exec'd yet:
+  # the first send is held back, but claude then comes up and the task must be
+  # sent -- not given up on after a single instantaneous shell check.
+  echo 'peter@host ~/proj ❯ ' > "$PANE_FILE"
+  N="$BATS_TEST_TMPDIR/n"; echo 0 > "$N"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message)
+    case "\$*" in *pane_current_command*)
+      n=\$(( \$(cat "$N") + 1 )); echo "\$n" > "$N"
+      [ "\$n" -le 3 ] && echo zsh || echo claude ;;
+    esac ;;
+  capture-pane) cat "$PANE_FILE" 2>/dev/null ;;
+  paste-buffer) echo 'esc to interrupt' > "$PANE_FILE" ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w10 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w10 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+}

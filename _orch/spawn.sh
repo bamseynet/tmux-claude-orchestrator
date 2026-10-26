@@ -401,9 +401,33 @@ preamble='[Orchestrated task — complete it directly. Do not invoke any skill u
 # into it. task_sent records whether the task has gone out at all: until it
 # has, no pane evidence can confirm it -- a ready prompt after the dialog
 # clears would otherwise "confirm" a task that was never sent.
+# The pane being back at a shell is held back the same way: claude exited during
+# startup (bad --resume id, auth failure, ...) and a shell prompt glyph such as
+# "❯" satisfied wait_ready -- a paste+Enter there runs the task text as shell
+# commands. send_task() below re-checks before any later send.
+pane_runs_shell() {
+  case "$(tmux display-message -p -t "$S:$id" '#{pane_current_command}' 2>/dev/null)" in
+    sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh|nu|xonsh|elvish|-sh|-bash|-zsh|-dash|-ksh|-fish|-tcsh|-csh) return 0 ;;
+  esac
+  return 1
+}
+# The shell is still there after a bounded grace window (0 = it persists). Right
+# after the launch line the pane is briefly still the shell -- and a "❯" prompt
+# theme satisfies wait_ready -- so one instantaneous check would misread a
+# claude that is still starting as one that exited.
+shell_persists() {
+  local i=0
+  while pane_runs_shell; do
+    [ "$i" -ge 10 ] && return 0
+    sleep 1; i=$((i+1))
+  done
+  return 1
+}
 task_sent=0
 if pane_has_dialog "$S:$id"; then
   log "worker $id: dialog on screen before first injection attempt; not sending"
+elif pane_runs_shell; then
+  log "worker $id: claude is not running in the pane (shell prompt) before first injection attempt; not sending"
 else
   send_prompt "$S:$id" "${preamble}${task}"
   task_sent=1
@@ -455,7 +479,11 @@ hook_reported() {
 # wait_ready's bare-"❯" match is satisfied by a dialog's highlighted choice, so
 # a dialog rendering during the wait would otherwise take the paste's Enter.
 send_task() {
-  if [ "$task_sent" -ne 1 ] && ! pane_runs_shell; then
+  if shell_persists; then
+    log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"
+    return 1
+  fi
+  if [ "$task_sent" -ne 1 ]; then
     wait_ready "$S:$id" 15 || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
   fi
   if pane_runs_shell; then
@@ -472,12 +500,6 @@ send_task() {
   fi
   send_prompt "$S:$id" "${preamble}${task}"
   task_sent=1
-}
-pane_runs_shell() {
-  case "$(tmux display-message -p -t "$S:$id" '#{pane_current_command}' 2>/dev/null)" in
-    sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh|nu|xonsh|elvish|-sh|-bash|-zsh|-dash|-ksh|-fish|-tcsh|-csh) return 0 ;;
-  esac
-  return 1
 }
 # confirm_inject, but only once the task was actually sent; before that, just
 # give an on-screen dialog the same bounded window to clear, and report
