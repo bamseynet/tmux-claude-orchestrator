@@ -105,7 +105,11 @@ _first_spawn() {
   run "$SPAWN" w1 sonnet t
   [ "$status" -eq 0 ]
   [ "$(git -C "$PROJECT_ROOT" status --porcelain)" = "$before" ]
-  [ ! -e "$PROJECT_ROOT/.git/info/exclude" ] || ! grep -q settings.local "$PROJECT_ROOT/.git/info/exclude"
+  # `! cmd` mid-test never fails a bats test; assert the status explicitly.
+  if [ -e "$PROJECT_ROOT/.git/info/exclude" ]; then
+    run grep -q settings.local "$PROJECT_ROOT/.git/info/exclude"
+    [ "$status" -ne 0 ]
+  fi
   [ ! -e "$PROJECT_ROOT/.claude" ]
 }
 
