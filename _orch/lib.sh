@@ -213,11 +213,12 @@ worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
 # recorded repo when it still exists, else PROJECT_ROOT/cwd. An EXPLICIT --repo
 # (orch exports ORCH_REPO_EXPLICIT=1 for it) that names a different repo than the
 # recorded one is refused (rc 1) rather than silently picking either side.
+# A second arg `quiet` skips the vanished-repo log line, for per-tick callers.
 resolve_worker_proj() {
-  local id="$1" cur="${PROJECT_ROOT:-$(pwd)}" rec
+  local id="$1" quiet="${2:-}" cur="${PROJECT_ROOT:-$(pwd)}" rec
   rec="$(worker_target_repo "$id")"
   if [ -z "$rec" ] || [ ! -d "$rec" ]; then
-    [ -z "$rec" ] || log "worker '$id': recorded target repo $rec no longer exists; falling back to $cur"
+    [ -z "$rec" ] || [ -n "$quiet" ] || log "worker '$id': recorded target repo $rec no longer exists; falling back to $cur"
     printf '%s' "$cur"; return 0
   fi
   if [ "${ORCH_REPO_EXPLICIT:-}" = "1" ] \
