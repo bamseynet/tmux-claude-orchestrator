@@ -39,7 +39,7 @@ background_wait="$(jq -r '.watchdog.background_wait_seconds // 1800' "$cfg")"
 # below (issue #50 point 4) — replaces the old fire-once "alerted" flag.
 realert_base="$(jq -r '.watchdog.realert_seconds // 90' "$cfg")"
 realert_max="$(jq -r '.watchdog.realert_max_seconds // 1800' "$cfg")"
-rl_regex="$(jq -r '.watchdog.rate_limit_regex // "rate limit|429|overloaded|too many requests|usage limit"' "$cfg")"
+rl_regex="$(jq -r '.watchdog.rate_limit_regex // "^[^[:alnum:]+#>|-]*(API Error[^[:alnum:]]*(Request rejected[^[:alnum:]]*429|Server is temporarily limiting requests|Repeated 529|429|529|rate limit|overloaded)|Request rejected[^[:alnum:]]*429|[[:alpha:]]+ is experiencing high load|Fast mode overloaded|You.ve hit your [^.]*(limit|budget)|You.ve reached your [[:alpha:]]+ limit|You.re out of usage credits|Your org(anization)? is out of usage|(Claude (AI )?)?(Session|Weekly|Opus|Sonnet|Fable|Usage|Fast) limit reached|Goal paused[^[:alnum:]]+(the request was rate limited|usage limit reached))"' "$cfg")"
 # reap_after: how long a terminal (done/spawn-failed) worker's state file survives
 # before the sweep reaps it (issue #46). Retention, not instant delete, so
 # `orch status` still shows recent history instead of vanishing the moment a
@@ -92,8 +92,13 @@ live_windows() { # -> prints newline-separated window names; returns 1 if $S is 
 }
 
 # Pure predicate (no tmux, no fs): does this pane text show a rate-limit error?
-# Broadened beyond "rate limit"/429/overloaded to also catch phrasing like
-# "usage limit reached" that providers use instead of a literal "rate limit".
+# Issue #182: rl_regex is line-anchored on Claude Code's own error/limit renderings
+# (strings taken from the Claude Code binary; see tests/fixtures/rate_limit_lines.txt),
+# allowing only a leading indent/TUI-glyph prefix (⎿, ●, spinner glyphs). Diff (+/-),
+# comment (#), quote (>) and pipe prefixes are excluded, so prose, diffs, PR numbers
+# and log lines that merely contain "rate limit"/"429" do not count. Nothing here
+# may match the nudge below.
+WATCHDOG_RL_NUDGE="The API briefly throttled you; that was transient, not a bug in your work. Check whether your last action actually completed before retrying it, and do NOT use a workaround."
 rate_limited() { # <pane_text>  -> 0 if it looks rate-limited
   printf '%s\n' "$1" | grep -qiE "$rl_regex"
 }
@@ -121,11 +126,13 @@ realert_due() { # <last_alert_ts> <count> <base_seconds> <max_seconds> <now>  ->
 # Pure-ish predicate (git only, no tmux): how many commits is <id>'s worktree
 # branch ahead of the upstream default branch? Prints 0 (and fails) when the
 # worktree does not exist, so callers can treat "no worktree" as "nothing to
-# review" without a separate existence check. Prefers origin/main, falling back to
-# origin/HEAD then a local `main` for repos without that exact remote branch
-# (e.g. hermetic test repos with no remote at all).
+# review" without a separate existence check. Counts against the base spawn
+# recorded (base, else base_sha; issue #176), then origin/$ORCH_BASE_BRANCH or a
+# local $ORCH_BASE_BRANCH, then origin/main, origin/HEAD and finally a local `main`
+# for repos without that exact remote branch (e.g. hermetic test repos with no
+# remote at all).
 worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
-  local proj="$1" id="$2" wdir base
+  local proj="$1" id="$2" wdir base cand
   wdir="$(resolve_worker_wdir "$proj" "$id")"
   # Back-compat (issue #86): a worker spawned before this install upgraded to
   # the namespaced layout still lives at the pre-#86 ../wt/<id> worktree.
@@ -134,15 +141,17 @@ worker_branch_ahead() { # <project_root> <id>  -> prints ahead-count
     wdir="$(legacy_worker_wdir "$proj" "$id")"
     { [ -d "$wdir" ] && same_repo "$wdir" "$proj"; } || { echo 0; return 1; }
   fi
-  if git -C "$wdir" rev-parse --verify -q origin/main >/dev/null 2>&1; then
-    base="origin/main"
-  elif git -C "$wdir" rev-parse --verify -q origin/HEAD >/dev/null 2>&1; then
-    base="origin/HEAD"
-  elif git -C "$wdir" rev-parse --verify -q main >/dev/null 2>&1; then
-    base="main"
-  else
-    echo 0
-    return 1
+  # Issue #176: the ref spawn recorded wins, then ORCH_BASE_BRANCH (remote, then
+  # spawn's local-$want fallback), then the generic chain.
+  base="$(worker_recorded_base "$wdir" "$id")"
+  if [ -z "$base" ]; then
+    for cand in ${ORCH_BASE_BRANCH:+"origin/$ORCH_BASE_BRANCH" "refs/heads/$ORCH_BASE_BRANCH"} \
+                origin/main origin/HEAD main; do
+      if git -C "$wdir" rev-parse --verify -q "$cand" >/dev/null 2>&1; then
+        base="$cand"; break
+      fi
+    done
+    [ -n "$base" ] || { echo 0; return 1; }
   fi
   git -C "$wdir" rev-list --count "$base..HEAD" 2>/dev/null || echo 0
 }
@@ -311,11 +320,11 @@ sweep_window() { # <window> <cooldown_seconds>
           # default. The wait ends early on a dialog already up or rendering
           # mid-wait (is_ready refuses dialogs). The nudge is dropped, not
           # re-armed: a permission dialog only follows a fresh tool call, so the
-          # worker has already resumed -- a deferred "re-run the exact same
-          # command" would run that command a second time.
+          # worker has already resumed -- a deferred retry nudge would prompt it
+          # to repeat that command a second time.
           log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
-          send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."
+          send_prompt "$S:$w" "$WATCHDOG_RL_NUDGE"
           log "rate limit cleared on '$w'; sent retry nudge"
         fi
         ;;

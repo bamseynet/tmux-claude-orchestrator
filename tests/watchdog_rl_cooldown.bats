@@ -17,16 +17,16 @@ setup() {
 rl_file() { echo "$STATE_DIR/.rl-$1"; }
 
 @test "rate_limited matches the classic patterns" {
-  run rate_limited "boom: rate limit exceeded"
+  run rate_limited "API Error: rate limit exceeded"
   [ "$status" -eq 0 ]
-  run rate_limited "HTTP 429 Too Many Requests"
+  run rate_limited "  ⎿  API Error: 429 Too Many Requests"
   [ "$status" -eq 0 ]
-  run rate_limited "the API is overloaded right now"
+  run rate_limited "API Error: 529 overloaded"
   [ "$status" -eq 0 ]
 }
 
 @test "rate_limited matches the broadened 'usage limit' phrasing" {
-  run rate_limited "Claude usage limit reached, try again later"
+  run rate_limited "Claude usage limit reached. Your limit will reset at 3pm."
   [ "$status" -eq 0 ]
   run rate_limited "USAGE LIMIT REACHED"
   [ "$status" -eq 0 ]
@@ -38,7 +38,7 @@ rl_file() { echo "$STATE_DIR/.rl-$1"; }
 }
 
 @test "rl_action: first sighting starts a cooldown, no earlier state" {
-  run rl_action w1 "429 too many requests" 1000 65
+  run rl_action w1 "API Error: 429 too many requests" 1000 65
   [ "$status" -eq 0 ]
   [ "$output" = "detected" ]
   run cat "$(rl_file w1)"
@@ -56,7 +56,7 @@ rl_file() { echo "$STATE_DIR/.rl-$1"; }
 
 @test "rl_action: cooldown elapsed but limit still active extends the cooldown" {
   echo 1065 > "$(rl_file w1)"
-  run rl_action w1 "still rate limit exceeded" 1070 65
+  run rl_action w1 "API Error: rate limit exceeded" 1070 65
   [ "$status" -eq 0 ]
   [ "$output" = "extended" ]
   run cat "$(rl_file w1)"
@@ -79,7 +79,7 @@ rl_file() { echo "$STATE_DIR/.rl-$1"; }
 }
 
 @test "rl_action tracks each window's cooldown independently" {
-  rl_action w1 "429" 1000 65 >/dev/null
+  rl_action w1 "API Error: 429" 1000 65 >/dev/null
   run rl_action w2 "totally fine" 1000 65
   [ "$status" -ne 0 ]
   [ -e "$(rl_file w1)" ]

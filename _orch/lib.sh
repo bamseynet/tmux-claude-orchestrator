@@ -291,6 +291,46 @@ worker_target_repo() { # <id> -> recorded target repo, empty if none/unreadable
   jq -r '.target_repo // empty' "$f" 2>/dev/null || true
 }
 
+# worker_recorded_base <repo_dir> <id>: the base ref spawn recorded for <id>
+# (issue #153/#176) that still resolves in <repo_dir>: `base`, else `base_sha`.
+# Prints nothing when there is no usable record.
+worker_recorded_base() {
+  local dir="$1" f="$WORKERS_DIR/$2.json" ref
+  [ -f "$f" ] || return 0
+  # One jq read yields both candidates in order (base, then base_sha).
+  while IFS= read -r ref; do
+    if [ -n "$ref" ] && git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s' "$ref"; return 0
+    fi
+  done < <(jq -r '.base // empty, .base_sha // empty' "$f" 2>/dev/null || true)
+}
+
+# worker_recorded_base_branch <repo_dir> <id>: the recorded `base` as a plain branch
+# name for `gh pr create --base` (leading origin/ stripped). Prints nothing when there
+# is no record, it is not a branch ref (e.g. spawn's pinned-SHA HEAD fallback), or the
+# branch no longer exists in <repo_dir> (an origin/<b> record as origin/<b>, a local
+# <b> record as <b>) -- the last case warns on stderr.
+worker_recorded_base_branch() {
+  local dir="$1" f="$WORKERS_DIR/$2.json" rec ref
+  [ -f "$f" ] || return 0
+  rec="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
+  ref="${rec#origin/}"
+  case "$ref" in "" | HEAD) return 0 ;; esac
+  # spawn pins its HEAD fallback to a full sha (40 hex, 64 under sha256); only
+  # that exact shape is a sha -- a hex-looking branch like "deadbeef" is a branch.
+  case "$ref" in
+    *[!0-9a-f]*) ;;
+    *) { [ "${#ref}" -eq 40 ] || [ "${#ref}" -eq 64 ]; } && return 0 ;;
+  esac
+  # A recorded branch since deleted/pruned can't be a PR base.
+  if [ "$ref" != "$rec" ]; then rec="refs/remotes/origin/$ref"; else rec="refs/heads/$ref"; fi
+  if ! git -C "$dir" rev-parse -q --verify "$rec" >/dev/null 2>&1; then
+    say "recorded base '$ref' for $2 no longer exists; falling back to the default base" >&2
+    return 0
+  fi
+  printf '%s' "$ref"
+}
+
 # resolve_worker_proj <id>: the repo to operate on for worker <id>. Prints the
 # recorded repo when it still exists, else PROJECT_ROOT/cwd. An EXPLICIT --repo
 # (orch exports ORCH_REPO_EXPLICIT=1 for it) that names a different repo than the

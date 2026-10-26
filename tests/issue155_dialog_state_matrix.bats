@@ -2,10 +2,10 @@
 # Issue #155: TUI state detectors keyed on one glyph ("❯") were fooled by dialogs.
 # Matrix of (screen x detector), plus call-site proof for send.sh / ask.sh.
 #
-# Fixture provenance: `trust` is the pane captured in issue #133's comment
-# (Claude Code folder-trust dialog, worker `lift`). `perm` is the tool-permission
-# dialog with a highlighted `❯ 1. Yes` row -- that row is our ASSUMPTION about the
-# real render (PR #154's fixture omitted it); re-capture when a real one is seen.
+# Fixture provenance: `trust` is a real capture (Claude Code 2.1.310, quoted in
+# issue #179 from a throwaway-socket launch in a fresh dir). `perm` is NOT a real
+# capture: the `❯ 1. Yes` row is our ASSUMPTION about the real render (PR #154's
+# fixture omitted it); no real permission dialog was captured (#179 A2 / part B).
 # banner/chip/busy/idle are shapes already used by injectfix_* / panestate_* tests.
 
 setup() {
@@ -26,11 +26,16 @@ setup() {
 │ ❯            │
 ╰──────────────╯
   ? for shortcuts'
-  SCREEN_trust=' Quick safety check: Is this a project you created or one you trust? ...
+  # Real capture, Claude Code 2.1.310, captured 2026-10-26 (quoted in issue #179;
+  # the issue elides the scratch path, so that one line is ours). Note the leading space before ❯.
+  SCREEN_trust=' Accessing workspace:
+ /tmp/scratch/fresh179-18039
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what'"'"'s in this folder first.
  Claude Code'"'"'ll be able to read, edit, and execute files here.
  Security guide
-❯ No, exit
-  Yes, I trust this folder
+ ❯ No, exit
+   Yes, I trust this folder
  Enter to confirm · Esc to cancel'
   SCREEN_perm=' Bash command
    rm -rf build
@@ -193,4 +198,74 @@ switch_after() { local var="SCREEN_$2"; echo "$1" > "$PANE.after"; printf '%s\n'
   run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
   [ "$status" -eq 0 ]
   grep -q 'paste-buffer' "$CALLS"
+}
+
+# --- #179 A: an unsent paste chip is not a dialog, but pasting + Enter onto it
+# would submit the stuck chip together with the new text. The veto lives in
+# send.sh/ask.sh (pane_has_pending_paste), NOT in is_ready, so spawn's send_task
+# and the heartbeat is_ready checks keep their behaviour; hence `is_ready: chip Y`.
+
+@test "send.sh refuses to paste onto an unsent paste chip" {
+  stub_tmux chip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
+}
+
+@test "ask.sh refuses to paste onto an unsent paste chip" {
+  stub_tmux chip
+  run bash "$BATS_TEST_DIRNAME/../_orch/ask.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
+}
+
+@test "send.sh still sends when a chip is only in scrollback, not the input row" {
+  SCREEN_echo='❯ [Pasted text #1 +5 lines]
+● done
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
+  ? for shortcuts'
+  stub_tmux echo
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
+}
+
+@test "send.sh still answers a dialog (orch send 1) with a chip echoed above it" {
+  # Real dialogs highlight a choice row with the glyph (see the 2.1.310 trust
+  # capture), so that row, not the chip echo above it, is the last glyph row.
+  # A glyph-less choice row would make send.sh refuse: fail-safe, not a submit.
+  SCREEN_dlgchip="❯ [Pasted text #1 +5 lines]
+$SCREEN_trust"
+  # Precondition: this must take the wr=2 (dialog) path, not a 30s timeout.
+  fake_tmux_set_pane "orch" "w" "$SCREEN_dlgchip"; pane_has_dialog "$T"
+  stub_tmux dlgchip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
+}
+
+@test "send.sh refuses a numeric send when the live chip sits BELOW stale dialog text" {
+  # Dialog-shaped text in the transcript makes wait_ready_or_dialog return 2,
+  # but the real input box (with the stuck chip) is drawn below it: a real
+  # dialog hides the input box, so Enter here would submit the chip + "1".
+  SCREEN_stalechip=' Do you want to proceed?
+ 1. Yes
+  2. No
+● done
+╭──────────────╮
+│ ❯ [Pasted text #1 +5 lines] │
+╰──────────────╯
+  ? for shortcuts'
+  # Precondition: the stale text really is dialog-shaped, so the numeric send
+  # passes the dialog gate and only the chip veto can stop it.
+  fake_tmux_set_pane "orch" "w" "$SCREEN_stalechip"; pane_has_dialog "$T"
+  stub_tmux stalechip
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsent paste"* ]]
+  no_keys_sent
 }

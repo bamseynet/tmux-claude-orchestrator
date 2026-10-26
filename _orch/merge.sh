@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # _orch/merge.sh <id> [--auto] [--base <branch>]
 # Opt-in CI-gated auto-merge (issue #36): for a finished worker branch orch/<id>,
-# push it, open (or reuse) a PR against main, and — ONLY when explicitly opted in
+# push it, open (or reuse) a PR against its recorded base (else
+# $ORCH_BASE_BRANCH, else main), and — ONLY when explicitly opted in
 # via --auto or merge.auto in config.json — wait for required CI checks and
 # squash-merge (+ delete branch) once every required check is SUCCESS.
 #
@@ -21,7 +22,7 @@ source "$here/lib.sh"
 
 id=""
 auto=0
-base="${ORCH_BASE_BRANCH:-main}"
+base=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --auto) auto=1; shift ;;
@@ -34,6 +35,11 @@ done
 [ -n "$id" ] || { say "usage: merge.sh <id> [--auto] [--base <branch>]" >&2; exit 1; }
 
 proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
+# Default PR base: the branch spawn recorded (#176), else ORCH_BASE_BRANCH/main. --base wins.
+if [ -z "$base" ]; then
+  base="$(worker_recorded_base_branch "$proj" "$id")"
+  base="${base:-${ORCH_BASE_BRANCH:-main}}"
+fi
 branch="$(worker_branch "$id")"
 # Back-compat (issue #86): fall back to the pre-#86 orch/<id> branch for a
 # worker spawned before this install upgraded to the namespaced layout, so an
