@@ -4,7 +4,7 @@
 #           wait_ready(), send_prompt(), spawn-injection guards
 #           pane_has_welcome(), pane_active(), pane_has_pending_paste(), inject_confirmed(), confirm_inject(),
 #           pane_has_permission_dialog(), pane_has_trust_dialog(), pane_has_dialog() (issues #132/#133),
-#           pane_has_postaccept_dialog() (issue #189),
+#           pane_has_postaccept_dialog(), pane_has_askuser_dialog() (issue #189), pane_option_visible() (#192),
 #           pane_has_draft() (master draft guard, issue #38),
 #           locked worker-status writers: write_worker_status(), update_worker_status(),
 #           and the resource guard: live_worker_count(), free_mem_mb(),
@@ -757,6 +757,29 @@ pane_has_postaccept_dialog() {
 # paste's Enter then picks the highlighted option (live-checked on 2.1.310).
 pane_has_askuser_dialog() { _dialog_in "$(pane_tail "$1" 25)" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"; }
 pane_has_askuser_text_entry() { pane_tail "$1" 25 | grep -qE "$TUI_ASKUSER_TEXT_REGEX"; }
+
+# Does the cursor's own option block show option <n>? (0 = yes). Shared by the
+# AskUserQuestion selector (#189) and the permission dialog (#192): both ignore
+# a digit with no matching row, so a typed key must be vouched for first. Only
+# the option list around the cursor row counts: it starts at the later of the
+# last blank row above the cursor and the last "1." row at or above it.
+# Numbered prose, a submitted "1. ..." prompt, or a numbered line in a
+# permission dialog's command preview (same blank-free block as its options)
+# would otherwise vouch for a digit the dialog ignores. An option row is "N. "
+# (dot then space): a wrapped option's continuation can start "3.0/..." too.
+pane_option_visible() { # <target> <n>
+  pane_tail "$1" 25 | OPT="$2" CUR="$TUI_ASKUSER_CHOICE_REGEX" awk '
+    { r[NR] = $0 } $0 ~ ENVIRON["CUR"] { c = NR }
+    END {
+      if (!c) exit 1
+      s = 0; for (i = 1; i <= c; i++) {
+        if (i < c && r[i] !~ /[^[:space:]]/) s = i
+        if (r[i] ~ /^[[:space:]│❯]*1\.[[:space:]]/) s = i - 1
+      }
+      for (i = s + 1; i <= NR; i++) if (r[i] ~ ("^[[:space:]│❯]*" ENVIRON["OPT"] "\\.[[:space:]]")) exit 0
+      exit 1
+    }'
+}
 
 # Either dialog visible? (0 = visible). spawn.sh's injection ladder must never
 # send a bare Enter -- or a paste, whose trailing Enter is just as dangerous --
