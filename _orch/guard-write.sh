@@ -13,9 +13,12 @@ source "$here/lib.sh"
 
 id="${1:?worker id}"; proj="${2:?target repo}"; wdir="${3:?worktree}"
 
-payload=""
-IFS= read -r -d '' -t 5 payload 2>/dev/null || true
-path="$(printf '%s' "$payload" | jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)" || exit 0
+# jq reads the hook's stdin directly: bash `read` drains a pipe one byte per
+# syscall, so a large Write payload (~1 MB) outran any read timeout and the
+# truncated JSON then failed open. Bounded by `timeout` where present, so a stdin
+# that never closes fails open instead of stalling the worker on the hook timeout.
+tmo=(); command -v timeout >/dev/null 2>&1 && tmo=(timeout 10)
+path="$("${tmo[@]}" jq -r '(.tool_input.file_path // .tool_input.notebook_path // empty)' 2>/dev/null)" || exit 0
 [ -n "$path" ] || exit 0
 
 # Lexical normalisation (the file may not exist yet): resolve ".", ".." and "//".
@@ -68,7 +71,10 @@ case "$path" in /*) ;; *) path="$wdir/$path" ;; esac
 # writer that normalises the string first (path.resolve), whose ".." pops a symlink
 # lexically ("<target>/<link-out>/../x" is <target>/x). Deny if either lands in the
 # main checkout outside the worktree.
-for cand in "$(canon "$path")" "$(canon "$(norm "$path")")"; do
+lex="$(norm "$path")"
+cands=("$(canon "$path")")
+[ "$lex" = "$path" ] || cands+=("$(canon "$lex")")   # same string -> same reading
+for cand in "${cands[@]}"; do
   under "$cand" "$proj" && ! under "$cand" "$wdir" && { path="$cand"; break; }
   cand=""
 done

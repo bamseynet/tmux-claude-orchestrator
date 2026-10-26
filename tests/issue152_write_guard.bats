@@ -247,3 +247,35 @@ hook_cmd() { # <settings-file>
   run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/dl/x.txt")"
   [ "$status" -eq 2 ]
 }
+
+@test "hook denies a large Write payload (no stdin-read timeout fail-open)" {
+  run spawn w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  big="$BATS_TEST_TMPDIR/big.json"
+  { printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"' "$TARGET/f.txt"
+    head -c 1500000 /dev/zero | tr '\0' a; printf '"}}'; } > "$big"
+  # a pipe, as Claude Code feeds hooks: bash `read` drains a pipe one byte per syscall
+  run bash -c "cat '$big' | $(hook_cmd "$s")"
+  [ "$status" -eq 2 ]
+}
+
+@test "hook guards the whole checkout when the target resolves to a subdirectory" {
+  mkdir -p "$TARGET/pkg"; echo y > "$TARGET/pkg/g.txt"
+  git -C "$TARGET" add pkg; git -C "$TARGET" commit -q -m pkg
+  run env PROJECT_ROOT="$TARGET/pkg" ORCH_ALLOW_UNRELATED_REPO=1 "$ORCH_DIR_SRC/spawn.sh" w1 sonnet "task"
+  [ "$status" -eq 0 ]
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$TARGET/f.txt")"
+  [ "$status" -eq 2 ]
+}
+
+@test "hook fails open (does not hang) when stdin never closes" {
+  command -v timeout >/dev/null || skip "no timeout(1)"
+  run spawn w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  # stdin is a pipe whose writer stays open for 30s; the hook must give up first
+  start=$SECONDS
+  run bash -c "$(hook_cmd "$s") < <(sleep 30 2>/dev/null)"
+  [ "$status" -eq 0 ]
+  [ $((SECONDS - start)) -lt 20 ]
+}
