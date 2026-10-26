@@ -594,6 +594,10 @@ is_busy() { # <target>  -> 0 if busy
 # Ready if not busy AND the input prompt box is visible.
 is_ready() { # <target>  -> 0 if idle & ready for input
   is_busy "$1" && return 1
+  # Issue #155: a dialog's highlighted choice ("❯ No, exit", "❯ 1. Yes") matches
+  # the bare "❯" in TUI_READY_REGEX, but Enter there selects that choice instead
+  # of submitting the input box. One veto here covers every wait_ready caller.
+  pane_has_dialog "$1" && return 1
   pane_tail "$1" 15 | grep -qE "$TUI_READY_REGEX"
 }
 

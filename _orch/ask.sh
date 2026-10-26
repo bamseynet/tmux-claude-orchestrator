@@ -24,6 +24,11 @@ if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id";
   say "no worker window '$id' in session '$S'"; exit 1
 fi
 
+# Issue #155: never paste into a dialog -- the trailing Enter selects its default.
+if pane_has_dialog "$S:$id"; then
+  say "$id is showing a dialog (not ready); not asking"; exit 1
+fi
+
 wait_ready "$S:$id" 30 || say "(warning: $id looks busy; asking anyway)"
 send_prompt "$S:$id" "$msg"
 

@@ -1,0 +1,141 @@
+#!/usr/bin/env bats
+# Issue #155: TUI state detectors keyed on one glyph ("❯") were fooled by dialogs.
+# Matrix of (screen x detector), plus call-site proof for send.sh / ask.sh.
+#
+# Fixture provenance: `trust` is the pane captured in issue #133's comment
+# (Claude Code folder-trust dialog, worker `lift`). `perm` is the tool-permission
+# dialog with a highlighted `❯ 1. Yes` row -- that row is our ASSUMPTION about the
+# real render (PR #154's fixture omitted it); re-capture when a real one is seen.
+# banner/chip/busy/idle are shapes already used by injectfix_* / panestate_* tests.
+
+setup() {
+  export FAKE_TMUX_STATE="$BATS_TEST_TMPDIR/fake-tmux-state"
+  export ORCH_ROOT="$BATS_TEST_TMPDIR/orch_root"
+  mkdir -p "$ORCH_ROOT/_orch"
+  cp "$BATS_TEST_DIRNAME/../_orch/config.json" "$ORCH_ROOT/_orch/config.json"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/helpers/fake-tmux.bash"
+  # shellcheck disable=SC1091
+  source "$BATS_TEST_DIRNAME/../_orch/lib.sh"
+  fake_tmux_add_session "orch" "w"
+  T="orch:w"
+
+  SCREEN_banner='✻ Welcome to Claude Code!
+
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
+  ? for shortcuts'
+  SCREEN_trust=' Quick safety check: Is this a project you created or one you trust? ...
+ Claude Code'"'"'ll be able to read, edit, and execute files here.
+ Security guide
+❯ No, exit
+  Yes, I trust this folder
+ Enter to confirm · Esc to cancel'
+  SCREEN_perm=' Bash command
+   rm -rf build
+ Do you want to proceed?
+❯ 1. Yes
+  2. No'
+  SCREEN_chip='╭──────────────╮
+│ ❯ [Pasted text #1 +5 lines] │
+╰──────────────╯
+  ? for shortcuts'
+  SCREEN_busy='✻ Thinking… (esc to interrupt)
+╭──────────────╮
+│ ❯            │
+╰──────────────╯'
+  SCREEN_idle='● done
+╭──────────────╮
+│ ❯            │
+╰──────────────╯
+  ? for shortcuts'
+}
+
+# cell <screen> <detector> <Y|n>
+cell() {
+  local screen="$1" fn="$2" want="$3" var="SCREEN_$1" got
+  fake_tmux_set_pane "orch" "w" "${!var}"
+  if "$fn" "$T"; then got=Y; else got=n; fi
+  [ "$got" = "$want" ] || { echo "$fn on $screen: want $want got $got"; return 1; }
+}
+
+@test "is_ready: banner Y"     { cell banner is_ready Y; }
+@test "is_ready: trust n"      { cell trust  is_ready n; }
+@test "is_ready: perm n"       { cell perm   is_ready n; }
+@test "is_ready: chip Y"       { cell chip   is_ready Y; }
+@test "is_ready: busy n"       { cell busy   is_ready n; }
+@test "is_ready: idle Y"       { cell idle   is_ready Y; }
+
+@test "pane_active: banner Y"  { cell banner pane_active Y; }
+@test "pane_active: trust n"   { cell trust  pane_active n; }
+@test "pane_active: perm n"    { cell perm   pane_active n; }
+@test "pane_active: chip n"    { cell chip   pane_active n; }
+@test "pane_active: busy Y"    { cell busy   pane_active Y; }
+@test "pane_active: idle n"    { cell idle   pane_active n; }
+
+@test "inject_confirmed: banner n" { cell banner inject_confirmed n; }
+@test "inject_confirmed: trust n"  { cell trust  inject_confirmed n; }
+@test "inject_confirmed: perm Y"   { cell perm   inject_confirmed Y; }
+@test "inject_confirmed: chip n"   { cell chip   inject_confirmed n; }
+@test "inject_confirmed: busy Y"   { cell busy   inject_confirmed Y; }
+@test "inject_confirmed: idle Y"   { cell idle   inject_confirmed Y; }
+
+# --- call sites: real scripts against a stub tmux -------------------------------
+
+stub_tmux() { # <screen>
+  local var="SCREEN_$1"
+  STUBBIN="$BATS_TEST_TMPDIR/bin"; CALLS="$BATS_TEST_TMPDIR/calls"; PANE="$BATS_TEST_TMPDIR/pane"
+  mkdir -p "$STUBBIN"; : > "$CALLS"; printf '%s\n' "${!var}" > "$PANE"
+  cat > "$STUBBIN/tmux" <<STUB
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) printf '%s\n' orchestrator w ;;
+  capture-pane) cat "$PANE" ;;
+esac
+exit 0
+STUB
+  chmod +x "$STUBBIN/tmux"
+  export PATH="$STUBBIN:$PATH" SESSION_NAME=orch
+}
+
+no_keys_sent() { ! grep -qE 'send-keys|paste-buffer|load-buffer' "$CALLS"; }
+
+@test "send.sh refuses to paste into the trust dialog" {
+  stub_tmux trust
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"dialog"* ]]
+  no_keys_sent
+}
+
+@test "send.sh refuses to paste into the permission dialog" {
+  stub_tmux perm
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"dialog"* ]]
+  no_keys_sent
+}
+
+@test "send.sh still delivers a dialog answer (orch send 1)" {
+  stub_tmux perm
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w 1
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
+}
+
+@test "ask.sh refuses to paste into a dialog" {
+  stub_tmux trust
+  run bash "$BATS_TEST_DIRNAME/../_orch/ask.sh" w hi
+  [ "$status" -ne 0 ]
+  no_keys_sent
+}
+
+@test "send.sh still sends to an ordinary ready pane" {
+  stub_tmux idle
+  run bash "$BATS_TEST_DIRNAME/../_orch/send.sh" w hi
+  [ "$status" -eq 0 ]
+  grep -q 'paste-buffer' "$CALLS"
+}

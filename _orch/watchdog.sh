@@ -306,6 +306,9 @@ sweep_window() { # <window> <cooldown_seconds>
         # Still log (history/reporting unaffected), just don't inject.
         if is_human_managed "$w"; then
           log "rate limit cleared on '$w'; skipping retry nudge (human-managed)"
+        elif pane_has_dialog "$S:$w"; then
+          # issue #155: the nudge's trailing Enter would select the dialog's default
+          log "rate limit cleared on '$w'; skipping retry nudge (dialog on screen)"
         else
           wait_ready "$S:$w" 10 || true
           send_prompt "$S:$w" "That was a TEMPORARY rate limit, not a bug. Re-run the exact same command again — do NOT use a workaround."

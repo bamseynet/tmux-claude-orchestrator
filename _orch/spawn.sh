@@ -470,7 +470,16 @@ tmux send-keys -t "$S:$id" "ORCH_WORKER_ID=$id ORCH_DIR='$here' ${ORCH_GHOST_ENV
 
 # 5) wait for the REPL to be ready before injecting the task.
 #    Model is now set at launch via --model (see #30), so no slash-command dance.
-if ! wait_ready "$S:$id" 60; then
+# A dialog counts as "arrived" here (issue #155: is_ready now refuses dialogs):
+# Guard 3 below owns waiting it out, and must not sit behind a 60s timeout first.
+_i=0
+until pane_has_dialog "$S:$id" || is_ready "$S:$id"; do
+  [ "$_i" -lt 60 ] || break
+  sleep 1; _i=$((_i+1))
+done
+if pane_has_dialog "$S:$id"; then :
+elif is_ready "$S:$id"; then sleep 0.4
+else
   log "worker $id not ready in 60s; sending task anyway"
 fi
 

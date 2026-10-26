@@ -21,6 +21,19 @@ if ! tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id";
   say "no worker window '$id' in session '$S'"; exit 1
 fi
 
+# Issue #155: a paste's trailing Enter selects a dialog's highlighted choice (the
+# trust dialog's default exits the session). Refuse free text while a dialog is up;
+# a bare numeric answer ("orch send <id> 1") is the deliberate way to answer one.
+if pane_has_dialog "$S:$id"; then
+  if [[ "$msg" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]; then
+    send_prompt "$S:$id" "$msg"
+    say "sent to $id"
+    exit 0
+  fi
+  say "$id is showing a dialog (not ready); not sending. Answer it with a number, e.g. \`orch send $id 1\`"
+  exit 1
+fi
+
 wait_ready "$S:$id" 30 || say "(warning: $id looks busy; sending anyway)"
 send_prompt "$S:$id" "$msg"
 say "sent to $id"
