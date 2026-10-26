@@ -193,7 +193,7 @@ queue_record() { # <id> <target> <allow_unrelated>: a post-#148 --after-w1 queue
   [ ! -s "$ORCH_ROOT/_orch/state/queue.jsonl" ]
   # ...but the spawn was refused by guard 0: nothing created in the queued repo
   [ ! -e "$(libcall worker_wdir "$TARGET" w2)" ]
-  ! git -C "$TARGET" show-ref --verify --quiet "refs/heads/$(libcall worker_branch w2)"
+  ! git -C "$TARGET" show-ref --verify --quiet "refs/heads/$(libcall worker_branch w2)" || return 1
   # the refused drain is surfaced, not left "queued" forever with its record popped
   [ "$(jq -r .status "$WORKERS/w2.json")" = "spawn-failed" ]
   grep -q '"id":"w2","event":"spawn-failed"' "$ORCH_ROOT/_orch/state/inbox.jsonl"
