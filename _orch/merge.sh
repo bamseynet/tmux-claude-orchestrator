@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # _orch/merge.sh <id> [--auto] [--base <branch>]
 # Opt-in CI-gated auto-merge (issue #36): for a finished worker branch orch/<id>,
-# push it, open (or reuse) a PR against its recorded base (else main), and — ONLY when explicitly opted in
+# push it, open (or reuse) a PR against its recorded base (else
+# $ORCH_BASE_BRANCH, else main), and — ONLY when explicitly opted in
 # via --auto or merge.auto in config.json — wait for required CI checks and
 # squash-merge (+ delete branch) once every required check is SUCCESS.
 #
@@ -36,17 +37,7 @@ done
 proj="$(resolve_worker_proj "$id")" || exit 1   # issue #148: recorded target repo wins
 # Default PR base: the branch spawn recorded (#176), else ORCH_BASE_BRANCH/main. --base wins.
 if [ -z "$base" ]; then
-  base="$(worker_recorded_base_branch "$id")"
-  # A recorded branch since deleted/pruned upstream can't be a PR base: fall back.
-  # An origin/<b> record must still exist as origin/<b>; a local <b> record as <b>.
-  rec_ref="refs/remotes/origin/$base"
-  case "$(jq -r '.base // empty' "$WORKERS_DIR/$id.json" 2>/dev/null)" in
-    origin/*) ;; *) rec_ref="refs/heads/$base" ;;
-  esac
-  if [ -n "$base" ] && ! git -C "$proj" rev-parse -q --verify "$rec_ref" >/dev/null 2>&1; then
-    say "merge $id: recorded base '$base' no longer exists; using ${ORCH_BASE_BRANCH:-main}" >&2
-    base=""
-  fi
+  base="$(worker_recorded_base_branch "$proj" "$id")"
   base="${base:-${ORCH_BASE_BRANCH:-main}}"
 fi
 branch="$(worker_branch "$id")"

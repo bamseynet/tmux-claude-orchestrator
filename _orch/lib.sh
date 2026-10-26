@@ -305,14 +305,16 @@ worker_recorded_base() {
   done < <(jq -r '.base // empty, .base_sha // empty' "$f" 2>/dev/null || true)
 }
 
-# worker_recorded_base_branch <id>: the recorded `base` as a plain branch name for
-# `gh pr create --base` (leading origin/ stripped). Prints nothing when there is no
-# record or it is not a branch ref (e.g. spawn's pinned-SHA HEAD fallback).
+# worker_recorded_base_branch <repo_dir> <id>: the recorded `base` as a plain branch
+# name for `gh pr create --base` (leading origin/ stripped). Prints nothing when there
+# is no record, it is not a branch ref (e.g. spawn's pinned-SHA HEAD fallback), or the
+# branch no longer exists in <repo_dir> (an origin/<b> record as origin/<b>, a local
+# <b> record as <b>) -- the last case warns on stderr.
 worker_recorded_base_branch() {
-  local f="$WORKERS_DIR/$1.json" ref
+  local dir="$1" f="$WORKERS_DIR/$2.json" rec ref
   [ -f "$f" ] || return 0
-  ref="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
-  ref="${ref#origin/}"
+  rec="$(jq -r '.base // empty' "$f" 2>/dev/null || true)"
+  ref="${rec#origin/}"
   case "$ref" in "" | HEAD) return 0 ;; esac
   # spawn pins its HEAD fallback to a full sha (40 hex, 64 under sha256); only
   # that exact shape is a sha -- a hex-looking branch like "deadbeef" is a branch.
@@ -320,6 +322,12 @@ worker_recorded_base_branch() {
     *[!0-9a-f]*) ;;
     *) { [ "${#ref}" -eq 40 ] || [ "${#ref}" -eq 64 ]; } && return 0 ;;
   esac
+  # A recorded branch since deleted/pruned can't be a PR base.
+  if [ "$ref" != "$rec" ]; then rec="refs/remotes/origin/$ref"; else rec="refs/heads/$ref"; fi
+  if ! git -C "$dir" rev-parse -q --verify "$rec" >/dev/null 2>&1; then
+    say "recorded base '$ref' for $2 no longer exists; falling back to the default base" >&2
+    return 0
+  fi
   printf '%s' "$ref"
 }
 
