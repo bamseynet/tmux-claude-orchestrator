@@ -192,7 +192,12 @@ _wdir() { bash -c 'source "'"$BATS_TEST_DIRNAME"'/../_orch/lib.sh"; worker_wdir 
   # exec so $! is the process holding the lock (killing a flock(1) wrapper would
   # orphan its `sleep` child, which keeps the lock and bats' fd 3 for 20s).
   ( exec 9>"$lock"; flock 9; exec sleep 20 ) 3>&- & holder=$!
-  sleep 0.5
+  # Wait until the holder really owns the lock (a fixed sleep is flaky on a
+  # loaded host: spawn would win the race, fetch, and fail the assertions).
+  for _ in $(seq 100); do
+    ( exec 8>"$lock"; ! flock -n 8 ) 3>&- && break
+    sleep 0.05
+  done
   ORCH_LOCK_TIMEOUT=1 run "$SPAWN" w1 sonnet "t"
   kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
   [ "$status" -eq 0 ]

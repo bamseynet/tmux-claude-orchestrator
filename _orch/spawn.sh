@@ -256,7 +256,7 @@ _fetch_spawn_base() { # <proj> <id>
       env "${fetch_env[@]}" $to git -C "$proj" -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$secs" \
         fetch --quiet origin </dev/null >/dev/null 2>&1 200>&- ) 2>/dev/null || rc=$?
     if [ "$rc" -eq 3 ]; then
-      log "spawn $id: fetch lock busy (another spawn fetching); skipping git fetch origin, using last-known remote refs"
+      log "spawn $id: fetch lock busy or unavailable (another spawn fetching?); skipping git fetch origin, using last-known remote refs"
     elif [ "$rc" -ne 0 ]; then
       log "spawn $id: git fetch origin failed in $proj; using last-known remote refs"
     fi
