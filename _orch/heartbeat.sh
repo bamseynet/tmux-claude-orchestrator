@@ -424,8 +424,8 @@ master_reset_tick() { # <session:window>
 # Every dirty path seen (reported OR baseline-absorbed) is persisted per repo so a
 # second tick is silent, and so a path absorbed by a later worker's baseline is not
 # reported once that worker leaves the live set; an entry that clears and returns
-# re-alerts. Entries compare by path, so a write to a path
-# already dirty in a baseline is not seen. Known limitation: a Bash `git commit` /
+# re-alerts (a baseline path seen clean is dropped from its baseline too). Entries
+# compare by path, so a write to a path still dirty since the baseline is not seen. Known limitation: a Bash `git commit` /
 # `checkout` into the root leaves it clean and is NOT detected (a HEAD comparison
 # would false-positive on an operator `git pull`).
 root_dirty_tick() {
@@ -456,18 +456,18 @@ root_dirty_tick() {
     pairs+="$real"$'\t'"$id"$'\n'
   done
   [ -n "$pairs" ] && repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
-  local all cur new bl union rep_f paths wl ev wids
+  local all cur new bl union bfs bk rep_f paths wl ev wids
   [ -z "$repos" ] || mkdir -p "$STATE_DIR/root-dirty"
   while IFS= read -r real; do
     [ -n "$real" ] || continue
     rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
     keep+="${rep_f##*/} "
     wids="$(printf '%s' "$pairs" | awk -F'\t' -v r="$real" '$1==r{print $2}')"
-    union=""; bl=1
+    bfs=""; bl=1
     while IFS= read -r id; do
       f="$(root_baseline_file "$real" "$id")"
       [ -f "$f" ] || { bl=0; break; }
-      union+="$(cut -c4- "$f")"$'\n'
+      bfs+="$f"$'\n'
     done <<<"$wids"
     [ "$bl" = 1 ] || continue
     # Compare PATHS, not whole porcelain lines: an operator `git add` turns a
@@ -479,9 +479,25 @@ root_dirty_tick() {
     # reported (post-union) paths would let an operator edit masked by a later
     # worker's baseline alert as soon as that worker's window closes.
     all="$(printf '%s\n' "$cur" | cut -c4- | grep -v '^$' || true)"
-    cur="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s' "$union") | grep -v '^$' || true)"
+    # A baseline absorbs only dirt that predates its worker: once a baseline path
+    # is seen clean, drop it from that baseline, so a later write to it is reported
+    # instead of being masked for the rest of the worker's life.
+    union=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      bk="$(awk 'NR==FNR{d[$0];next} (substr($0,4) in d)' <(printf '%s\n' "$all") "$f" 2>/dev/null)" || bk="$(cat "$f")"
+      if [ "$bk" != "$(cat "$f")" ]; then
+        { [ -z "$bk" ] || printf '%s\n' "$bk"; } > "$f.tmp" && mv -f "$f.tmp" "$f"
+      fi
+      union+="$(printf '%s\n' "$bk" | cut -c4- | grep -v '^$' || true)"$'\n'
+    done <<<"$bfs"
+    union="$(printf '%s' "$union" | grep -v '^$' || true)"
+    # Never hand grep an empty pattern (an empty union / record): BSD grep can
+    # treat an empty pattern as matching every line, even under -x.
+    cur="$all"
+    [ -z "$union" ] || cur="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s\n' "$union") || true)"
     new="$cur"
-    if [ -n "$cur" ] && [ -f "$rep_f" ]; then
+    if [ -n "$cur" ] && [ -s "$rep_f" ]; then
       new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
     fi
     [ -n "$new" ] || { printf '%s' "$all" > "$rep_f"; continue; }

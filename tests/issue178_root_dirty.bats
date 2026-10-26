@@ -250,3 +250,24 @@ inbox() { nlines "$INBOX"; }
   [ "$(events)" -eq 1 ]
   [[ "$(tail -1 "$STATE_DIR/events.jsonl")" != *'"f.sh'* ]]
 }
+
+@test "a clean checkout at spawn (empty baseline) still alerts on a new write" {
+  git -C "$PROJ" checkout -q _orch/config.json   # undo setup's operator edit
+  worker w1 worktree; baseline w1
+  [ ! -s "$(root_baseline_file "$PROJ" w1)" ]    # baseline is genuinely empty
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" == *'"f.sh"'* ]]
+}
+
+@test "a baseline path that clears and is re-dirtied while the worker lives re-alerts" {
+  worker w1 worktree; baseline w1                 # baseline holds _orch/config.json
+  git -C "$PROJ" checkout -q _orch/config.json    # operator reverts their edit
+  root_dirty_tick; [ "$(events)" -eq 0 ]
+  ! grep -q 'config.json' "$(root_baseline_file "$PROJ" w1)"   # dropped from baseline
+  echo w >> "$PROJ/_orch/config.json"             # worker's Bash write to the same path
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  [[ "$(tail -1 "$STATE_DIR/events.jsonl")" == *config.json* ]]
+}
