@@ -1,0 +1,23 @@
+
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratch · /rc
+
+
+❯ Use the AskUserQuestion tool to ask me TWO questions in one call: Q1 "Color?" options Red/Green/Blue, Q2 "Size?"
+  options Small/Medium/Large. Then report my answers verbatim.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Color  ☒ Size  ✔ Submit  →
+
+Review your answers
+
+ ● Color?
+   → Red
+ ● Size?
+   → Medium
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

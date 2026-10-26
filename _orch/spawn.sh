@@ -710,7 +710,7 @@ else
       log "worker $id: dialog on screen; not re-pasting (would be consumed as a dialog choice)"
       # A permission dialog that rendered only after the last poll is still
       # positive evidence the (already sent) task landed (issue #133).
-      if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
+      if [ "$task_sent" -eq 1 ] && pane_has_postaccept_dialog "$S:$id"; then spawn_ok=1; fi
     else
       if [ "$task_sent" -eq 1 ]; then
         log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
@@ -724,7 +724,7 @@ else
         # claude exited or a dialog came back; nothing was sent -> spawn-failed
         # below -- unless the dialog that came back is a permission dialog for
         # the already-sent task, which is positive evidence it landed (#133).
-        if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
+        if [ "$task_sent" -eq 1 ] && pane_has_postaccept_dialog "$S:$id"; then spawn_ok=1; fi
       elif confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then

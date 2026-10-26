@@ -1,0 +1,29 @@
+
+ ▐▛███▛█   Claude Code v2.1.310
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /…/scratch · /rc
+
+
+❯ Use AskUserQuestion with ONE multiSelect question "Toppings?" options Cheese/Ham/Olives. Then report my answer
+  verbatim.
+
+● User declined to answer questions
+  ⎿  · Toppings? (Cheese / Ham / Olives)
+
+✻ Sautéed for 2s · done 13:13
+
+❯ Use AskUserQuestion with ONE single-select question "Pet?" options Cat/Dog. Then report my answer verbatim.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Pet
+
+Pet?
+
+  1. Cat
+     Cat
+  2. Dog
+     Dog
+❯ 3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel
