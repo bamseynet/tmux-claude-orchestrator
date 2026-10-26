@@ -219,3 +219,16 @@ Enter to confirm · Esc to cancel'
   run inject_confirmed "orch:orchestrator"
   [ "$status" -ne 0 ]
 }
+
+@test "pane_has_dialog detects the --dangerously-skip-permissions startup warning (default 'No, exit')" {
+  fake_tmux_set_pane "orch" "orchestrator" '╭──────────────────────────────────────────────────────────╮
+│ WARNING: Claude Code running in Bypass Permissions mode  │
+│ In Bypass Permissions mode, Claude Code will not ask...  │
+│ ❯ 1. No, exit                                            │
+│   2. Yes, I accept                                       │
+╰──────────────────────────────────────────────────────────╯'
+  run pane_has_dialog "orch:orchestrator"
+  [ "$status" -eq 0 ]
+  run inject_confirmed "orch:orchestrator"
+  [ "$status" -ne 0 ]
+}

@@ -455,3 +455,70 @@ EOF2
   [ "$paste_calls" -eq 0 ]
   grep -Fq 'worker w9: claude is no longer running in the pane (shell prompt); not sending the task' "$LOGF"
 }
+
+@test "a dialog that comes back during the post-dialog REPL wait never gets the held-back task pasted into it" {
+  # The trust dialog clears, but before the REPL prompt is drawn a second
+  # dialog renders. wait_ready's bare-"❯" match is satisfied by its highlighted
+  # choice, so send_task must re-check for a dialog before pasting.
+  cat > "$PANE_FILE" <<'EOF2'
+ Quick safety check: Is this a project you created or one you trust? ...
+❯ No, exit
+  Yes, I trust this folder
+EOF2
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  BACK="$BATS_TEST_TMPDIR/back"
+  cat > "$STUBBIN/tmux" <<EOF2
+#!/usr/bin/env bash
+echo "\$@" >> "$CALLS"
+case "\${1:-}" in
+  list-sessions) echo "orch" ;;
+  list-windows) exit 0 ;;
+  display-message) case "\$*" in *pane_current_command*) echo claude ;; esac ;;
+  capture-pane)
+    if grep -q 'dialog cleared; sending the task' "$LOGF" 2>/dev/null; then
+      [ -f "$BACK" ] || { touch "$BACK"; printf '%s\n' ' WARNING: Claude Code running in Bypass Permissions mode' '❯ 1. No, exit' '  2. Yes, I accept' > "$PANE_FILE"; }
+    elif grep -q 'not sending' "$LOGF" 2>/dev/null; then
+      : > "$PANE_FILE"
+    fi
+    cat "$PANE_FILE" 2>/dev/null ;;
+  show-buffer) exit 1 ;;
+esac
+exit 0
+EOF2
+  chmod +x "$STUBBIN/tmux"
+
+  run "$SPAWN" w9 sonnet "do the thing" --no-worktree
+  [[ "$output" == *"spawn-failed w9"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 0 ]
+  [ "$(bare_enter_count)" -eq 0 ]
+  grep -Fq 'worker w9: dialog on screen again; not sending the task' "$LOGF"
+}
+
+@test "a permission dialog that renders only after the last poll still counts as landed in the last resort" {
+  # The task is sent, nothing confirms through every rung, and the permission
+  # dialog for its first tool call appears just after the final rung's last
+  # poll -- i.e. when the last resort looks at the pane. That dialog is
+  # positive evidence; it must not end in spawn-failed.
+  printf '%s\n' '✻ Welcome to Claude Code!' '│ ❯                              │' > "$PANE_FILE"
+  LOGF="$ORCH_ROOT/_orch/state/orch.log"
+  SLEEPS="$BATS_TEST_TMPDIR/sleeps"
+  # Count the final rung's confirm_inject polls (15 x sleep 1); after the
+  # 15th, the next capture is the last resort's.
+  cat > "$STUBBIN/sleep" <<EOF2
+#!/usr/bin/env bash
+if grep -q 'retry 2/2' "$LOGF" 2>/dev/null; then
+  n=\$(( \$(cat "$SLEEPS" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "$SLEEPS"
+  [ "\$n" -ge 15 ] && printf '%s\n' '✻ Welcome to Claude Code!' ' Bash command' ' Do you want to proceed?' '❯ 1. Yes' '  2. No' > "$PANE_FILE"
+fi
+exit 0
+EOF2
+  chmod +x "$STUBBIN/sleep"
+
+  run "$SPAWN" w9 sonnet "do the thing" --no-worktree
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawned w9 (sonnet)"* ]]
+  paste_calls="$(grep -c 'paste-buffer' "$CALLS" || true)"
+  [ "$paste_calls" -eq 1 ]
+  grep -Fq 'worker w9: dialog on screen; not re-pasting' "$LOGF"
+}

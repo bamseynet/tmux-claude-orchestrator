@@ -455,7 +455,10 @@ TUI_PERMISSION_DIALOG_REGEX="$(_tui_pattern permission_dialog_regex '^[[:space:]
 # the same reason as TUI_PERMISSION_DIALOG_REGEX: the same phrases mid-line in
 # a submitted task's transcript echo or in model prose would otherwise veto
 # inject_confirmed and block every rung of spawn.sh's ladder.
-TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\?|Do you trust the files in this folder\?)|^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?Yes, I trust (this folder|the files)')"
+# Also covers the --dangerously-skip-permissions startup warning ("WARNING:
+# Claude Code running in Bypass Permissions mode"): the same pre-acceptance
+# shape, with the same destructive "No, exit" highlighted by default.
+TUI_TRUST_DIALOG_REGEX="$(_tui_pattern trust_dialog_regex '^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\?|Do you trust the files in this folder\?)|^[[:space:]│]*WARNING: Claude Code running in Bypass Permissions mode|^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?Yes, I trust (this folder|the files)')"
 # Each dialog needs TWO rows of evidence, not one: a header-shaped row above
 # can still turn up on its own -- a short multi-line task rendered literally in
 # the input box ("│ Do you want to proceed? │"), or a numbered list in model

@@ -81,7 +81,7 @@
     "paste_chip_regex": "\\[Pasted text( #[0-9]+)?( \\+[0-9]+ lines?)?\\]",
     "permission_dialog_regex": "^[[:space:]│]*Do you want to proceed\\?[[:space:]│]*$",
     "permission_dialog_choice_regex": "^[[:space:]│❯]*1\\.[[:space:]]*Yes",
-    "trust_dialog_regex": "^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\\?|Do you trust the files in this folder\\?)|^[[:space:]│❯]*([0-9]+\\.[[:space:]]*)?Yes, I trust (this folder|the files)",
+    "trust_dialog_regex": "^[[:space:]│]*(Quick safety check: )?(Is this a project you created or one you trust\\?|Do you trust the files in this folder\\?)|^[[:space:]│]*WARNING: Claude Code running in Bypass Permissions mode|^[[:space:]│❯]*([0-9]+\\.[[:space:]]*)?Yes, I trust (this folder|the files)",
     "trust_dialog_choice_regex": "^[[:space:]│❯]*([0-9]+\\.[[:space:]]*)?No, exit"
   }
 }

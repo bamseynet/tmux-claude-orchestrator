@@ -449,14 +449,22 @@ hook_reported() {
 # sent into that gap is the #51 lost-send shape.
 # Returns 1 WITHOUT sending when the pane is back at a shell: "dialog gone" also
 # covers claude having exited (e.g. "No, exit" picked on the trust dialog), and
-# a paste+Enter there would run the task text as shell commands.
+# a paste+Enter there would run the task text as shell commands. The shell is
+# checked before the REPL wait too, so an exited claude doesn't burn 15s first.
+# Returns 2 WITHOUT sending when a dialog is (back) on screen after that wait:
+# wait_ready's bare-"❯" match is satisfied by a dialog's highlighted choice, so
+# a dialog rendering during the wait would otherwise take the paste's Enter.
 send_task() {
-  if [ "$task_sent" -ne 1 ]; then
+  if [ "$task_sent" -ne 1 ] && ! pane_runs_shell; then
     wait_ready "$S:$id" 15 || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
   fi
   if pane_runs_shell; then
     log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"
     return 1
+  fi
+  if pane_has_dialog "$S:$id"; then
+    log "worker $id: dialog on screen again; not sending the task"
+    return 2
   fi
   if [ "$task_sent" -ne 1 ]; then
     update_worker_status "$id" --argjson hs "$hook_statuses" \
@@ -467,7 +475,7 @@ send_task() {
 }
 pane_runs_shell() {
   case "$(tmux display-message -p -t "$S:$id" '#{pane_current_command}' 2>/dev/null)" in
-    sh|bash|zsh|dash|ksh|fish|-sh|-bash|-zsh) return 0 ;;
+    sh|bash|zsh|dash|ksh|mksh|fish|tcsh|csh|nu|xonsh|elvish|-sh|-bash|-zsh|-dash|-ksh|-fish|-tcsh|-csh) return 0 ;;
   esac
   return 1
 }
@@ -501,11 +509,14 @@ else
       # The dialog that blocked the first injection has cleared: nothing is in
       # the input box for a bare Enter to submit, so send the task itself.
       log "worker $id: dialog cleared; sending the task (retry $retry/$max_retries)"
-      send_task || break
+      send_rc=0
+      send_task || send_rc=$?
+      [ "$send_rc" -eq 1 ] && break
       # This rung is the FIRST send, not a bare-Enter retry: hand its budget
       # back so the #51 bare-Enter retries stay available for this paste even
       # when the dialog outlasted earlier rungs. Bounded: task_sent flips once.
-      retry=$((retry - 1))
+      # A send held back by a returning dialog (rc 2) keeps the rung spent.
+      [ "$send_rc" -eq 0 ] && retry=$((retry - 1))
     else
       log "worker $id: task injection unconfirmed; sending bare Enter (retry $retry/$max_retries)"
       tmux send-keys -t "$S:$id" Enter
@@ -528,6 +539,9 @@ else
       log "worker $id: task text still sits unsent in the input box; not re-pasting (would duplicate it)"
     elif pane_has_dialog "$S:$id"; then
       log "worker $id: dialog on screen; not re-pasting (would be consumed as a dialog choice)"
+      # A permission dialog that rendered only after the last poll is still
+      # positive evidence the (already sent) task landed (issue #133).
+      if [ "$task_sent" -eq 1 ] && pane_has_permission_dialog "$S:$id"; then spawn_ok=1; fi
     else
       if [ "$task_sent" -eq 1 ]; then
         log "worker $id: bare-Enter retries exhausted; re-injecting the full task once"
@@ -538,7 +552,7 @@ else
       fi
       first_send=$((1 - task_sent))
       if ! send_task; then
-        : # claude exited; nothing was sent -> spawn-failed below
+        : # claude exited or a dialog came back; nothing was sent -> spawn-failed below
       elif confirm_sent || hook_reported; then
         spawn_ok=1
       elif [ "$first_send" -eq 1 ] && ! pane_has_dialog "$S:$id"; then
