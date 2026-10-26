@@ -597,7 +597,9 @@ send_task() {
     return 1
   fi
   if [ "$task_sent" -ne 1 ]; then
-    wait_ready "$S:$id" 15 || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
+    # A dialog ends the wait early (#155); the dialog check below refuses it.
+    local _st_wr=0; wait_ready_or_dialog "$S:$id" 15 || _st_wr=$?
+    [ "$_st_wr" -ne 1 ] || log "worker $id: REPL not ready 15s after the dialog cleared; sending anyway"
     # claude can exit during that wait too.
     if pane_runs_shell; then
       log "worker $id: claude is no longer running in the pane (shell prompt); not sending the task"

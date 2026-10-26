@@ -197,6 +197,8 @@ run_orch() { # env safety, same as status_table.bats
   send_prompt() { echo "SEND_PROMPT_CALLED:$*" >> "$BATS_TEST_TMPDIR/sent.log"; }
   # shellcheck disable=SC2317
   wait_ready() { return 0; }
+  # shellcheck disable=SC2317  # the nudge waits via this since #155
+  wait_ready_or_dialog() { return 0; }
 
   echo 1065 > "$STATE_DIR/.rl-w1"
   sweep_window w1 65 </dev/null >/dev/null 2>&1 || true
