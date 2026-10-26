@@ -4,7 +4,7 @@
 # on hosts without a global git ignore.
 
 setup() {
-  unset ORCH_ROOT SESSION_NAME ORCH_BASE_BRANCH
+  unset ORCH_ROOT SESSION_NAME ORCH_BASE_BRANCH GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
   # Host git config must not leak in (the bug's root): empty HOME/XDG, no system config.
   export HOME="$BATS_TEST_TMPDIR/home" XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/xdg" GIT_CONFIG_NOSYSTEM=1
   mkdir -p "$HOME" "$XDG_CONFIG_HOME"
