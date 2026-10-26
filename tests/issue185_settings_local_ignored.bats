@@ -127,7 +127,24 @@ _first_spawn() {
 
 @test "no not-ignored warning when spawn's own .gitignore applies" {
   _first_spawn
-  ! grep -q "is not git-ignored" "$ROOT/_orch/state/orch.log"
+  # A missing log would make the negated grep pass vacuously.
+  [ -s "$ROOT/_orch/state/orch.log" ]
+  run grep -q "is not git-ignored" "$ROOT/_orch/state/orch.log"
+  [ "$status" -eq 1 ]
+}
+
+@test "a tracked .claude/.gitignore that covers settings.local.json: no warning, reuse works" {
+  mkdir -p "$PROJECT_ROOT/.claude"
+  printf '/settings.local.json\n' > "$PROJECT_ROOT/.claude/.gitignore"
+  git -C "$PROJECT_ROOT" add -f .claude/.gitignore
+  git -C "$PROJECT_ROOT" commit -q -m gi
+  _first_spawn
+  [ "$(cat "$WDIR/.claude/.gitignore")" = /settings.local.json ]
+  run grep -q "is not git-ignored" "$ROOT/_orch/state/orch.log"
+  [ "$status" -eq 1 ]
+  run "$SPAWN" w1 sonnet t
+  [ "$status" -eq 0 ]
+  grep -q "already a clean worktree .* reusing" "$ROOT/_orch/state/orch.log"
 }
 
 @test "a tracked .claude/settings.local.json is reported as not ignored" {

@@ -407,7 +407,7 @@ else
   # A tracked .claude/.gitignore (or a tracked settings.local.json) may not cover
   # it; say so instead of leaving a later "not a clean worktree" refusal unexplained.
   git -C "$wdir" check-ignore -q .claude/settings.local.json 2>/dev/null \
-    || log "spawn $id: .claude/settings.local.json is not git-ignored in $wdir; a respawn of $id may be refused as dirty"
+    || log "spawn $id: .claude/settings.local.json is not git-ignored in $wdir; git add -A would stage it and a respawn of $id may be refused as dirty"
 fi
 
 # --allow entries are translated into valid permissions.allow tool rules (issue #78):
