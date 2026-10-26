@@ -413,6 +413,128 @@ master_reset_tick() { # <session:window>
   _master_reset_event master-reset "$old_sid"
 }
 
+# Issue #178 (#152 direction 2): backstop for Bash-made writes into the target
+# repo's main checkout, which the PreToolUse guard cannot see. One call = one tick.
+# Per distinct target_repo with >=1 live mode:"worktree" worker, run ONE
+# `git status --porcelain` and alert on entries absent from the union of those
+# workers' spawn-time baselines (so an operator edit made between two spawns is
+# not blamed). Bash writes cannot be attributed: the event lists the live worker
+# ids without claiming which one wrote. A repo where any such worker lacks a
+# baseline (spawned before this existed) is skipped rather than guessed at.
+# Every dirty path seen (reported OR baseline-absorbed) is persisted per repo so a
+# second tick is silent, and so a path absorbed by a later worker's baseline is not
+# reported once that worker leaves the live set; an entry that clears and returns
+# re-alerts (a baseline path seen clean is dropped from its baseline too). Entries
+# compare by path, so a write to a path still dirty since the baseline is not seen. Known limitation: a Bash `git commit` /
+# `checkout` into the root leaves it clean and is NOT detected (a HEAD comparison
+# would false-positive on an operator `git pull`).
+root_dirty_tick() {
+  shopt -s nullglob
+  local f st mode repo id real
+  local pairs="" repos="" keep=" " wins="" wins_read=0 gc=1 bf rk
+  for f in "$WORKERS_DIR"/*.json; do
+    IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
+    # dead: watchdog confirmed the window is gone, so it can write nothing.
+    case "$st" in spawn-failed|queued|dead|"") continue ;; esac
+    [ "$mode" = worktree ] && [ -n "$repo" ] || continue
+    [ -n "$id" ] || id="$(basename "$f" .json)"
+    # A worker is live iff its window exists, whatever its status says: report.sh
+    # writes "done" (merged/blocked likewise) at the end of EVERY turn and send.sh
+    # never resets it, so a follow-up turn still reads "done"; and a needs-input
+    # worker whose window was closed is never marked dead (dead_sweep only handles
+    # mid-turn statuses), so trusting the status would keep it "live" forever.
+    # One list-windows per tick, only once a worktree worker is seen. If the
+    # session can't be listed, skip the whole tick: treating every worker as gone
+    # would wipe the reported records below and re-alert them next tick.
+    if [ "$wins_read" = 0 ]; then
+      wins_read=1
+      session_exists "$SESSION_NAME" || return 0
+      wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)" || return 0
+    fi
+    printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
+    # A live worker's repo that is momentarily unreachable (unmounted network FS)
+    # is skipped, but its record must survive the GC below or every path already
+    # reported re-alerts once the repo is back. Keep just that repo's record (keyed
+    # on its realpath, unresolvable now: try the recorded path); only when it can't
+    # be identified keep every record, since a stale record of an unrelated repo
+    # would silence a later worker re-dirtying a path reported there before.
+    if [ ! -d "$repo" ]; then
+      rk="$(_orch_session_hash "${repo%/}")"
+      if [ -e "$STATE_DIR/root-dirty/$rk" ]; then keep+="$rk "; else gc=0; fi
+      continue
+    fi
+    real="$(_phys_dir "$repo")" || real="$repo"
+    pairs+="$real"$'\t'"$id"$'\n'
+  done
+  [ -n "$pairs" ] && repos="$(printf '%s' "$pairs" | cut -f1 | sort -u)"
+  local all cur new bl union bfs bk rep_f paths wl ev wids top
+  [ -z "$repos" ] || mkdir -p "$STATE_DIR/root-dirty"
+  while IFS= read -r real; do
+    [ -n "$real" ] || continue
+    rep_f="$STATE_DIR/root-dirty/$(_orch_session_hash "$real")"
+    keep+="${rep_f##*/} "
+    # ENVIRON, not -v: awk -v expands backslash escapes in the repo path.
+    wids="$(printf '%s' "$pairs" | r="$real" awk -F'\t' '$1==ENVIRON["r"]{print $2}')"
+    bfs=""; bl=1
+    while IFS= read -r id; do
+      f="$(root_baseline_file "$real" "$id")"
+      [ -f "$f" ] || { bl=0; break; }
+      bfs+="$f"$'\n'
+    done <<<"$wids"
+    [ "$bl" = 1 ] || continue
+    # Compare PATHS, not whole porcelain lines: an operator `git add` turns a
+    # baseline " M f" into "M  f" and must not be blamed on a worker.
+    # A failed `git status` must not overwrite the record with "nothing dirty":
+    # the next good tick would re-alert every entry already reported.
+    cur="$(root_porcelain "$real")" || continue
+    # all = every dirty path now; it becomes the record. Recording only the
+    # reported (post-union) paths would let an operator edit masked by a later
+    # worker's baseline alert as soon as that worker's window closes.
+    all="$(printf '%s\n' "$cur" | cut -c4- | grep -v '^$' || true)"
+    # A baseline absorbs only dirt that predates its worker: once a baseline path
+    # is seen clean, drop it from that baseline, so a later write to it is reported
+    # instead of being masked for the rest of the worker's life.
+    union=""
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      bf="$(cat "$f")"
+      bk="$(awk 'NR==FNR{d[$0];next} (substr($0,4) in d)' <(printf '%s\n' "$all") - <<<"$bf" 2>/dev/null)" || bk="$bf"
+      if [ "$bk" != "$bf" ]; then
+        { [ -z "$bk" ] || printf '%s\n' "$bk"; } > "$f.tmp" && mv -f "$f.tmp" "$f"
+      fi
+      union+="$(printf '%s\n' "$bk" | cut -c4- | grep -v '^$' || true)"$'\n'
+    done <<<"$bfs"
+    # One filter: baselines + the already-reported record. Never hand grep an empty
+    # pattern (BSD grep can treat it as matching every line, even under -x).
+    union="$( { printf '%s\n' "$union"; [ ! -f "$rep_f" ] || cat "$rep_f"; } | grep -v '^$' || true)"
+    new="$all"
+    [ -z "$union" ] || [ -z "$all" ] || new="$(printf '%s\n' "$all" | grep -vxFf <(printf '%s\n' "$union") || true)"
+    [ -n "$new" ] || { printf '%s' "$all" > "$rep_f"; continue; }
+    # Capped: the event is pasted into the master's pane, and one `npm install` or
+    # build into an unignored root dir lists thousands of files under -uall.
+    paths="$(printf '%s\n' "$new" | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
+    # Porcelain paths are relative to the checkout's top level, which differs from
+    # $real for a subdirectory target: name the top so the paths resolve.
+    top="$(root_toplevel "$real")" || top="$real"
+    ev="$(jq -nc --arg r "$top" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
+      '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p[:50],paths_total:($p|length),workers:$w,ts:$ts,
+        note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
+    printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
+    printf '%s\n' "$ev" >> "$INBOX"
+    # Record only once the event is out: a failed event build above leaves the
+    # record untouched so the next tick retries instead of silently dropping it.
+    printf '%s' "$all" > "$rep_f"
+    log "root-dirty: new entries in $top while worktree workers live: $(jq -r '.paths_total|tostring' <<<"$ev") path(s): $(jq -r '.paths|join(" ")' <<<"$ev")"
+  done <<<"$repos"
+  # Forget reported entries of repos with no live worktree worker: a stale record
+  # would silence a later worker re-dirtying the same path after it was reverted.
+  [ "$gc" = 1 ] || return 0
+  for f in "$STATE_DIR"/root-dirty/*; do
+    case "$keep" in *" ${f##*/} "*) ;; *) rm -f "$f" ;; esac
+  done
+  return 0
+}
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -486,6 +608,7 @@ heartbeat_main() {
     if master_window_alive "$S:$ORCH_WINDOW"; then
       master_dead_clear
       master_reset_tick "$S:$ORCH_WINDOW"
+      root_dirty_tick
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi

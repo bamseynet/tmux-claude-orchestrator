@@ -486,6 +486,14 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
      end)
 ' > "$settings_file"
 
+# 2b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
+# root_dirty_tick can tell a worker's Bash write from the operator's own edits.
+# Written BEFORE the status file so a heartbeat tick never pairs this live
+# worker with a missing or stale (same id, earlier run) baseline.
+# No baseline = root_dirty_tick skips this repo while the worker lives: log it.
+[ "$mode" = "--no-worktree" ] || root_baseline_write "$proj" "$id" \
+  || log "spawn $id: root baseline write failed for $proj; root-dirty check off for this repo"
+
 # 3) initial status file
 # `created` is stamped once here so downstream tools (orch status, hud.sh) can
 # compute worker age; report.sh's later writes only ever touch `updated`.

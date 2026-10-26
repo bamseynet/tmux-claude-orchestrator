@@ -1498,6 +1498,57 @@ clear_human_managed() { # <id>
 
 # --- Resource guard (issues #21 concurrency, #31 memory, #24 budget) ---------------
 
+# --- Root-dirty baseline (issue #178, #152 direction 2) ------------------------------
+# A worktree-mode worker must not write the target repo's main checkout, but a Bash
+# write (sed -i, >, git apply) bypasses the PreToolUse hook. spawn snapshots the
+# checkout's `git status --porcelain` here; heartbeat's root_dirty_tick alerts on
+# entries absent from every live worker's baseline. Keyed on the repo (hash of its
+# realpath) AND the id, so a re-used id in another repo never reads this snapshot.
+root_baseline_file() { # <project_root> <id>
+  local real
+  real="$(_phys_dir "$1")" || real="${1%/}"
+  printf '%s/root-baseline/%s.%s' "$STATE_DIR" "$(_orch_session_hash "$real")" "$2"
+}
+# Physical checkout top level of <project_root>: nearest ancestor holding .git,
+# found in shell (no git call per tick). Porcelain paths are relative to it.
+root_toplevel() { # <project_root>
+  local rd top
+  rd="$(_phys_dir "$1")" || return 1
+  top="$rd"
+  while [ -n "$top" ] && [ ! -e "$top/.git" ]; do top="${top%/*}"; done
+  printf '%s' "${top:-$rd}"
+}
+# File-level status of <project_root> (untracked files listed individually).
+root_porcelain() { # <project_root>
+  # --no-optional-locks: run every tick against the operator's live checkout, a
+  # plain `git status` takes index.lock and can fail the operator's own git commands.
+  # Bounded: heartbeat calls this every tick, and a hung git (network FS, huge
+  # untracked tree) would otherwise stall event delivery to the master.
+  local to=""
+  if command -v timeout >/dev/null 2>&1; then to="timeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"
+  elif command -v gtimeout >/dev/null 2>&1; then to="gtimeout ${ORCH_ROOT_STATUS_TIMEOUT:-30}"; fi
+  # The toolkit's own state dir inside the checkout (a vendored copy whose repo does
+  # not ignore _orch/state/) changes on every spawn and tick: never report it.
+  # Relative to the checkout's top level, not <project_root>: a target that is a
+  # subdirectory (--repo <repo>/pkg) still gets whole-repo status, so a state dir
+  # beside it (<repo>/_orch/state) must be excluded too. Walk up in shell for the
+  # top level rather than paying a second git call every tick.
+  local sd top ps=()
+  if sd="$(_phys_dir "$STATE_DIR")" && top="$(root_toplevel "$1")"; then
+    case "$sd" in "$top"/*) ps=(-- ':/' ":(top,exclude,literal)${sd#"$top"/}") ;; esac
+  fi
+  # shellcheck disable=SC2086  # $to is intentionally word-split (empty or "timeout N")
+  # ${ps[@]+...}: an empty "${ps[@]}" is unbound under bash 3.2 + set -u (spawn.sh).
+  # GIT_LITERAL_PATHSPECS=1 in the operator's env would read ':/' as a file name
+  # and report a dirty checkout as clean.
+  env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_LITERAL_PATHSPECS $to git --no-optional-locks -C "$1" status --porcelain -uall ${ps[@]+"${ps[@]}"} 2>/dev/null
+}
+root_baseline_write() { # <project_root> <id>
+  local f; f="$(root_baseline_file "$1" "$2")"
+  mkdir -p "$(dirname "$f")" && root_porcelain "$1" > "$f.tmp" && mv -f "$f.tmp" "$f" \
+    || { rm -f "$f.tmp" "$f"; return 1; }   # never leave a stale same-id baseline
+}
+
 # Workers actually holding a tmux window + claude process right now: every status
 # except done/spawn-failed (terminal — no process left) and queued (not launched
 # yet, so it holds no slot itself — counting it would deadlock the gate, since a
