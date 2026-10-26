@@ -271,3 +271,26 @@ inbox() { nlines "$INBOX"; }
   [ "$(events)" -eq 1 ]
   [[ "$(tail -1 "$STATE_DIR/events.jsonl")" == *config.json* ]]
 }
+
+@test "a live worker's momentarily unreachable repo keeps its reported record" {
+  worker w1 worktree; baseline w1
+  echo y >> "$PROJ/f.sh"
+  root_dirty_tick; [ "$(events)" -eq 1 ]
+  mv "$PROJ" "$PROJ.away"              # e.g. network FS unmounted
+  root_dirty_tick
+  mv "$PROJ.away" "$PROJ"
+  [ -s "$STATE_DIR/root-dirty/$(_orch_session_hash "$(_phys_dir "$PROJ")")" ]
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+}
+
+@test "event path list is capped (it is pasted into the master pane) with the full count" {
+  worker w1 worktree; baseline w1
+  mkdir "$PROJ/build"; for i in $(seq 1 120); do : > "$PROJ/build/o$i"; done
+  root_dirty_tick
+  [ "$(events)" -eq 1 ]
+  ev="$(tail -1 "$STATE_DIR/events.jsonl")"
+  [ "$(jq '.paths|length' <<<"$ev")" -eq 50 ]
+  [ "$(jq '.paths_total' <<<"$ev")" -eq 120 ]
+  root_dirty_tick; [ "$(events)" -eq 1 ]   # all 120 recorded, not just the 50 shown
+}

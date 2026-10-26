@@ -431,12 +431,12 @@ master_reset_tick() { # <session:window>
 root_dirty_tick() {
   shopt -s nullglob
   local f st mode repo id real
-  local pairs="" repos="" keep=" " wins="" wins_read=0
+  local pairs="" repos="" keep=" " wins="" wins_read=0 gc=1 bf
   for f in "$WORKERS_DIR"/*.json; do
     IFS=$'\037' read -r st mode repo id < <(jq -r '[.status // "", .mode // "", .target_repo // "", .id // ""] | join("\u001f")' "$f" 2>/dev/null) || continue
     # dead: watchdog confirmed the window is gone, so it can write nothing.
     case "$st" in spawn-failed|queued|dead|"") continue ;; esac
-    [ "$mode" = worktree ] && [ -n "$repo" ] && [ -d "$repo" ] || continue
+    [ "$mode" = worktree ] && [ -n "$repo" ] || continue
     [ -n "$id" ] || id="$(basename "$f" .json)"
     # A worker is live iff its window exists, whatever its status says: report.sh
     # writes "done" (merged/blocked likewise) at the end of EVERY turn and send.sh
@@ -452,6 +452,10 @@ root_dirty_tick() {
       wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)" || return 0
     fi
     printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
+    # A live worker's repo that is momentarily unreachable (unmounted network FS)
+    # is skipped, but its record must survive the GC below or every path already
+    # reported re-alerts once the repo is back.
+    [ -d "$repo" ] || { gc=0; continue; }
     real="$(_phys_dir "$repo")" || real="$repo"
     pairs+="$real"$'\t'"$id"$'\n'
   done
@@ -485,8 +489,9 @@ root_dirty_tick() {
     union=""
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      bk="$(awk 'NR==FNR{d[$0];next} (substr($0,4) in d)' <(printf '%s\n' "$all") "$f" 2>/dev/null)" || bk="$(cat "$f")"
-      if [ "$bk" != "$(cat "$f")" ]; then
+      bf="$(cat "$f")"
+      bk="$(awk 'NR==FNR{d[$0];next} (substr($0,4) in d)' <(printf '%s\n' "$all") - <<<"$bf" 2>/dev/null)" || bk="$bf"
+      if [ "$bk" != "$bf" ]; then
         { [ -z "$bk" ] || printf '%s\n' "$bk"; } > "$f.tmp" && mv -f "$f.tmp" "$f"
       fi
       union+="$(printf '%s\n' "$bk" | cut -c4- | grep -v '^$' || true)"$'\n'
@@ -501,20 +506,23 @@ root_dirty_tick() {
       new="$(printf '%s\n' "$cur" | grep -vxFf "$rep_f" || true)"
     fi
     [ -n "$new" ] || { printf '%s' "$all" > "$rep_f"; continue; }
+    # Capped: the event is pasted into the master's pane, and one `npm install` or
+    # build into an unignored root dir lists thousands of files under -uall.
     paths="$(printf '%s\n' "$new" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     wl="$(printf '%s\n' "$wids" | jq -Rsc 'split("\n") | map(select(. != ""))')"
     ev="$(jq -nc --arg r "$real" --arg ts "$(date -u +%FT%TZ)" --argjson p "$paths" --argjson w "$wl" \
-      '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p,workers:$w,ts:$ts,
+      '{id:"heartbeat",event:"root-dirty",repo:$r,paths:$p[:50],paths_total:($p|length),workers:$w,ts:$ts,
         note:"a worktree worker (one of \($w|join(", "))) may have written the main checkout via Bash"}')" || continue
     printf '%s\n' "$ev" >> "$STATE_DIR/events.jsonl"
     printf '%s\n' "$ev" >> "$INBOX"
     # Record only once the event is out: a failed event build above leaves the
     # record untouched so the next tick retries instead of silently dropping it.
     printf '%s' "$all" > "$rep_f"
-    log "root-dirty: new entries in $real while worktree workers live: ${new//$'\n'/ }"
+    log "root-dirty: new entries in $real while worktree workers live: $(jq -r '.paths_total|tostring' <<<"$ev") path(s): $(jq -r '.paths|join(" ")' <<<"$ev")"
   done <<<"$repos"
   # Forget reported entries of repos with no live worktree worker: a stale record
   # would silence a later worker re-dirtying the same path after it was reverted.
+  [ "$gc" = 1 ] || return 0
   for f in "$STATE_DIR"/root-dirty/*; do
     case "$keep" in *" ${f##*/} "*) ;; *) rm -f "$f" ;; esac
   done
