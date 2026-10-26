@@ -19,6 +19,8 @@ path="$(printf '%s' "$payload" | jq -r '(.tool_input.file_path // .tool_input.no
 [ -n "$path" ] || exit 0
 
 # Lexical normalisation (the file may not exist yet): resolve ".", ".." and "//".
+# Globbing is off so a path segment such as "*" or "[ab]" is never expanded.
+set -f
 norm() {
   local p="$1" out="" seg
   local IFS=/
@@ -31,10 +33,24 @@ norm() {
   done
   printf '%s' "${out:-/}"
 }
+# Physical form: Claude Code reports physical (symlink-resolved) paths, while spawn
+# passes the logical `pwd` of the target repo and "$proj/../wt/..." for the
+# worktree. Comparing lexically would let a symlinked repo path bypass the guard,
+# so resolve the longest existing ancestor with cd -P and re-append the rest.
+canon() {
+  local p d rest=""
+  p="$(norm "$1")"; d="$p"
+  while [ "$d" != / ] && [ ! -d "$d" ]; do
+    rest="/${d##*/}$rest"; d="${d%/*}"; [ -n "$d" ] || d=/
+  done
+  d="$(_phys_dir "$d")" || { printf '%s' "$p"; return 0; }
+  [ "$d" = / ] && d=""
+  p="$d$rest"; printf '%s' "${p:-/}"
+}
 under() { case "$1/" in "$2"/*) return 0 ;; esac; return 1; }
 
 case "$path" in /*) ;; *) path="$wdir/$path" ;; esac
-path="$(norm "$path")"; proj="$(norm "$proj")"; wdir="$(norm "$wdir")"
+path="$(canon "$path")"; proj="$(canon "$proj")"; wdir="$(canon "$wdir")"
 
 under "$path" "$proj" || exit 0
 under "$path" "$wdir" && exit 0

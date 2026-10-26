@@ -103,7 +103,7 @@ hook_cmd() { # <settings-file>
   [ "$status" -eq 0 ]
 }
 
-@test "hook denies a sibling-prefix-safe path only when truly under target" {
+@test "hook allows a sibling path that merely shares the target prefix" {
   run spawn w1 sonnet "task"
   s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
   run bash -c "$(hook_cmd "$s")" <<<"$(payload Edit "${TARGET}-other/x.txt")"
@@ -114,7 +114,7 @@ hook_cmd() { # <settings-file>
   run spawn w1 sonnet "task"
   wdir="$(jq -r .wdir "$WORKERS/w1.json")"
   s="$wdir/.claude/settings.local.json"
-  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/../../../target/f.txt")"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wdir/../../../../target/f.txt")"
   [ "$status" -eq 2 ]
 }
 
@@ -151,4 +151,35 @@ hook_cmd() { # <settings-file>
   s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
   run jq -e '(.hooks | keys | sort) == ["Notification","PreToolUse","Stop","SubagentStop"]' "$s"
   [ "$status" -eq 0 ]
+}
+
+@test "hook denies MultiEdit into the target repo" {
+  run spawn w1 sonnet "task"
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload MultiEdit "$TARGET/f.txt")"
+  [ "$status" -eq 2 ]
+}
+
+@test "hook denies a write via the physical path of a symlinked target repo" {
+  real="$BATS_TEST_TMPDIR/real"; mkdir -p "$real"
+  mv "$TARGET" "$real/target"; ln -s "$real/target" "$TARGET"
+  run spawn w1 sonnet "task"
+  [ "$status" -eq 0 ]
+  s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$real/target/f.txt")"
+  [ "$status" -eq 2 ]
+  # and the worktree's own physical path is still allowed
+  wphys="$(cd -P "$(jq -r .wdir "$WORKERS/w1.json")" && pwd -P)"
+  run bash -c "$(hook_cmd "$s")" <<<"$(payload Write "$wphys/new.txt")"
+  [ "$status" -eq 0 ]
+}
+
+@test "hook does not glob-expand path segments" {
+  run spawn w1 sonnet "task"
+  wdir="$(jq -r .wdir "$WORKERS/w1.json")"
+  s="$wdir/.claude/settings.local.json"
+  # from inside the worktree, an unguarded glob "*" would expand to its entries
+  run bash -c "cd '$wdir' && $(hook_cmd "$s")" <<<"$(payload Write "$TARGET/*")"
+  [ "$status" -eq 2 ]
+  grep -q "$TARGET/\\*\"" "$ORCH_ROOT/_orch/state/events.jsonl"
 }

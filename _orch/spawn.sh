@@ -434,7 +434,7 @@ notif_matcher="permission_prompt|elicitation_dialog|elicitation_url_dialog|agent
 # but outside $wdir. Not installed for --no-worktree (wdir IS the root there).
 # worker-settings.template.json mirrors this (checked by tests/issue152_write_guard.bats).
 guard_cmd=""
-[ "$mode" = "--no-worktree" ] || guard_cmd="$here/guard-write.sh $id '$proj' '$wdir'"
+[ "$mode" = "--no-worktree" ] || guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "$proj" "$wdir")"
 jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" '
   {
     awaySummaryEnabled: false,
