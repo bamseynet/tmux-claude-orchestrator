@@ -153,6 +153,12 @@ cfg() { jq -r "$1" "$TARGET/_orch/config.json"; }
   run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
   [[ "$output" == *"up to date"* ]]   # {} default already present: no false type conflict
   [ "$(stat -c %a "$TARGET/_orch/config.json" 2>/dev/null || stat -f %Lp "$TARGET/_orch/config.json")" = "600" ]
+  chmod 444 "$TARGET/_orch/config.json"
+  edit "$SRC/_orch/config.json" '.ro = 1'
+  run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
+  [ "$(cfg .ro)" = "1" ]
+  [ "$(stat -c %a "$TARGET/_orch/config.json" 2>/dev/null || stat -f %Lp "$TARGET/_orch/config.json")" = "444" ]
+  chmod 600 "$TARGET/_orch/config.json"
   mv "$TARGET/_orch/config.json" "$BATS_TEST_TMPDIR/real.json"
   ln -s "$BATS_TEST_TMPDIR/real.json" "$TARGET/_orch/config.json"
   edit "$SRC/_orch/config.json" '.another = 1'

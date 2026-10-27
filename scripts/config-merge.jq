@@ -31,7 +31,7 @@ reduce lp($theirs; [])  as $p ({m: $ours, r: []};
     else
       ($ours | getpath($p)) as $o
       | if ($o | type) == "object" and ($t | type) == "object" then .   # shipped {} default; operator map (empty or populated) wins silently
-        elif ($o | type) == "object" then
+        elif ($o | type) == "object" or ($t | type) == "object" then
           .r += [["=", $j, "type conflict: kept operator value"]]
         elif $o == $t then .
         else
