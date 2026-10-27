@@ -165,7 +165,15 @@ elif [ "$cfg_mode" = merge ]; then
     cp -p "$target/_orch/config.json" "$target/$bak"
   fi
   if [ "$cfg_changed" -gt 0 ]; then
-    mv -f "$cfgtmp/config.json.new" "$target/_orch/config.json"
+    if [ -L "$target/_orch/config.json" ]; then
+      # symlinked config (dotfiles-managed): write through the link, keep the link
+      cat "$cfgtmp/config.json.new" > "$target/_orch/config.json"
+    else
+      # clone the original's mode/owner onto the replacement, then atomic rename
+      cp -p "$target/_orch/config.json" "$cfgtmp/config.json.mode"
+      cat "$cfgtmp/config.json.new" > "$cfgtmp/config.json.mode"
+      mv -f "$cfgtmp/config.json.mode" "$target/_orch/config.json"
+    fi
   fi
   # Snapshot right next to the config rename so a later (report) failure can't
   # leave a merged config.json paired with a stale base.

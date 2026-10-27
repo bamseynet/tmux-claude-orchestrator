@@ -9,7 +9,7 @@
 # jq 1.5 only: no walk/IN/abs/toarray, every `if` has an `else`.
 
 $o[0] as $ours | $t[0] as $theirs | $b[0] as $base | $l[0].managed as $managed | $l[0].legacy as $legacy |
-def lp($v; $p): if ($v | type) == "object" then ($v | keys_unsorted[]) as $k | lp($v[$k]; $p + [$k]) else $p end;
+def lp($v; $p): if ($v | type) == "object" and ($v | length) > 0 then ($v | keys_unsorted[]) as $k | lp($v[$k]; $p + [$k]) else $p end;
 def hasp($o; $p):
   try ($o | getpath($p[:-1]) | if type == "object" then has($p[-1]) else false end) catch false;
 def ismanaged($j):

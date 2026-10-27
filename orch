@@ -253,7 +253,7 @@ case "$cmd" in
     # Keep this prefix list in sync with scripts/config-legacy-defaults.json "managed".
     if command -v jq >/dev/null && [ -f "$here/_orch/config.json" ] && [ -f "$here/_orch/config.shipped.json" ]; then
       jq -nr --slurpfile o "$here/_orch/config.json" --slurpfile s "$here/_orch/config.shipped.json" '
-        ($o[0].pinned_keys // []) as $pins
+        (($o[0].pinned_keys // []) | if type == "array" then . else [] end) as $pins
         | [($s[0].tui_patterns // {}) | keys[]
             | select(startswith("permission_dialog") or startswith("trust_dialog") or startswith("askuser_"))
             | . as $k | ("tui_patterns." + $k) as $j

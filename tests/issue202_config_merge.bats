@@ -143,6 +143,22 @@ cfg() { jq -r "$1" "$TARGET/_orch/config.json"; }
   [ "$(jq -r .tui_patterns.permission_dialog_regex "$TARGET/_orch/config.json.bak.0.2.0.1")" = "SECOND" ]
 }
 
+@test "config.json mode and symlink survive a merge; empty-object shipped default is added" {
+  mk_src
+  run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
+  chmod 600 "$TARGET/_orch/config.json"
+  edit "$SRC/_orch/config.json" '.newsect = {}'
+  run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
+  [ "$(cfg '.newsect | type')" = "object" ]
+  [ "$(stat -c %a "$TARGET/_orch/config.json" 2>/dev/null || stat -f %Lp "$TARGET/_orch/config.json")" = "600" ]
+  mv "$TARGET/_orch/config.json" "$BATS_TEST_TMPDIR/real.json"
+  ln -s "$BATS_TEST_TMPDIR/real.json" "$TARGET/_orch/config.json"
+  edit "$SRC/_orch/config.json" '.another = 1'
+  run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
+  [ -L "$TARGET/_orch/config.json" ]
+  [ "$(jq -r .another "$BATS_TEST_TMPDIR/real.json")" = "1" ]
+}
+
 @test "managed: a key listed in pinned_keys is kept, reported PINNED every run, and not backed up" {
   run "$INSTALL" "$TARGET"; [ "$status" -eq 0 ]
   edit "$TARGET/_orch/config.json" \
