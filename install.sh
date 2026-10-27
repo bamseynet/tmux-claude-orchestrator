@@ -68,7 +68,8 @@ mkdir -p "$target/.claude" "$target/_orch" "$target/tmux"
 #     A fresh install still gets a clean target because nothing pre-exists
 #     under _orch/state to preserve or destroy either way.
 stage="$(mktemp -d "$target/.orch-install-stage.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
+cfgtmp=""
+trap 'rm -rf "$stage" "$cfgtmp"' EXIT
 
 mkdir -p "$stage/_orch" "$stage/tmux"
 cp -R "$src/_orch/." "$stage/_orch/"
@@ -79,6 +80,51 @@ have_cfg=0
 [ -f "$target/_orch/config.json" ] && have_cfg=1
 [ "$have_cfg" = 1 ] && rm -f "$stage/_orch/config.json"
 chmod +x "$stage/orch" "$stage/_orch/"*.sh
+
+# --- config.json defaults merge (issue #202) ------------------------------------
+# An existing config.json is never staged (above), so no new/changed shipped
+# default would ever reach it. Three-way merge instead: base = the snapshot the
+# previous install recorded (_orch/config.shipped.json), theirs = $src's shipped
+# config.json, ours = the target's. All the logic lives in scripts/config-merge.jq;
+# bash only shuttles files. The merged file is built and validated here, but only
+# renamed over config.json AFTER the tree swap below succeeds, and the snapshot
+# is swapped in last -- any earlier failure leaves config.json byte-identical.
+# Unparseable/zero-byte config.json or no jq: leave it alone, write no snapshot.
+cfgtmp="$(mktemp -d "$target/.orch-install-cfg.XXXXXX")"
+cfg_mode=fresh   # fresh | merge | skip
+cfg_changed=0
+cfg_overwrote=0
+if [ "$have_cfg" = 1 ]; then
+  cfg_mode=skip
+  cur="$target/_orch/config.json"
+  snap="$target/_orch/config.shipped.json"
+  legacy="$src/scripts/config-legacy-defaults.json"
+  if ! command -v jq >/dev/null; then
+    echo "  ! jq not found; config.json defaults NOT applied (install jq and re-run ./orch update --force)"
+  elif ! jq -e 'type == "object"' "$cur" >/dev/null 2>&1; then
+    echo "  ! config.json is not valid JSON; defaults NOT applied (fix it and re-run ./orch update --force)"
+  else
+    has_base=false
+    echo '{}' > "$cfgtmp/base.json"
+    if [ -f "$snap" ] && jq -e 'type == "object"' "$snap" >/dev/null 2>&1; then
+      has_base=true
+      cp "$snap" "$cfgtmp/base.json"
+    fi
+    if jq -n --slurpfile o "$cur" --slurpfile t "$src/_orch/config.json" \
+        --slurpfile b "$cfgtmp/base.json" --slurpfile l "$legacy" \
+        --argjson has_base "$has_base" -f "$src/scripts/config-merge.jq" \
+        > "$cfgtmp/result.json" 2>/dev/null \
+      && jq '.merged' "$cfgtmp/result.json" > "$cfgtmp/config.json.new" \
+      && jq -e 'type == "object"' "$cfgtmp/config.json.new" >/dev/null 2>&1; then
+      cfg_mode=merge
+      cfg_changed="$(jq '[.report[] | select(.[0] == "+" or .[0] == "~" or .[0] == "!")] | length' "$cfgtmp/result.json")"
+      cfg_overwrote="$(jq '[.report[] | select(.[0] == "!")] | length' "$cfgtmp/result.json")"
+    else
+      echo "  ! config.json merge failed; defaults NOT applied (config.json left untouched)"
+    fi
+  fi
+fi
+if [ "$cfg_mode" != skip ]; then cp "$src/_orch/config.json" "$cfgtmp/config.shipped.json"; fi
 
 # Staging above is fully isolated from $target (a failure there never touches
 # it — see the block comment). The swap loop itself is different: each `mv`
@@ -102,9 +148,24 @@ while IFS= read -r -d '' f; do
 done < <(find "$stage" -type f -print0)
 trap - ERR
 
-if [ "$have_cfg" = 1 ]; then
-  echo "  . preserved existing $target/_orch/config.json"
+if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
+  bak="_orch/config.json.bak.${prev_version:-unknown}"
+  if [ "$cfg_overwrote" -gt 0 ]; then
+    cp -p "$target/_orch/config.json" "$target/$bak"
+  fi
+  if [ "$cfg_changed" -gt 0 ]; then
+    mv -f "$cfgtmp/config.json.new" "$target/_orch/config.json"
+  fi
+  jq -r --arg bak "$bak" '.report as $r
+    | if ($r | length) == 0 then "  . config.json: up to date"
+      else "  . config.json: \([$r[] | select(.[0] == "+")] | length) added, \([$r[] | select(.[0] == "~")] | length) updated, \([$r[] | select(.[0] == "=")] | length) kept, \([$r[] | select(.[0] == "!")] | length) managed-overwritten, \([$r[] | select(.[0] == "P")] | length) pinned" end,
+      ($r[] | [(if .[0] == "P" then "!" else .[0] end), .[1], (.[2] + (if .[0] == "!" then " (backup: " + $bak + ")" else "" end))] | @tsv)' \
+    "$cfgtmp/result.json" |
+    while IFS=$'\t' read -r sym path note; do
+      if [ -z "$path" ]; then echo "$sym"; else printf '    %s %-45s %s\n' "$sym" "$path" "$note"; fi
+    done
 fi
+if [ "$cfg_mode" != skip ]; then mv -f "$cfgtmp/config.shipped.json" "$target/_orch/config.shipped.json"; fi
 
 # The persisted session name (issue #92) is per-install identity, not
 # throwaway runtime state -- an operator's `--name` pin must survive an

@@ -69,7 +69,7 @@ setup() {
 
   run "$INSTALL" "$TARGET"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"preserved existing"* ]]
+  [[ "$output" == *"config.json: up to date"* ]]
   run jq -r '.thresholds.max_workers' "$TARGET/_orch/config.json"
   [ "$output" = "99" ]
 }
