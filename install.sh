@@ -69,7 +69,8 @@ mkdir -p "$target/.claude" "$target/_orch" "$target/tmux"
 #     under _orch/state to preserve or destroy either way.
 stage="$(mktemp -d "$target/.orch-install-stage.XXXXXX")"
 cfgtmp=""
-trap 'rm -rf "$stage" "$cfgtmp"' EXIT
+cfgnew=""
+trap 'rm -rf "$stage" "$cfgtmp"; [ -z "$cfgnew" ] || rm -f "$cfgnew"' EXIT
 
 mkdir -p "$stage/_orch" "$stage/tmux"
 cp -R "$src/_orch/." "$stage/_orch/"
