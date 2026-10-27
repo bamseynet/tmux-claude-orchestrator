@@ -24,7 +24,8 @@ reduce lp($theirs; [])  as $p ({m: $ours, r: []};
   # first proper prefix where ours holds a non-object (type conflict with a nested shipped key)
   | ([range(1; ($p | length)) | $p[:.] | . as $q | select(hasp($ours; $q) and (($ours | getpath($q)) | type) != "object")] | first) as $cp
   | if $cp != null then
-      .r += [["=", ($cp | join(".")), "type conflict: kept operator value"]]
+      ($cp | join(".")) as $cj
+      | if (.r | any(.[0] == "=" and .[1] == $cj)) then . else .r += [["=", $cj, "type conflict: kept operator value"]] end
     elif (hasp($ours; $p) | not) then
       .m = (.m | setpath($p; $t)) | .r += [["+", $j, ""]]
     else

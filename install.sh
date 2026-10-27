@@ -152,7 +152,10 @@ _cfg_step_failed() {
   echo "  ! FAILED while updating $target/_orch/config.json after the files were swapped (the new files ARE installed). config.json / config.shipped.json may be out of step; re-run ./orch update --force to finish." >&2
 }
 trap '_cfg_step_failed' ERR
-if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
+if [ "$cfg_mode" = fresh ]; then
+  # Fresh install: config.json came from the staged tree; record its snapshot as the base.
+  mv -f "$cfgtmp/config.shipped.json" "$target/_orch/config.shipped.json"
+elif [ "$cfg_mode" = merge ]; then
   bak="_orch/config.json.bak.${prev_version:-unknown}"
   # Never clobber an earlier backup (a --force re-run at the same version would
   # otherwise replace the original operator value with a later one).
