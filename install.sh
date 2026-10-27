@@ -146,7 +146,12 @@ while IFS= read -r -d '' f; do
   mkdir -p "$(dirname "$destf")"
   mv -f "$f" "$destf"
 done < <(find "$stage" -type f -print0)
+trap - ERR
 
+_cfg_step_failed() {
+  echo "  ! FAILED while updating $target/_orch/config.json after the files were swapped (the new files ARE installed). config.json / config.shipped.json may be out of step; re-run ./orch update --force to finish." >&2
+}
+trap '_cfg_step_failed' ERR
 if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
   bak="_orch/config.json.bak.${prev_version:-unknown}"
   # Never clobber an earlier backup (a --force re-run at the same version would
@@ -159,6 +164,9 @@ if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
   if [ "$cfg_changed" -gt 0 ]; then
     mv -f "$cfgtmp/config.json.new" "$target/_orch/config.json"
   fi
+  # Snapshot right next to the config rename so a later (report) failure can't
+  # leave a merged config.json paired with a stale base.
+  mv -f "$cfgtmp/config.shipped.json" "$target/_orch/config.shipped.json"
   jq -r --arg bak "$bak" '.report as $r
     | if ($r | length) == 0 then "  . config.json: up to date"
       else "  . config.json: \([$r[] | select(.[0] == "+")] | length) added, \([$r[] | select(.[0] == "~")] | length) updated, \([$r[] | select(.[0] == "=")] | length) kept, \([$r[] | select(.[0] == "!")] | length) managed-overwritten, \([$r[] | select(.[0] == "P")] | length) pinned" end,
@@ -166,9 +174,8 @@ if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
     "$cfgtmp/result.json" |
     while IFS=$'\t' read -r sym path note; do
       if [ -z "$path" ]; then echo "$sym"; else printf '    %s %-45s %s\n' "$sym" "$path" "$note"; fi
-    done
+    done || true
 fi
-if [ "$cfg_mode" != skip ]; then mv -f "$cfgtmp/config.shipped.json" "$target/_orch/config.shipped.json"; fi
 trap - ERR
 
 # The persisted session name (issue #92) is per-install identity, not
