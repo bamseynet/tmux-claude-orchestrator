@@ -248,6 +248,20 @@ case "$cmd" in
     # still shows when this `status` was run.
     if orch_timestamps_enabled; then say "orch status"; fi
 
+    # issue #202: surface managed (safety-critical) config keys that are PINNED or
+    # have diverged from the shipped snapshot, so drift is visible between updates.
+    # Keep this prefix list in sync with scripts/config-legacy-defaults.json "managed".
+    if command -v jq >/dev/null && [ -f "$here/_orch/config.json" ] && [ -f "$here/_orch/config.shipped.json" ]; then
+      jq -nr --slurpfile o "$here/_orch/config.json" --slurpfile s "$here/_orch/config.shipped.json" '
+        (($o[0].pinned_keys // []) | if type == "array" then . else [] end) as $pins
+        | [($s[0].tui_patterns // {}) | keys[]
+            | select(startswith("permission_dialog") or startswith("trust_dialog") or startswith("askuser_"))
+            | . as $k | ("tui_patterns." + $k) as $j
+            | select(([$pins[] | select(. == $j)] | length > 0) or (($o[0].tui_patterns // {})[$k] != $s[0].tui_patterns[$k]))
+            | $j + (if ([$pins[] | select(. == $j)] | length > 0) then " (PINNED)" else "" end)]
+        | if length > 0 then "! managed config keys differ from shipped defaults: " + join(", ") else empty end' 2>/dev/null || true
+    fi
+
     if [ "${#files[@]}" = 0 ]; then
       echo "no workers yet"
       exit 0

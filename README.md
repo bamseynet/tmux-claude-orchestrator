@@ -203,6 +203,20 @@ multi-session work.
 If a Claude Code TUI update changes the spinner or input box, adjust `is_busy`/`is_ready` in
 `_orch/lib.sh` — everything keys off those two functions.
 
+
+### How updates treat your `config.json` (issue #202)
+
+`./orch update` / `install.sh` three-way-merges new shipped defaults into your `_orch/config.json`
+against `_orch/config.shipped.json` (a snapshot of the defaults the previous install shipped):
+new keys are added, keys you never changed follow the new default, keys you edited are kept (and
+listed `=` only when the shipped default moved). The dialog-detection regexes
+(`tui_patterns.permission_dialog*`, `trust_dialog*`, `askuser_*`) are *managed*: they are
+overwritten with the shipped value even if edited, after backing up the old file to
+`_orch/config.json.bak.<prev_version>`. To keep a custom value, list the key in a top-level
+`"pinned_keys": ["tui_patterns.trust_dialog_regex"]`; it is reported `PINNED` on every update where it differs from the shipped value, and
+by `./orch status`. An unparseable `config.json` (or missing `jq`) is left untouched with a loud
+warning; fix it and re-run `./orch update --force`.
+
 ## ⚠️ Caveats — read before unattended runs
 
 - **Security.** For hands-off operation you'll opt workers into reduced prompting (see
