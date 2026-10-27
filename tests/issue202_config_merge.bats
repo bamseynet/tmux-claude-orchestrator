@@ -150,6 +150,8 @@ cfg() { jq -r "$1" "$TARGET/_orch/config.json"; }
   edit "$SRC/_orch/config.json" '.newsect = {}'
   run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
   [ "$(cfg '.newsect | type')" = "object" ]
+  run "$SRC/install.sh" "$TARGET"; [ "$status" -eq 0 ]
+  [[ "$output" == *"up to date"* ]]   # {} default already present: no false type conflict
   [ "$(stat -c %a "$TARGET/_orch/config.json" 2>/dev/null || stat -f %Lp "$TARGET/_orch/config.json")" = "600" ]
   mv "$TARGET/_orch/config.json" "$BATS_TEST_TMPDIR/real.json"
   ln -s "$BATS_TEST_TMPDIR/real.json" "$TARGET/_orch/config.json"
