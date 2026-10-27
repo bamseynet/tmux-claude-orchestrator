@@ -213,7 +213,7 @@ listed `=` only when the shipped default moved). The dialog-detection regexes
 (`tui_patterns.permission_dialog*`, `trust_dialog*`, `askuser_*`) are *managed*: they are
 overwritten with the shipped value even if edited, after backing up the old file to
 `_orch/config.json.bak.<prev_version>`. To keep a custom value, list the key in a top-level
-`"pinned_keys": ["tui_patterns.trust_dialog_regex"]`; it is reported `PINNED` on every update and
+`"pinned_keys": ["tui_patterns.trust_dialog_regex"]`; it is reported `PINNED` on every update where it differs from the shipped value, and
 by `./orch status`. An unparseable `config.json` (or missing `jq`) is left untouched with a loud
 warning; fix it and re-run `./orch update --force`.
 

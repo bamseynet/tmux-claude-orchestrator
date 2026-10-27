@@ -131,6 +131,18 @@ cfg() { jq -r "$1" "$TARGET/_orch/config.json"; }
   [[ "$output" == *"config.json.bak.0.2.0"* ]]
 }
 
+@test "managed: an existing backup is never clobbered by a later overwrite at the same prev_version" {
+  run "$INSTALL" "$TARGET"; [ "$status" -eq 0 ]
+  echo "0.2.0" > "$TARGET/.orch-version"
+  edit "$TARGET/_orch/config.json" '.tui_patterns.permission_dialog_regex = "FIRST"'
+  run "$INSTALL" "$TARGET"; [ "$status" -eq 0 ]
+  echo "0.2.0" > "$TARGET/.orch-version"
+  edit "$TARGET/_orch/config.json" '.tui_patterns.permission_dialog_regex = "SECOND"'
+  run "$INSTALL" "$TARGET"; [ "$status" -eq 0 ]
+  [ "$(jq -r .tui_patterns.permission_dialog_regex "$TARGET/_orch/config.json.bak.0.2.0")" = "FIRST" ]
+  [ "$(jq -r .tui_patterns.permission_dialog_regex "$TARGET/_orch/config.json.bak.0.2.0.1")" = "SECOND" ]
+}
+
 @test "managed: a key listed in pinned_keys is kept, reported PINNED every run, and not backed up" {
   run "$INSTALL" "$TARGET"; [ "$status" -eq 0 ]
   edit "$TARGET/_orch/config.json" \

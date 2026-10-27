@@ -146,10 +146,13 @@ while IFS= read -r -d '' f; do
   mkdir -p "$(dirname "$destf")"
   mv -f "$f" "$destf"
 done < <(find "$stage" -type f -print0)
-trap - ERR
 
 if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
   bak="_orch/config.json.bak.${prev_version:-unknown}"
+  # Never clobber an earlier backup (a --force re-run at the same version would
+  # otherwise replace the original operator value with a later one).
+  n=1
+  while [ -e "$target/$bak" ]; do bak="_orch/config.json.bak.${prev_version:-unknown}.$n"; n=$((n + 1)); done
   if [ "$cfg_overwrote" -gt 0 ]; then
     cp -p "$target/_orch/config.json" "$target/$bak"
   fi
@@ -166,6 +169,7 @@ if [ "$have_cfg" = 1 ] && [ "$cfg_mode" = merge ]; then
     done
 fi
 if [ "$cfg_mode" != skip ]; then mv -f "$cfgtmp/config.shipped.json" "$target/_orch/config.shipped.json"; fi
+trap - ERR
 
 # The persisted session name (issue #92) is per-install identity, not
 # throwaway runtime state -- an operator's `--name` pin must survive an
