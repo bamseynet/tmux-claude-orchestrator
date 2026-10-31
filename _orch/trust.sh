@@ -56,12 +56,15 @@ fi
 S="$SESSION_NAME"
 require_session_exists "$S"
 wname="trust-$$"
-wid="$(tmux new-window -d -P -F '#{window_id}' -t "$S:" -n "$wname" -c "$repo" claude 2>/dev/null)" || {
+envargs=(); [ -z "${CLAUDE_CONFIG_DIR:-}" ] || envargs=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+wid="$(tmux new-window -d -P -F '#{window_id}' ${envargs[@]+"${envargs[@]}"} -t "$S:" -n "$wname" -c "$repo" claude 2>/dev/null)" || {
   say "trust: could not open a tmux window in session $S" >&2; exit 1; }
 T="$S:$wid"
 win_alive() { tmux list-windows -t "$S" -F '#{window_id}' 2>/dev/null | grep -qx "$wid"; }
 cleanup() { win_alive && tmux kill-window -t "$T" 2>/dev/null || true; }
 fail() { say "trust: $1" >&2; cleanup; exit 1; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 
 wait_s="${ORCH_TRUST_WAIT:-30}"
 case "$wait_s" in ''|*[!0-9]*) wait_s=30 ;; esac
@@ -69,6 +72,7 @@ case "$wait_s" in ''|*[!0-9]*) wait_s=30 ;; esac
 # 1) dialog really on screen, cursor on a known row.
 i=0
 until pane_has_trust_dialog "$T"; do
+  win_alive || fail "claude exited before showing the trust dialog for $repo; sent no keys"
   i=$((i+1)); [ "$i" -le "$wait_s" ] || fail "trust dialog never appeared for $repo; sent no keys"
   sleep 1
 done
@@ -77,6 +81,7 @@ if pane_trust_cursor_on_no "$T"; then
   tmux send-keys -t "$T" Down
   i=0
   until pane_trust_cursor_on_yes "$T"; do
+    win_alive || fail "claude exited before the cursor reached 'Yes'; not pressing Enter"
     i=$((i+1)); [ "$i" -le "$wait_s" ] || fail "cursor never reached 'Yes, I trust this folder'; not pressing Enter"
     sleep 1
   done
@@ -92,7 +97,9 @@ until is_ready "$T"; do
   i=$((i+1)); [ "$i" -le "$wait_s" ] || break
   sleep 1
 done
-if win_alive; then
+# Only type into a pane that is verifiably the idle prompt: a follow-up dialog
+# (MCP approval, bypass warning) would treat '/exit' + Enter as a choice.
+if win_alive && is_ready "$T"; then
   tmux send-keys -t "$T" -l '/exit'
   tmux send-keys -t "$T" Enter
   i=0
