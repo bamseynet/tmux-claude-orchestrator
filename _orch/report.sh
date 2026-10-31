@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # _orch/report.sh <worker-id> <event> [--hook]
-# Invoked by a worker's Stop / Notification / SubagentStop hook.
+# Invoked by a worker's Stop / Notification / SubagentStop / UserPromptSubmit hook.
 # Appends an event to the shared inbox and updates the worker's status file.
 # With --hook (Stop hook only) the hook JSON on stdin is read: a Stop that still has
 # background_tasks / session_crons is "waiting-bg", logged to events.jsonl but not
@@ -39,6 +39,18 @@ if [ "${3:-}" = "--hook" ] && [ "$event" = "done" ]; then
     # Turn ended with background work still live: log it, but don't wake the master.
     event="waiting-bg"; log_event="turn-ended"; to_inbox=0
   fi
+fi
+
+# issue #204 (d): UserPromptSubmit hook. A positive "claude is taking prompts" signal that
+# recovers ONLY a spawn-failed worker (hand-answered dialog, task re-sent) to working, so
+# live_worker_count and the root-dirty watch see it before its first Stop. Every other
+# status is left exactly as is; no inbox/events line (it fires on every prompt) and no
+# status file is ever created for an unknown id.
+if [ "$event" = "prompt-submitted" ]; then
+  f="$WORKERS_DIR/$id.json"
+  [ -f "$f" ] && update_worker_status "$id" --arg t "$ts" \
+    'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' || true
+  exit 0
 fi
 
 line="$(printf '{"id":"%s","event":"%s","ts":"%s"}' "$id" "${log_event:-$event}" "$ts")"
