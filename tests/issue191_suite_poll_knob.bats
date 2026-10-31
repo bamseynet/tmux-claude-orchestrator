@@ -28,3 +28,8 @@ poll_tries_after_setup_suite() {
   # core_send_prompt.bats "defaults ORCH_SEND_POLL_TRIES to 50 when unset".)
   [ "${_ORCH_TEST_SETUP_SUITE_RAN-}" = 1 ]
 }
+
+@test "setup_suite hermeticity (#204): scratch CLAUDE_CONFIG_DIR, no trust-check bypass, removed at teardown" {
+  run env -u ORCH_SKIP_TRUST_CHECK -u CLAUDE_CONFIG_DIR bash -c 'source "$1"; setup_suite; d="$CLAUDE_CONFIG_DIR"; [ -d "$d" ] && [ -z "$(ls -A "$d")" ] && [ -z "${ORCH_SKIP_TRUST_CHECK-}" ] && [ "$d" != "$HOME" ]; teardown_suite; [ ! -e "$d" ]' _ "$BATS_TEST_DIRNAME/setup_suite.bash"
+  [ "$status" -eq 0 ]
+}

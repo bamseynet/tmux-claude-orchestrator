@@ -215,6 +215,7 @@ case "$cmd" in
   up|bootstrap) exec "$here/_orch/bootstrap.sh" "$@" ;;
   spawn)        exec "$here/_orch/spawn.sh" "$@" ;;
   send)         exec "$here/_orch/send.sh" "$@" ;;
+  trust)        exec "$here/_orch/trust.sh" "$@" ;;
   status)
     json_mode=0
     if [ "${1:-}" = "--json" ]; then json_mode=1; shift || true; fi
@@ -421,6 +422,14 @@ orch — tmux + Claude Code orchestrator
                                      this install's session name (issue #92) --
                                      see precedence below. Letters/digits/_/- only
                                      (tmux uses ':'/'.' as target separators).
+  ./orch trust [<repo>] [--yes]      get a never-trusted repo past Claude Code's folder-trust
+                                     dialog (issue #204). 'orch spawn' refuses untrusted repos
+                                     up front and points here. Plain: runs claude in the repo
+                                     root for the operator to answer (no TTY: prints the
+                                     command, exit 1). --yes: accepts it non-interactively in
+                                     a throwaway window and logs a repo-trusted audit event.
+                                     Trust covers the repo's committed hooks/.mcp.json, for all
+                                     its worktrees. ORCH_SKIP_TRUST_CHECK=1 bypasses spawn's check.
   ./orch spawn <id> <model> "task" [--no-worktree] [perm]
                                      spawn a worker (own worktree + window)
                                      model: opus | sonnet | haiku
