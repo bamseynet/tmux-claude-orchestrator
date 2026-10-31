@@ -483,7 +483,8 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
     hooks: {
       Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done --hook"}]}],
       Notification: [{matcher:$nm, hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
-      SubagentStop: [{hooks:[{type:"command", command:"\($r) \($id) subagent-done"}]}]
+      SubagentStop: [{hooks:[{type:"command", command:"\($r) \($id) subagent-done"}]}],
+      UserPromptSubmit: [{hooks:[{type:"command", command:"\($r) \($id) prompt-submitted"}]}]
     }
   }
   * (if $g == "" then {}

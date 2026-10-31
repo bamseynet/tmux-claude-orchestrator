@@ -145,11 +145,11 @@ hook_cmd() { # <settings-file>
   [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$t")" = "Edit|Write|MultiEdit|NotebookEdit" ]
 }
 
-@test "adding the PreToolUse guard keeps the Stop/Notification/SubagentStop hooks" {
+@test "adding the PreToolUse guard keeps the Stop/Notification/SubagentStop/UserPromptSubmit hooks" {
   run spawn w1 sonnet "task"
   [ "$status" -eq 0 ]
   s="$(jq -r .wdir "$WORKERS/w1.json")/.claude/settings.local.json"
-  run jq -e '(.hooks | keys | sort) == ["Notification","PreToolUse","Stop","SubagentStop"]' "$s"
+  run jq -e '(.hooks | keys | sort) == ["Notification","PreToolUse","Stop","SubagentStop","UserPromptSubmit"]' "$s"
   [ "$status" -eq 0 ]
 }
 
