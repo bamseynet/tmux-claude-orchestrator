@@ -57,7 +57,7 @@ if [ "$event" = "prompt-submitted" ]; then
     (
       with_lock "$(_worker_lock_file "$id")" || exit 1
       [ -f "$f" ] || exit 0
-      jq --arg t "$ts" 'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      jq --arg t "$ts" 'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' "$f" > "$f.new" && mv "$f.new" "$f"
     ) || true
   fi
   exit 0
