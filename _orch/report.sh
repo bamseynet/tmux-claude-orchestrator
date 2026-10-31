@@ -51,8 +51,15 @@ if [ "$event" = "prompt-submitted" ]; then
   # shellcheck disable=SC2016  # jq filter; $t is a jq --arg var
   # Unlocked pre-check: this fires on EVERY prompt, so don't take the lock / rewrite the
   # file (bumping its mtime, up to ORCH_LOCK_TIMEOUT wait) unless a recovery is needed.
-  [ -f "$f" ] && [ "$(jq -r '.status // ""' "$f" 2>/dev/null)" = "spawn-failed" ] && update_worker_status "$id" --arg t "$ts" \
-    'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' || true
+  if [ -f "$f" ] && [ "$(jq -r '.status // ""' "$f" 2>/dev/null)" = "spawn-failed" ]; then
+    # Re-check under the lock: a concurrent clean/reap may have removed the file, and
+    # update_worker_status would re-seed it as `{}` (a phantom "live" worker).
+    (
+      with_lock "$(_worker_lock_file "$id")" || exit 1
+      [ -f "$f" ] || exit 0
+      jq --arg t "$ts" 'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    ) || true
+  fi
   exit 0
 fi
 
