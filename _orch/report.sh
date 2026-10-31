@@ -48,6 +48,7 @@ fi
 # status file is ever created for an unknown id.
 if [ "$event" = "prompt-submitted" ]; then
   f="$WORKERS_DIR/$id.json"
+  # shellcheck disable=SC2016  # jq filter; $t is a jq --arg var
   [ -f "$f" ] && update_worker_status "$id" --arg t "$ts" \
     'if .status == "spawn-failed" then .status = "working" | .updated = $t else . end' || true
   exit 0

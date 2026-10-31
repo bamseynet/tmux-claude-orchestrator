@@ -32,7 +32,7 @@ mk() { jq -n --arg s "$2" '{id:"'"$1"'", status:$s, updated:"then"}' > "$W/$1.js
 }
 
 @test "prompt-submitted leaves every other status unchanged" {
-  for st in done needs-input waiting-bg dead merged blocked working spawning subagent-done; do
+  for st in 'done' needs-input waiting-bg dead merged blocked working spawning subagent-done; do
     mk "x-$st" "$st"
     run "$REPORT" "x-$st" prompt-submitted
     [ "$status" -eq 0 ]
@@ -62,6 +62,7 @@ mk() { jq -n --arg s "$2" '{id:"'"$1"'", status:$s, updated:"then"}' > "$W/$1.js
 
 @test "spawn registers a UserPromptSubmit hook reporting prompt-submitted" {
   STUBBIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUBBIN"
+  # shellcheck disable=SC2016
   printf '#!/usr/bin/env bash\ncase "${1:-}" in list-sessions) echo orch;; capture-pane) echo "> ready";; esac\nexit 0\n' > "$STUBBIN/tmux"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBBIN/claude"
   # shellcheck disable=SC1091
