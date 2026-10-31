@@ -41,7 +41,7 @@ mk() { jq -n --arg s "$2" '{id:"'"$1"'", status:$s, updated:"then"}' > "$W/$1.js
   done
 }
 
-@test "a spawn-failed worker with no hook event stays spawn-failed" {
+@test "a non-prompt event (subagent-done) does not recover a spawn-failed worker" {
   mk w1 spawn-failed
   run "$REPORT" w1 subagent-done
   [ "$(jq -r .status "$W/w1.json")" = "spawn-failed" ]
@@ -82,4 +82,11 @@ mk() { jq -n --arg s "$2" '{id:"'"$1"'", status:$s, updated:"then"}' > "$W/$1.js
 @test "reference template mirrors the UserPromptSubmit hook" {
   run jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$BATS_TEST_DIRNAME/../_orch/worker-settings.template.json"
   [[ "$output" == *"report.sh <id> prompt-submitted" ]]
+}
+
+@test "prompt-submitted on a non-spawn-failed worker does not rewrite its status file" {
+  mk w1 working
+  touch -d '2001-01-01 00:00:00' "$W/w1.json"
+  "$REPORT" w1 prompt-submitted
+  [ "$(stat -c %Y "$W/w1.json")" = "$(date -d '2001-01-01 00:00:00' +%s)" ]
 }
