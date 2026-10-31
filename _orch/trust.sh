@@ -56,8 +56,9 @@ fi
 S="$SESSION_NAME"
 require_session_exists "$S"
 wname="trust-$$"
-envargs=(); [ -z "${CLAUDE_CONFIG_DIR:-}" ] || envargs=(-e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
-wid="$(tmux new-window -d -P -F '#{window_id}' ${envargs[@]+"${envargs[@]}"} -t "$S:" -n "$wname" -c "$repo" claude 2>/dev/null)" || {
+# `env` instead of `tmux new-window -e` (tmux >= 3.2 only): works on every tmux.
+cmdargs=(claude); [ -z "${CLAUDE_CONFIG_DIR:-}" ] || cmdargs=(env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" claude)
+wid="$(tmux new-window -d -P -F '#{window_id}' -t "$S:" -n "$wname" -c "$repo" "${cmdargs[@]}" 2>/dev/null)" || {
   say "trust: could not open a tmux window in session $S" >&2; exit 1; }
 T="$S:$wid"
 win_alive() { tmux list-windows -t "$S" -F '#{window_id}' 2>/dev/null | grep -qx "$wid"; }
