@@ -90,3 +90,12 @@ mk() { jq -n --arg s "$2" '{id:"'"$1"'", status:$s, updated:"then"}' > "$W/$1.js
   "$REPORT" w1 prompt-submitted
   [ "$(stat -c %Y "$W/w1.json")" = "$(date -d '2001-01-01 00:00:00' +%s)" ]
 }
+
+@test "prompt-submitted does not re-seed a status file removed before the locked re-check" {
+  mk w1 spawn-failed
+  # Simulate the reaper winning the race: the file vanishes right after the pre-check.
+  rm -f "$W/w1.json"
+  run "$REPORT" w1 prompt-submitted
+  [ "$status" -eq 0 ]
+  [ ! -f "$W/w1.json" ]
+}
