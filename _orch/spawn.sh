@@ -190,6 +190,17 @@ if ! ensure_related_repo "$ORCH_ROOT" "$proj"; then
   exit 1
 fi
 
+# Issue #204: read-only trust preflight, before ANY worktree/window/status/queue
+# entry exists. An explicitly untrusted repo would only end spawn-failed on the
+# folder-trust dialog (which spawn deliberately never answers: #133/#192), so
+# refuse now and name the one-line fix. Unknown config state falls through to
+# the dialog guard below; ORCH_SKIP_TRUST_CHECK=1 bypasses this check.
+if [ "${ORCH_SKIP_TRUST_CHECK:-}" != "1" ] && [ "$(repo_trust_state "$proj")" = untrusted ]; then
+  log "spawn refused for $id: $proj is not trusted by Claude Code"
+  say "orch: $proj is not trusted by Claude Code. Trust it once (this also trusts the repo's committed hooks/.mcp.json/settings): orch trust $proj" >&2
+  exit 1
+fi
+
 # refuse duplicate window
 if tmux list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx "$id"; then
   say "worker '$id' already exists in session '$S'"; exit 1

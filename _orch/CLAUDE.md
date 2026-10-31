@@ -195,3 +195,7 @@ Still treat every heartbeat you act on as a checkpoint boundary: refresh
   that, and when memory or `budget.max_usd` is tight, `./orch spawn` queues instead of
   launching. Check `./orch status` / the HUD for `queued` workers and the `~$spent/$cap`
   spend estimate before assuming a task is actually running.
+- Spawn refuses a repo Claude Code has never trusted and prints `orch trust <repo>`.
+  Use `orch trust <repo> --yes` only on repos you created at the operator's request;
+  for any other repo (it trusts that repo's committed hooks and `.mcp.json`) stop and
+  ask the operator.

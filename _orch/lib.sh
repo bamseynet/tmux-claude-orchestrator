@@ -796,6 +796,59 @@ pane_has_dialog() {
     _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
 }
 
+# --- Claude Code folder-trust state (issue #204) ----------------------------------
+# READ-ONLY view of Claude Code's own config. We never write that file (another
+# tool's private, version-dependent state, rewritten by running sessions).
+# Keying rule, probed 2026-10-31 on Claude Code 2.1.316 (issue #204): the dialog
+# records trust under the MAIN repo root (not the worktree); a trusted parent
+# dir does not cover child repos. Older versions keyed worktrees, so this is
+# version-dependent evidence: only an explicit missing/false entry in a
+# readable, valid config is "untrusted"; anything odd is "unknown" and callers
+# fall through to the dialog guard.
+claude_config_file() { printf '%s/.claude.json' "${CLAUDE_CONFIG_DIR:-$HOME}"; }
+
+# _trust_repo_root <path> -> physical main repo root (worktrees resolve via
+# --git-common-dir); the physical path itself if git can't say.
+_trust_repo_root() {
+  local d common top
+  d="$(_phys_dir "$1")" || return 1
+  common="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  case "$common" in
+    */.git) top="$(_phys_dir "${common%/.git}" || true)"; [ -n "$top" ] && d="$top" ;;
+  esac
+  printf '%s' "$d"
+}
+
+repo_trust_state() { # <path> -> trusted | untrusted | unknown
+  local cfg root logical st
+  cfg="$(claude_config_file)"
+  { [ -f "$cfg" ] && [ -r "$cfg" ] && [ -s "$cfg" ]; } || { echo unknown; return 0; }
+  root="$(_trust_repo_root "$1")" || { echo unknown; return 0; }
+  # The un-resolved spelling counts only when it IS the repo root (a symlinked
+  # path to it); a worktree path must never vouch for the repo.
+  logical="${1%/}"; [ "$(_phys_dir "$logical")" = "$root" ] || logical="$root"
+  st="$(jq -r --arg a "$root" --arg b "$logical" '
+      if (type == "object") and (.projects | type == "object") then
+        . as $c | if ([$a, $b] | map($c.projects[.] | objects | .hasTrustDialogAccepted == true) | any)
+                  then "trusted" else "untrusted" end
+      else "unknown" end' "$cfg" 2>/dev/null)" || st=""
+  case "$st" in trusted|untrusted) echo "$st" ;; *) echo unknown ;; esac
+}
+
+# Trust dialog on screen AND the cursor on its "Yes, I trust ..." row? Only then
+# is Enter safe: the default row is "No, exit".
+pane_trust_cursor_on_yes() { # <target>
+  local p; p="$(pane_tail "$1" 25)"
+  _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" &&
+    printf '%s\n' "$p" | grep -qE '^[[:space:]│]*❯[[:space:]]*([0-9]+\.[[:space:]]*)?Yes, I trust'
+}
+# Trust dialog on screen with the cursor on the default "No, exit" row.
+pane_trust_cursor_on_no() { # <target>
+  local p; p="$(pane_tail "$1" 25)"
+  _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" &&
+    printf '%s\n' "$p" | grep -qE '^[[:space:]│]*❯[[:space:]]*([0-9]+\.[[:space:]]*)?No, exit'
+}
+
 # An injected prompt appears to have landed. Requires positive evidence rather than
 # defaulting to "landed" (issue #12): either the pane carries a genuine mid-turn
 # marker, or — with the startup banner already scrolled away and no unsent paste
