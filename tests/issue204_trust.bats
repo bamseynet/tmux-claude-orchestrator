@@ -173,6 +173,7 @@ state_of() { bash -c 'source "$1"; repo_trust_state "$2"' _ "$LIB" "$1"; }
   [[ "$output" == *"orch trust"* ]]
   refute_grep '^(new-window|send-keys|load-buffer|paste-buffer)' "$CALLS"
   [ ! -e "$ORCH_ROOT/_orch/state/workers/w1.json" ]
+  [ -z "$(ls -A "$ORCH_ROOT/_orch/state/workers" 2>/dev/null)" ]
   refute_grep '.' "$ORCH_ROOT/_orch/state/events.jsonl"
   refute_grep '.' "$ORCH_ROOT/_orch/state/inbox.jsonl"
   [ -z "$(ls -d "$BATS_TEST_TMPDIR"/wt* 2>/dev/null)" ]
@@ -289,6 +290,7 @@ STUB
   STUB_DOWN_NOOP=1 ORCH_TRUST_WAIT=3 run "$TRUST" "$REPO" --yes
   [ "$status" -ne 0 ]
   [ -z "$(sent_keys | grep 'Enter' || true)" ]
+  [[ "$output" == *"Down did not move the cursor"* ]]
   grep -q '^kill-window' "$CALLS"
   [ "$(state_of "$REPO")" = untrusted ]
 }
@@ -299,6 +301,34 @@ STUB
   kills="$(grep '^kill-window' "$CALLS")"
   [ "$(echo "$kills" | wc -l)" -eq 1 ]
   [[ "$kills" == *"@9"* ]]
+}
+
+@test "trust --yes addresses every key and the kill by exact session:window-id, never a name" {
+  cfg_untrusted
+  run "$TRUST" "$REPO" --yes
+  [ "$status" -eq 0 ]
+  # window id is requested from tmux (-P -F #{window_id}), not guessed from a name
+  grep -qE '^new-window .*-P -F #\{window_id\}' "$CALLS"
+  targets="$(grep -E '^(send-keys|kill-window|capture-pane)' "$CALLS" | sed -nE 's/.* -t ([^ ]+).*/\1/p' | sort -u)"
+  [ "$targets" = "orch:@9" ]
+}
+
+@test "spawn preflight with legacy worktree-keyed entries: root decides, never a worktree entry" {
+  wt="$BATS_TEST_TMPDIR/legacywt"
+  git -C "$REPO" worktree add -q "$wt" -b legacy
+  wt="$(cd -P "$wt" && pwd -P)"
+  # legacy (pre-2.1.3xx) shape: only a worktree path is accepted
+  jq -n --arg w "$wt" '{projects:{($w):{hasTrustDialogAccepted:true, allowedTools:[]}, "/gone/wt":{hasTrustDialogAccepted:true}}}' > "$CFG"
+  run "$SPAWN" w1 sonnet "do it" --no-worktree
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"orch trust"* ]]
+  [ ! -e "$ORCH_ROOT/_orch/state/workers/w1.json" ]
+  # root also accepted => passes alongside the legacy entries
+  jq --arg r "$REPO" '.projects[$r].hasTrustDialogAccepted = true' "$CFG" > "$CFG.n" && mv "$CFG.n" "$CFG"
+  echo ready > "$ST/mode"
+  run "$SPAWN" w2 sonnet "do it" --no-worktree
+  [[ "$output" != *"orch trust"* ]]
+  grep -q '^new-window' "$CALLS"
 }
 
 # --- cli ----------------------------------------------------------------------------

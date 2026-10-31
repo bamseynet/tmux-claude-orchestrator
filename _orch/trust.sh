@@ -83,7 +83,7 @@ if pane_trust_cursor_on_no "$T"; then
   i=0
   until pane_trust_cursor_on_yes "$T"; do
     win_alive || fail "claude exited before the cursor reached 'Yes'; not pressing Enter"
-    i=$((i+1)); [ "$i" -le "$wait_s" ] || fail "cursor never reached 'Yes, I trust this folder'; not pressing Enter"
+    i=$((i+1)); [ "$i" -le "$wait_s" ] || fail "Down did not move the cursor onto 'Yes, I trust this folder' (dialog layout/version differs, or the list does not wrap); not pressing Enter. Answer the dialog yourself: cd $repo && claude"
     sleep 1
   done
 elif ! pane_trust_cursor_on_yes "$T"; then
