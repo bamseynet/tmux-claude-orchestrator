@@ -535,6 +535,89 @@ root_dirty_tick() {
   done
   return 0
 }
+# issue #210: worker context warnings. worker-statusline.sh only RECORDS usage to
+# $STATE_DIR/worker-context/<id>.json; the crossing detection lives here (beside
+# master_reset_tick, #160) so the status-line process stays cheap. One event per
+# threshold per crossing: $STATE_DIR/.ctx-<id> holds "<level> <session_id>"
+# (level none|high|full) and is re-armed when pct falls 10 points below the
+# threshold, on a reset record (/clear or compaction) or on a new session_id.
+# context-high / context-full are deliberately NOT on inject_denylist: they wake
+# the master, which decides (never auto-/clear or /compact a worker from here).
+# $_WORKER_CTX_CFG caches "enabled|warn|full": read once, not per tick.
+_WORKER_CTX_CFG=""
+_worker_ctx_event() { # <id> <event> <pct> <message>
+  local line
+  line="$(jq -nc --arg id "$1" --arg e "$2" --argjson p "$3" --arg ts "$(date -u +%FT%TZ)" --arg m "$4" \
+    '{id:$id,event:$e,pct:$p,ts:$ts,message:$m}')" || return 0
+  printf '%s\n' "$line" >> "$STATE_DIR/events.jsonl"
+  printf '%s\n' "$line" >> "$INBOX"
+}
+worker_context_tick() {
+  shopt -s nullglob
+  local files=("$STATE_DIR"/worker-context/*.json)
+  [ "${#files[@]}" -gt 0 ] || return 0
+  if [ -z "$_WORKER_CTX_CFG" ]; then
+    _WORKER_CTX_CFG="$(jq -r '.worker_context // {} | [(if .enabled == false or .enabled == "false" then "false" else "true" end), (.warn_pct // 70), (.full_pct // 95)] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _WORKER_CTX_CFG=""; return 0; }
+  fi
+  local enabled warn full
+  IFS='|' read -r enabled warn full <<<"$_WORKER_CTX_CFG"
+  [ "$enabled" = "false" ] && return 0
+  # A bad knob would silently never (or always) fire: say so once and stay off.
+  if ! [[ "$warn" =~ ^[0-9]+$ && "$full" =~ ^[0-9]+$ ]] || [ "$warn" -lt 1 ] || [ "$full" -gt 100 ] || [ "$warn" -ge "$full" ]; then
+    log "worker_context: invalid setting (warn_pct='$warn' full_pct='$full'; need integers 1<=warn<full<=100) in config.json -- worker context warnings disabled"
+    _WORKER_CTX_CFG="false||"
+    return 0
+  fi
+  local recs id pct sid reset ts mk old lvl msid p new ev st wins="" wins_read=0 msg
+  # Two forks total, however many workers: awk tags each one-line record with its
+  # file name; jq -R parses each line on its own, so one malformed file is
+  # skipped instead of aborting the rest (plain jq stops at the first bad file).
+  recs="$(awk '{print FILENAME "\t" $0}' "${files[@]}" 2>/dev/null | jq -rR '
+    split("\t") as $a | ($a[1:] | join("\t") | fromjson?) as $r
+    | select(($r | type) == "object" and ($r.pct | type) == "number" and ($r.ts | type) == "string" and $r.ts != "")
+    | [$a[0], ($r.pct | tostring), ($r.session_id // ""), (($r.reset // false) | tostring)] | join("\u001f")' 2>/dev/null)" || true
+  [ -n "$recs" ] || return 0
+  while IFS=$'\037' read -r id pct sid reset; do
+    id="${id##*/}"; id="${id%.json}"
+    mk="$STATE_DIR/.ctx-$id"
+    old="$(cat "$mk" 2>/dev/null || true)"
+    lvl="${old%% *}"; msid=""; case "$old" in *" "*) msid="${old#* }" ;; esac
+    case "$lvl" in high|full) ;; *) lvl=none ;; esac
+    # A reset record, or a different session, starts over.
+    if [ "$reset" = true ] || { [ -n "$msid" ] && [ "$sid" != "$msid" ]; }; then lvl=none; fi
+    new="$lvl"; ev=""
+    if [ "$reset" != true ]; then
+      p="${pct%%.*}"; p="${p:-0}"
+      [ "$lvl" = full ] && [ "$p" -lt $((full - 10)) ] && lvl=high
+      [ "$lvl" != none ] && [ "$p" -lt $((warn - 10)) ] && lvl=none
+      new="$lvl"
+      if [ "$p" -ge "$full" ] && [ "$lvl" != full ]; then ev=context-full; new=full
+      elif [ "$p" -ge "$warn" ] && [ "$p" -lt "$full" ] && [ "$lvl" = none ]; then ev=context-high; new=high
+      fi
+    fi
+    if [ -n "$ev" ]; then
+      # Live = a recorded, non-terminal worker whose window exists. `done` counts:
+      # report.sh writes it after every turn, and a done worker at high context
+      # is the hazard when the master re-prompts it. Not live: don't emit AND
+      # leave the marker, so the crossing still fires once it is.
+      st="$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null || true)"
+      case "$st" in spawn-failed|queued|dead|"") continue ;; esac
+      if [ "$wins_read" = 0 ]; then
+        wins_read=1
+        session_exists "$SESSION_NAME" && wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)" || wins=""
+      fi
+      printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
+      if [ "$ev" = context-full ]; then
+        msg="Worker $id context is $p% full (>= $full%) and it will stop at the limit. Have it commit and push now, write a handoff note, then /clear it or replace it with a fresh worker. Do not send /compact or /clear automatically."
+      else
+        msg="Worker $id context is $p% (>= $warn%). Plan a handoff: have it commit, push and write a handoff note, then /clear it or replace it with a fresh worker."
+      fi
+      _worker_ctx_event "$id" "$ev" "$pct" "$msg"
+    fi
+    [ "$new $sid" = "$old" ] || printf '%s %s\n' "$new" "$sid" > "$mk" 2>/dev/null || true
+  done <<<"$recs"
+  return 0
+}
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -609,6 +692,7 @@ heartbeat_main() {
       master_dead_clear
       master_reset_tick "$S:$ORCH_WINDOW"
       root_dirty_tick
+      worker_context_tick
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi

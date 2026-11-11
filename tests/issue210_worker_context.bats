@@ -83,7 +83,7 @@ run_sl() { # <stdin> <args...>
   f="$STATE/worker-context/w1.json"
   [ -f "$f" ]
   [ "$(jq '.pct' "$f")" = "5" ]
-  [ "$(jq '.tokens' "$f")" = "55054" ]   # 2 + 26649 + 28303 (current_usage, not cumulative 54954)
+  [ "$(jq '.tokens' "$f")" = "54954" ]   # 2 + 26649 + 28303 (current_usage)
   [ "$(jq '.window' "$f")" = "1000000" ]
   [ "$(jq -r '.session_id' "$f")" = "466ab93c-ba12-4a60-b0cc-7c7c5d4bc69b" ]
   [ "$(jq -r '.ts' "$f")" != "null" ]
@@ -97,6 +97,12 @@ run_sl() { # <stdin> <args...>
   f="$STATE/worker-context/w1.json"
   [ "$(jq '.reset' "$f")" = "true" ]
   [ "$(jq '.tokens' "$f")" = "null" ]
+}
+
+@test "capture: tokens come from current_usage, not the cumulative total" {
+  in='{"session_id":"s1","context_window":{"used_percentage":10,"total_input_tokens":900000,"current_usage":{"input_tokens":5,"cache_creation_input_tokens":10,"cache_read_input_tokens":85},"context_window_size":200000}}'
+  run_sl "$in" w1 "$CWD/.claude/settings.local.json"
+  [ "$(jq '.tokens' "$STATE/worker-context/w1.json")" = "100" ]
 }
 
 @test "capture: missing current_usage key falls back to total_input_tokens" {
@@ -248,7 +254,7 @@ mkworker() { # <id> <status>
 }
 mkctx() { # <id> <pct> [session_id] [reset]
   mkdir -p "$STATE/worker-context"
-  jq -n --argjson p "$2" --arg s "${3:-s1}" --argjson r "${4:-false}" \
+  jq -nc --argjson p "$2" --arg s "${3:-s1}" --argjson r "${4:-false}" \
     '{pct:$p,tokens:($p*1000),window:100000,session_id:$s,ts:"2026-11-11T10:00:00Z",reset:$r}' > "$STATE/worker-context/$1.json"
 }
 ostatus() { run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ALLOW_UNRELATED_REPO=1 "$ORCH_ROOT/orch" status "$@"; }
@@ -343,7 +349,8 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
 
 @test "events: a done worker at 97% emits; dead / spawn-failed / missing window do not" {
   load_hb
-  live d1 done;            mkctx d1 97
+  live d1 done
+  mkctx d1 97
   live x1 dead;            mkctx x1 97
   live x2 spawn-failed;    mkctx x2 97
   mkworker gone working;   mkctx gone 97                 # no window
@@ -363,6 +370,14 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   jq '.worker_context = {enabled:false}' "$CONFIG" > "$CONFIG.n" && mv "$CONFIG.n" "$CONFIG"
   _WORKER_CTX_CFG=""; worker_context_tick
   [ ! -s "$INBOX" ]
+}
+
+@test "events: a malformed record file does not block other workers' events" {
+  load_hb; live a1; live z1
+  mkdir -p "$STATE/worker-context"; echo 'garbage{' > "$STATE/worker-context/a1.json"
+  mkctx z1 90
+  worker_context_tick
+  [ "$(jq -r 'select(.event=="context-high") | .id' "$INBOX")" = "z1" ]
 }
 
 @test "events: invalid threshold logs and disables (not silently on)" {
@@ -386,7 +401,8 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
 
 @test "canary: 'Context limit reached' is not matched by the rate-limit regex" {
   re="$(jq -r '.watchdog.rate_limit_regex' "$REPO/_orch/config.json")"
-  ! printf '%s\n' '⎿ Context limit reached · /compact or /clear to continue' | grep -Eq "$re"
+  run grep -Eq "$re" <<<'⎿ Context limit reached · /compact or /clear to continue'
+  [ "$status" -ne 0 ]
 }
 
 # ---------------------------------------------------------------- 6 delivery

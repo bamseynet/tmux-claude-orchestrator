@@ -64,6 +64,11 @@
     "cooldown_s": 1800,
     "checkpoint_timeout_s": 300
   },
+  "worker_context": {
+    "enabled": true,
+    "warn_pct": 70,
+    "full_pct": 95
+  },
   "output": {
     "timestamps": true,
     "timestamp_format": "iso"

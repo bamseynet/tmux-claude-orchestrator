@@ -477,9 +477,14 @@ if [ "$mode" != "--no-worktree" ]; then
     && [ -n "$guard_root" ] || guard_root="$proj"
   guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "$guard_root" "$wdir")"
 fi
-jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" '
+# issue #210: record this worker's context usage and CHAIN to the next-lower
+# layer's bar (statusLine here overrides, not merges, the repo's and the user's).
+# The id and the settings path it lives in are passed as arguments, not env.
+sl_cmd="$(printf '%q ' "$here/worker-statusline.sh" "$id" "$settings_file")"
+jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" --arg sl "$sl_cmd" '
   {
     awaySummaryEnabled: false,
+    statusLine: {type:"command", command:$sl},
     hooks: {
       Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done --hook"}]}],
       Notification: [{matcher:$nm, hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
