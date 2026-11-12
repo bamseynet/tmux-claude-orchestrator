@@ -502,6 +502,11 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
              then . else "Bash(\(.):*)" end))}}
      end)
 ' > "$settings_file"
+# issue #210: a same-id respawn without `orch clean` (allowed for the same repo,
+# #177) must not inherit the previous run's context reading or fired marker:
+# the heartbeat would warn the fresh worker about the old session's usage.
+# Before the status file, so no tick pairs this worker with the stale record.
+rm -f "$STATE_DIR/worker-context/$id.json" "$STATE_DIR/.ctx-$id"
 
 # 2b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
 # root_dirty_tick can tell a worker's Bash write from the operator's own edits.

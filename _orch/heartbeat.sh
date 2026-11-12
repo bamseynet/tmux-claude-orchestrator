@@ -557,11 +557,18 @@ worker_context_tick() {
   local files=("$STATE_DIR"/worker-context/*.json)
   [ "${#files[@]}" -gt 0 ] || return 0
   if [ -z "$_WORKER_CTX_CFG" ]; then
-    _WORKER_CTX_CFG="$(jq -r '.worker_context // {} | [(if .enabled == false or .enabled == "false" then "false" else "true" end), (.warn_pct // 70), (.full_pct // 95)] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _WORKER_CTX_CFG=""; return 0; }
+    # Absent = defaults. A non-object (`false`, "off") must not read as {} --
+    # i.e. silently on -- nor error out silently: it yields "invalid", logged below.
+    _WORKER_CTX_CFG="$(jq -r '.worker_context as $w | if $w == null then {} elif ($w | type) != "object" then {enabled:"invalid"} else $w end | [(if .enabled == "invalid" then "invalid" elif .enabled == false or .enabled == "false" then "false" else "true" end), (.warn_pct // 70), (.full_pct // 95)] | map(tostring) | join("|")' "$CONFIG" 2>/dev/null)" || { _WORKER_CTX_CFG=""; return 0; }
   fi
   local enabled warn full
   IFS='|' read -r enabled warn full <<<"$_WORKER_CTX_CFG"
   [ "$enabled" = "false" ] && return 0
+  if [ "$enabled" = "invalid" ]; then
+    log "worker_context: invalid setting (worker_context must be an object) in config.json -- worker context warnings disabled"
+    _WORKER_CTX_CFG="false||"
+    return 0
+  fi
   # A bad knob would silently never (or always) fire: say so once and stay off.
   if ! [[ "$warn" =~ ^[0-9]+$ && "$full" =~ ^[0-9]+$ ]] || [ "$warn" -lt 1 ] || [ "$full" -gt 100 ] || [ "$warn" -ge "$full" ]; then
     log "worker_context: invalid setting (warn_pct='$warn' full_pct='$full'; need integers 1<=warn<full<=100) in config.json -- worker context warnings disabled"

@@ -248,6 +248,19 @@ spawn_with_repo_bar() { # <mode flag or empty>
   [[ "$output" == *"BAR-repo"* ]]
 }
 
+@test "spawn: a same-id respawn without clean drops the previous run's context record and marker" {
+  # A dead worker's id can be respawned in the same repo without `orch clean`
+  # (#177 only blocks a different repo). Its old 97% reading -- never ticked
+  # while the master was down -- must not fire context-full at the fresh worker.
+  mkdir -p "$STATE/worker-context"
+  echo '{"pct":97,"session_id":"old","ts":"2026-11-11T10:00:00Z","reset":false}' > "$STATE/worker-context/sp1.json"
+  echo 'high old' > "$STATE/.ctx-sp1"
+  run "$ORCH_ROOT/_orch/spawn.sh" sp1 sonnet "do it"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE/worker-context/sp1.json" ]
+  [ ! -e "$STATE/.ctx-sp1" ]
+}
+
 # ---------------------------------------------------------------- 8 clean
 @test "clean removes worker-context/<id>.json and .ctx-<id>" {
   mkdir -p "$STATE/worker-context"
@@ -401,7 +414,7 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   [ "$(jq -r 'select(.event=="context-full") | .id' "$INBOX")" = "d1" ]
 }
 
-@test "events: canary - nothing for no record, below warn, unparseable record, disabled, bad thresholds" {
+@test "events: canary - nothing for no record, below warn, unparseable record, disabled" {
   load_hb; live w1; live w2; live w3
   mkctx w1 10
   mkdir -p "$STATE/worker-context"; echo 'garbage{' > "$STATE/worker-context/w2.json"
@@ -433,6 +446,19 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   jq '.worker_context = {enabled:true, warn_pct:96, full_pct:95}' "$CONFIG" > "$CONFIG.n" && mv "$CONFIG.n" "$CONFIG"
   _WORKER_CTX_CFG=""; worker_context_tick
   [ ! -s "$INBOX" ]
+}
+
+@test "events: a non-object worker_context (false / \"off\") disables and logs, never silently on" {
+  load_hb; live w1; mkctx w1 99
+  jq '.worker_context = false' "$CONFIG" > "$CONFIG.n" && mv "$CONFIG.n" "$CONFIG"
+  _WORKER_CTX_CFG=""; worker_context_tick
+  [ ! -s "$INBOX" ]
+  grep -q "worker_context: invalid setting" "$LOG"
+  : > "$LOG"
+  jq '.worker_context = "off"' "$CONFIG" > "$CONFIG.n" && mv "$CONFIG.n" "$CONFIG"
+  _WORKER_CTX_CFG=""; worker_context_tick
+  [ ! -s "$INBOX" ]
+  grep -q "worker_context: invalid setting" "$LOG"
 }
 
 @test "events: shipped config enables worker_context at 70/95 and does not denylist the events" {
