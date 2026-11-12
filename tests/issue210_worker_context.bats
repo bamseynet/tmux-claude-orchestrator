@@ -378,11 +378,28 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
 @test "events: a reset record or a new session_id re-arms" {
   load_hb; live w1
   mkctx w1 80 sA; worker_context_tick
-  mkctx w1 0 sA true; worker_context_tick
+  # a STALE pct (80, above the re-arm line) on the reset record: only the reset
+  # path can re-arm here, the pct-drop path cannot
+  mkctx w1 80 sA true; worker_context_tick
   mkctx w1 80 sA; worker_context_tick
   [ "$(ev_count context-high)" = 2 ]
   mkctx w1 80 sB; worker_context_tick
   [ "$(ev_count context-high)" = 3 ]
+}
+
+@test "events: a reset record with a null pct (real /clear payload) still re-arms" {
+  load_hb; live w1
+  mkctx w1 80 sA; worker_context_tick
+  [ "$(ev_count context-high)" = 1 ]
+  # what worker-statusline.sh records for used_percentage:null + current_usage:null
+  run_sl '{"session_id":"sA","context_window":{"used_percentage":null,"context_window_size":200000,"current_usage":null}}' \
+    w1 "$CWD/.claude/settings.local.json"
+  [ "$(jq '.reset' "$STATE/worker-context/w1.json")" = "true" ]
+  [ "$(jq '.pct' "$STATE/worker-context/w1.json")" = "null" ]
+  worker_context_tick
+  [ ! -s "$STATE_DIR/.ctx-w1" ] || [ "$(cut -d' ' -f1 "$STATE_DIR/.ctx-w1")" = none ]
+  mkctx w1 80 sA; worker_context_tick
+  [ "$(ev_count context-high)" = 2 ]
 }
 
 @test "events: a small warn_pct (<= 20) still re-arms after a drop" {
@@ -401,6 +418,16 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   worker_context_tick
   [ ! -e "$STATE_DIR/.ctx-ghost" ]
   [ ! -s "$INBOX" ]
+}
+
+@test "events: a marker written without a session_id still re-arms on a new session" {
+  load_hb; live w1
+  mkdir -p "$STATE/worker-context"
+  echo '{"pct":75,"ts":"2026-11-11T10:00:00Z","reset":false}' > "$STATE/worker-context/w1.json"
+  worker_context_tick
+  [ "$(ev_count context-high)" = 1 ]
+  mkctx w1 75 sX; worker_context_tick          # new session, never fell below warn-10
+  [ "$(ev_count context-high)" = 2 ]
 }
 
 @test "events: a done worker at 97% emits; dead / spawn-failed / missing window do not" {

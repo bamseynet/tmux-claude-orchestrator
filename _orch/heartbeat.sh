@@ -581,12 +581,15 @@ worker_context_tick() {
   local rearm_w=$((warn - 10)) rearm_f=$((full - 10))
   [ "$warn" -le 20 ] && rearm_w=$((warn / 2))
   [ "$full" -le 20 ] && rearm_f=$((full / 2))
+  # A reset record is kept even with a null pct (the CLI reports used_percentage
+  # null alongside a null current_usage after /clear or compaction): it only
+  # re-arms, and its pct is never read.
   # Two forks total, however many workers: awk tags each one-line record with its
   # file name; jq -R parses each line on its own, so one malformed file is
   # skipped instead of aborting the rest (plain jq stops at the first bad file).
   recs="$(awk '{print FILENAME "\t" $0}' "${files[@]}" 2>/dev/null | jq -rR '
     split("\t") as $a | ($a[1:] | join("\t") | fromjson?) as $r
-    | select(($r | type) == "object" and ($r.pct | type) == "number" and ($r.ts | type) == "string" and $r.ts != "")
+    | select(($r | type) == "object" and (($r.pct | type) == "number" or $r.reset == true) and ($r.ts | type) == "string" and $r.ts != "")
     | [$a[0], ($r.pct | tostring), ($r.session_id // ""), (($r.reset // false) | tostring)] | join("\u001f")' 2>/dev/null)" || true
   [ -n "$recs" ] || return 0
   while IFS=$'\037' read -r id pct sid reset; do
@@ -596,7 +599,7 @@ worker_context_tick() {
     lvl="${old%% *}"; msid=""; case "$old" in *" "*) msid="${old#* }" ;; esac
     case "$lvl" in high|full) ;; *) lvl=none ;; esac
     # A reset record, or a different session, starts over.
-    if [ "$reset" = true ] || { [ -n "$msid" ] && [ "$sid" != "$msid" ]; }; then lvl=none; fi
+    if [ "$reset" = true ] || [ "$sid" != "$msid" ]; then lvl=none; fi
     new="$lvl"; ev=""
     if [ "$reset" != true ]; then
       # jq may print 1e-05 or -3; anything but a plain integer part reads as 0
