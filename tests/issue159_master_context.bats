@@ -216,7 +216,7 @@ run_ss() { # <source> <session_id>
 }
 
 # ---------------------------------------------------------------- A5
-@test "A5: worker settings carry neither statusLine nor SessionStart" {
+@test "A5: worker settings carry neither the master statusLine nor SessionStart" {
   : > "$TMUX_LOG.up"   # spawn needs the (stubbed) session to exist
   run "$ORCH_ROOT/_orch/spawn.sh" w1 sonnet "do it"
   [ "$status" -eq 0 ]
@@ -226,7 +226,8 @@ run_ss() { # <source> <session_id>
   [ -f "$wt/.claude/settings.local.json" ]
   [ -f "$STATE/settings/w2.json" ]
   for f in "$wt/.claude/settings.local.json" "$STATE/settings/w2.json"; do
-    refute_grep_in_existing 'statusLine' "$f"
+    # issue #210: workers now get their OWN worker-statusline.sh; never the master's
+    refute_grep_in_existing 'master-statusline' "$f"
     refute_grep_in_existing 'SessionStart' "$f"
   done
 }

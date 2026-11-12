@@ -122,6 +122,9 @@ rm -f "$STATE_DIR/.wd-$id"
 # the rate-limit cooldown marker too: a reused id would otherwise inherit a
 # past-due one and get a stale retry nudge on its first sweep.
 rm -f "$STATE_DIR/.rl-$id"
+# issue #210: the context record + its heartbeat marker, or a respawn of the same
+# id would inherit a stale reading (and a stale already-fired marker).
+rm -f "$STATE_DIR/worker-context/$id.json" "$STATE_DIR/.ctx-$id"
 rm -f "$STATE_DIR/settings/$id.json"
 rm -f "$(root_baseline_file "$proj" "$id")"   # issue #178
 

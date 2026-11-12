@@ -227,6 +227,18 @@ case "$cmd" in
     # write/clear directly (see lib.sh's is_human_managed for the same convention).
     managed_by() { [ -f "$here/_orch/state/.manual-$1" ] && echo human || echo orch; } # <id>
 
+    # issue #210: <id> -> {pct,tokens,window,ts} from state/worker-context/<id>.json,
+    # or null when absent, unparseable, a reset (unknown) or pct non-numeric.
+    # Never 0 for "no reading". Only the FIRST JSON value is read (-n + input):
+    # a file holding several would otherwise print several lines and break the
+    # caller's --argjson, failing the whole `status --json`.
+    worker_ctx_json() { # <id>
+      local o
+      o="$(jq -cn 'input | if type == "object" and (.reset | not) and (.pct | type) == "number" then {pct, tokens, window, ts} else null end' \
+        "$here/_orch/state/worker-context/$1.json" 2>/dev/null)" || o=""
+      echo "${o:-null}"
+    }
+
     if [ "$json_mode" = 1 ]; then
       if [ "${#files[@]}" = 0 ]; then
         echo "[]"
@@ -236,7 +248,8 @@ case "$cmd" in
       for f in "${files[@]}"; do
         id="$(jq -r '.id // "?"' "$f")"
         managed="$(managed_by "$id")"
-        row="$(jq -c --arg managed "$managed" '{id, status, model, task, created, updated, after, managed: $managed}' "$f")"
+        # issue #210: context usage from the status-line record (null when absent/unknown)
+        row="$(jq -c --arg managed "$managed" --argjson ctx "$(worker_ctx_json "$id")" '{id, status, model, task, created, updated, after, managed: $managed, context: $ctx}' "$f")"
         out="$(jq -c --argjson row "$row" '. + [$row]' <<<"$out")"
       done
       printf '%s\n' "$out"
@@ -289,7 +302,7 @@ case "$cmd" in
       fi
     }
 
-    printf '%-12s %-8s %-12s %-8s %-8s %s\n' "ID" "MODEL" "STATUS" "AGE" "MANAGED" "TASK"
+    printf '%-12s %-8s %-12s %-8s %-6s %-8s %s\n' "ID" "MODEL" "STATUS" "AGE" "CTX%" "MANAGED" "TASK"
     for f in "${files[@]}"; do
       id="$(jq -r '.id // "?"' "$f")"
       model="$(jq -r '.model // "?"' "$f")"
@@ -298,7 +311,8 @@ case "$cmd" in
       task="$(jq -r '.task // "" | gsub("\\s+"; " ")' "$f")"
       age="$(age_str "$ts")"
       managed="$(managed_by "$id")"
-      printf '%-12s %-8s %-12s %-8s %-8s %s\n' "$id" "$model" "$st" "$age" "$managed" "$task"
+      ctxp="$(worker_ctx_json "$id" | jq -r 'if . == null then "-" else "\(.pct | floor)%" end' 2>/dev/null)" || ctxp="-"
+      printf '%-12s %-8s %-12s %-8s %-6s %-8s %s\n' "$id" "$model" "$st" "$age" "${ctxp:--}" "$managed" "$task"
     done
 
     # queue depth (issue #79): "a queue nobody can see is a queue nobody

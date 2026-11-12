@@ -477,9 +477,14 @@ if [ "$mode" != "--no-worktree" ]; then
     && [ -n "$guard_root" ] || guard_root="$proj"
   guard_cmd="$(printf '%q ' "$here/guard-write.sh" "$id" "$guard_root" "$wdir")"
 fi
-jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" '
+# issue #210: record this worker's context usage and CHAIN to the next-lower
+# layer's bar (statusLine here overrides, not merges, the repo's and the user's).
+# The id and the settings path it lives in are passed as arguments, not env.
+sl_cmd="$(printf '%q ' "$here/worker-statusline.sh" "$id" "$settings_file")"
+jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm "$notif_matcher" --arg g "$guard_cmd" --arg sl "$sl_cmd" '
   {
     awaySummaryEnabled: false,
+    statusLine: {type:"command", command:$sl},
     hooks: {
       Stop:         [{hooks:[{type:"command", command:"\($r) \($id) done --hook"}]}],
       Notification: [{matcher:$nm, hooks:[{type:"command", command:"\($r) \($id) needs-input"}]}],
@@ -497,6 +502,11 @@ jq -n --arg r "$here/report.sh" --arg id "$id" --arg allow "$allow_csv" --arg nm
              then . else "Bash(\(.):*)" end))}}
      end)
 ' > "$settings_file"
+# issue #210: a same-id respawn without `orch clean` (allowed for the same repo,
+# #177) must not inherit the previous run's context reading or fired marker:
+# the heartbeat would warn the fresh worker about the old session's usage.
+# Before the status file, so no tick pairs this worker with the stale record.
+rm -f "$STATE_DIR/worker-context/$id.json" "$STATE_DIR/.ctx-$id"
 
 # 2b) issue #178: snapshot the target checkout's dirtiness so heartbeat's
 # root_dirty_tick can tell a worker's Bash write from the operator's own edits.
