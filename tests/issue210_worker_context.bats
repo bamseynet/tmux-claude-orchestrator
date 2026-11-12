@@ -228,6 +228,7 @@ spawn_with_repo_bar() { # <mode flag or empty>
   cmd="$(jq -r '.statusLine.command' "$sf")"
   [[ "$cmd" == *"worker-statusline.sh"* ]]
   [[ "$cmd" == *"sp1"* ]]
+  [[ "$cmd" == *"$sf"* ]]   # skip path = the private --settings file, not a layer
   [ "$(jq -r '.hooks.Stop[0].hooks[0].command' "$sf")" = "$ORCH_ROOT/_orch/report.sh sp1 done --hook" ]
   cp "$PROJECT_ROOT/.claude/settings.json" "$PROJECT_ROOT/.claude/settings.local.json"
   cd "$PROJECT_ROOT"
@@ -285,7 +286,10 @@ ostatus() { run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ALLOW_UNRELATED_REP
   mkworker a working
   mkctx a 0 s1 true
   ostatus
-  [[ "$(grep -E '^a ' <<<"$output")" != *"0%"* ]]
+  [ "$status" -eq 0 ]
+  la="$(grep -E '^a ' <<<"$output")"
+  [[ "$la" == *" - "* ]]
+  [[ "$la" != *"0%"* ]]
 }
 
 @test "glob regression: worker-context/ creates no phantom worker in status/rehydrate" {
@@ -345,6 +349,24 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   [ "$(ev_count context-high)" = 2 ]
   mkctx w1 80 sB; worker_context_tick
   [ "$(ev_count context-high)" = 3 ]
+}
+
+@test "events: a small warn_pct (<= 20) still re-arms after a drop" {
+  load_hb; live w1
+  jq '.worker_context = {enabled:true, warn_pct:5, full_pct:50}' "$CONFIG" > "$CONFIG.n" && mv "$CONFIG.n" "$CONFIG"
+  _WORKER_CTX_CFG=""
+  mkctx w1 6 sA; worker_context_tick
+  [ "$(ev_count context-high)" = 1 ]
+  mkctx w1 1 sA; worker_context_tick; mkctx w1 7 sA; worker_context_tick   # same session, no reset
+  [ "$(ev_count context-high)" = 2 ]
+}
+
+@test "events: an orphan context record (no worker JSON) leaves no .ctx marker" {
+  load_hb
+  mkctx ghost 10                      # below warn: no event, so the marker write is reached
+  worker_context_tick
+  [ ! -e "$STATE_DIR/.ctx-ghost" ]
+  [ ! -s "$INBOX" ]
 }
 
 @test "events: a done worker at 97% emits; dead / spawn-failed / missing window do not" {

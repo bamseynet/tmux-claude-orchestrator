@@ -569,6 +569,11 @@ worker_context_tick() {
     return 0
   fi
   local recs id pct sid reset ts mk old lvl msid p new ev st wins="" wins_read=0 msg
+  # Re-arm 10 points below a threshold, or halfway to 0 when the threshold is
+  # <= 20 (warn_pct=5 would otherwise re-arm only below -5, i.e. never).
+  local rearm_w=$((warn - 10)) rearm_f=$((full - 10))
+  [ "$warn" -le 20 ] && rearm_w=$((warn / 2))
+  [ "$full" -le 20 ] && rearm_f=$((full / 2))
   # Two forks total, however many workers: awk tags each one-line record with its
   # file name; jq -R parses each line on its own, so one malformed file is
   # skipped instead of aborting the rest (plain jq stops at the first bad file).
@@ -580,16 +585,18 @@ worker_context_tick() {
   while IFS=$'\037' read -r id pct sid reset; do
     id="${id##*/}"; id="${id%.json}"
     mk="$STATE_DIR/.ctx-$id"
-    old="$(cat "$mk" 2>/dev/null || true)"
+    old=""; [ -f "$mk" ] && { IFS= read -r old < "$mk"; } 2>/dev/null || true
     lvl="${old%% *}"; msid=""; case "$old" in *" "*) msid="${old#* }" ;; esac
     case "$lvl" in high|full) ;; *) lvl=none ;; esac
     # A reset record, or a different session, starts over.
     if [ "$reset" = true ] || { [ -n "$msid" ] && [ "$sid" != "$msid" ]; }; then lvl=none; fi
     new="$lvl"; ev=""
     if [ "$reset" != true ]; then
-      p="${pct%%.*}"; p="${p:-0}"
-      [ "$lvl" = full ] && [ "$p" -lt $((full - 10)) ] && lvl=high
-      [ "$lvl" != none ] && [ "$p" -lt $((warn - 10)) ] && lvl=none
+      # jq may print 1e-05 or -3; anything but a plain integer part reads as 0
+      # (an error from [ -lt ] would land in the log every tick).
+      p="${pct%%.*}"; case "$p" in ''|*[!0-9]*) p=0 ;; esac
+      [ "$lvl" = full ] && [ "$p" -lt "$rearm_f" ] && lvl=high
+      [ "$lvl" != none ] && [ "$p" -lt "$rearm_w" ] && lvl=none
       new="$lvl"
       if [ "$p" -ge "$full" ] && [ "$lvl" != full ]; then ev=context-full; new=full
       elif [ "$p" -ge "$warn" ] && [ "$p" -lt "$full" ] && [ "$lvl" = none ]; then ev=context-high; new=high
@@ -600,7 +607,7 @@ worker_context_tick() {
       # report.sh writes it after every turn, and a done worker at high context
       # is the hazard when the master re-prompts it. Not live: don't emit AND
       # leave the marker, so the crossing still fires once it is.
-      st="$(jq -r '.status // ""' "$WORKERS_DIR/$id.json" 2>/dev/null || true)"
+      st="$(_worker_status "$id" || true)"
       case "$st" in spawn-failed|queued|dead|"") continue ;; esac
       if [ "$wins_read" = 0 ]; then
         wins_read=1
@@ -614,6 +621,8 @@ worker_context_tick() {
       fi
       _worker_ctx_event "$id" "$ev" "$pct" "$msg"
     fi
+    # No worker record (orphan context file): keep no marker, clean.sh would never remove it.
+    [ -f "$WORKERS_DIR/$id.json" ] || continue
     [ "$new $sid" = "$old" ] || printf '%s %s\n' "$new" "$sid" > "$mk" 2>/dev/null || true
   done <<<"$recs"
   return 0
