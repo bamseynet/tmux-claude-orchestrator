@@ -29,9 +29,16 @@ if [ -n "$id" ]; then
     | (.context_window // {}) as $cw
     | ($cw.current_usage // null) as $u
     | (($cw | type) == "object" and ($cw | has("current_usage"))) as $has_cu
-    | {pct: $cw.used_percentage,
-       tokens: (if ($u | type) == "object"
-                then (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0))
+    | (if ($u | type) == "object"
+       then (($u.input_tokens // 0) + ($u.cache_creation_input_tokens // 0) + ($u.cache_read_input_tokens // 0))
+       else null end) as $cur
+    # No used_percentage: derive it from current_usage / window (never from the
+    # cumulative total_input_tokens), as the master tick does from tokens/window;
+    # otherwise the heartbeat (numeric pct only) would never warn this worker.
+    | {pct: ($cw.used_percentage
+             // (if $cur != null and (($cw.context_window_size | type) == "number") and $cw.context_window_size > 0
+                 then ($cur * 100 / $cw.context_window_size | floor) else null end)),
+       tokens: (if $cur != null then $cur
                 elif $has_cu then null
                 else $cw.total_input_tokens end),
        window: $cw.context_window_size, session_id: .session_id,

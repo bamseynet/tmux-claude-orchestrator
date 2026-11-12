@@ -615,17 +615,19 @@ worker_context_tick() {
     if [ -n "$ev" ]; then
       # Live = a recorded, non-terminal worker whose window exists. `done` counts:
       # report.sh writes it after every turn, and a done worker at high context
-      # is the hazard when the master re-prompts it. Not live: don't emit AND
-      # leave the marker, so the crossing still fires once it is.
+      # is the hazard when the master re-prompts it. `merged` does not: its work
+      # is already on main, so "commit and push now" is noise (a re-prompt flips
+      # it back to working and the kept marker fires then). Not live: don't emit
+      # AND leave the marker, so the crossing still fires once it is.
       st="$(_worker_status "$id" || true)"
-      case "$st" in spawn-failed|queued|dead|"") continue ;; esac
+      case "$st" in spawn-failed|queued|dead|merged|"") continue ;; esac
       if [ "$wins_read" = 0 ]; then
         wins_read=1
         session_exists "$SESSION_NAME" && wins="$(tmux list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null)" || wins=""
       fi
       printf '%s\n' "$wins" | grep -qxF -- "$id" || continue
       if [ "$ev" = context-full ]; then
-        msg="Worker $id context is $p% full (>= $full%) and it will stop at the limit. Have it commit and push now, write a handoff note, then /clear it or replace it with a fresh worker. Do not send /compact or /clear automatically."
+        msg="Worker $id context is $p% full (>= $full%); with auto-compact off it will stop at the limit. Have it commit and push now, write a handoff note, then /clear it or replace it with a fresh worker. Do not send /compact or /clear automatically."
       else
         msg="Worker $id context is $p% (>= $warn%). Plan a handoff: have it commit, push and write a handoff note, then /clear it or replace it with a fresh worker."
       fi

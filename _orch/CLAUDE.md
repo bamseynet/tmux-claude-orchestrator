@@ -187,8 +187,8 @@ chaining to the operator's own bar) records its context usage to
 no reading) and `status --json` as `context`. The heartbeat sends a `context-high`
 event (>= `worker_context.warn_pct`, 70) and a `context-full` event (>= `full_pct`, 95),
 once per crossing. On `context-high`: let the worker finish its step, then have it
-commit, push and write a handoff note before it fills up. On `context-full`: it
-will stop at the limit (auto-compact is off), so tell it to commit and push now,
+commit, push and write a handoff note before it fills up. On `context-full`: with
+auto-compact off it will stop at the limit, so tell it to commit and push now,
 then `/clear` it or replace it with a fresh worker. Never send `/compact` or `/clear`
 unprompted. A `done` worker at high context is still a hazard before you re-prompt it.
 A `root-dirty` heartbeat event (id `heartbeat`) lists `paths` (first 50 of `paths_total`) that became dirty

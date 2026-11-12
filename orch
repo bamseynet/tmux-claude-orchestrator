@@ -229,10 +229,12 @@ case "$cmd" in
 
     # issue #210: <id> -> {pct,tokens,window,ts} from state/worker-context/<id>.json,
     # or null when absent, unparseable, a reset (unknown) or pct non-numeric.
-    # Never 0 for "no reading".
+    # Never 0 for "no reading". Only the FIRST JSON value is read (-n + input):
+    # a file holding several would otherwise print several lines and break the
+    # caller's --argjson, failing the whole `status --json`.
     worker_ctx_json() { # <id>
       local o
-      o="$(jq -c 'if type == "object" and (.reset | not) and (.pct | type) == "number" then {pct, tokens, window, ts} else null end' \
+      o="$(jq -cn 'input | if type == "object" and (.reset | not) and (.pct | type) == "number" then {pct, tokens, window, ts} else null end' \
         "$here/_orch/state/worker-context/$1.json" 2>/dev/null)" || o=""
       echo "${o:-null}"
     }

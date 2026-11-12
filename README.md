@@ -198,6 +198,9 @@ multi-session work.
 | `master_context.reset_fraction` | `0.35` | reset when tokens ≥ this × the master's actual context window (so 200k and 1M windows both work); unknown window never resets |
 | `master_context.cooldown_s` | `1800` | minimum seconds between resets; `orch up` clears it and any loop-guard backoff, except for a reset the guard has not judged yet |
 | `master_context.checkpoint_timeout_s` | `300` | max wait for `master-notes.md` to be rewritten before aborting (no `/clear`) |
+| `worker_context.enabled` | `true` | per-worker context tracking (issue #210): `context-high` / `context-full` heartbeat events; usage recorded to `_orch/state/worker-context/<id>.json` and shown as `CTX%` in `orch status` |
+| `worker_context.warn_pct` | `70` | `context-high` once per crossing of this `used_percentage` (integer, 1 <= warn < full) |
+| `worker_context.full_pct` | `95` | `context-full` once per crossing (integer <= 100); an invalid knob is logged and disables the warnings |
 | `output.timestamps` | true | timestamp-prefix human-facing terminal output (`ORCH_TIMESTAMPS` env overrides; see `./orch help`) |
 | `output.timestamp_format` | `iso` | `iso` (UTC, matches `orch.log`) or `short` (local `HH:MM:SS`); `ORCH_TIMESTAMP_FORMAT` env overrides |
 

@@ -316,6 +316,17 @@ ostatus() { run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ALLOW_UNRELATED_REP
   [[ "$la" != *"70%"* ]]
 }
 
+@test "status --json: a record file holding two JSON values does not break the listing" {
+  mkworker a working; mkworker b working
+  mkctx a 72
+  cat "$STATE/worker-context/a.json" "$STATE/worker-context/a.json" > "$BATS_TEST_TMPDIR/two"
+  mv "$BATS_TEST_TMPDIR/two" "$STATE/worker-context/a.json"
+  ostatus --json
+  [ "$status" -eq 0 ]
+  [ "$(jq 'length' <<<"$output")" = "2" ]
+  [ "$(jq '.[] | select(.id=="a") | .context.pct' <<<"$output")" = "72" ]
+}
+
 @test "status: a reset record renders '-' (unknown), not a stale pct" {
   mkworker a working
   mkctx a 0 s1 true
@@ -430,22 +441,39 @@ live() { echo "$1" >> "$WINDOWS"; mkworker "$1" "${2:-working}"; }
   [ "$(ev_count context-high)" = 2 ]
 }
 
+@test "capture: no used_percentage -> pct derived from current_usage/window (not cumulative), and the heartbeat warns" {
+  in='{"session_id":"sQ","context_window":{"context_window_size":200000,"total_input_tokens":900000,"current_usage":{"input_tokens":150000,"cache_creation_input_tokens":0,"cache_read_input_tokens":40000}}}'
+  run_sl "$in" w1 "$CWD/.claude/settings.local.json"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .pct "$STATE/worker-context/w1.json")" = 95 ]
+  [ "$(jq -r .tokens "$STATE/worker-context/w1.json")" = 190000 ]
+  load_hb; live w1
+  worker_context_tick
+  [ "$(ev_count context-full)" = 1 ]
+}
+
 @test "events: a done worker at 97% emits; dead / spawn-failed / missing window do not" {
   load_hb
   live d1 done
   mkctx d1 97
   live x1 dead;            mkctx x1 97
   live x2 spawn-failed;    mkctx x2 97
+  live m1 merged;          mkctx m1 97                   # work already on main
   mkworker gone working;   mkctx gone 97                 # no window
   worker_context_tick
   [ "$(jq -r 'select(.event=="context-full") | .id' "$INBOX")" = "d1" ]
+  # merged kept its marker unfired: a re-prompt (-> working) still gets the event
+  mkworker m1 working; worker_context_tick
+  [ "$(jq -r 'select(.event=="context-full") | .id' "$INBOX" | tail -1)" = "m1" ]
 }
 
 @test "events: canary - nothing for no record, below warn, unparseable record, disabled" {
   load_hb; live w1; live w2; live w3
   mkctx w1 10
   mkdir -p "$STATE/worker-context"; echo 'garbage{' > "$STATE/worker-context/w2.json"
-  echo '{"pct":"high","session_id":"s","ts":"x"}' > "$STATE/worker-context/w3.json"
+  # a numeric-looking STRING pct: the shell would parse 99 and fire, so only
+  # the jq type filter keeps this quiet
+  echo '{"pct":"99","session_id":"s","ts":"x"}' > "$STATE/worker-context/w3.json"
   worker_context_tick
   [ ! -s "$INBOX" ]
   # disabled
