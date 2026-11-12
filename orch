@@ -309,7 +309,7 @@ case "$cmd" in
       task="$(jq -r '.task // "" | gsub("\\s+"; " ")' "$f")"
       age="$(age_str "$ts")"
       managed="$(managed_by "$id")"
-      ctxp="$(worker_ctx_json "$id" | jq -r 'if . == null then "-" else "\(.pct | round)%" end' 2>/dev/null)" || ctxp="-"
+      ctxp="$(worker_ctx_json "$id" | jq -r 'if . == null then "-" else "\(.pct | floor)%" end' 2>/dev/null)" || ctxp="-"
       printf '%-12s %-8s %-12s %-8s %-6s %-8s %s\n' "$id" "$model" "$st" "$age" "${ctxp:--}" "$managed" "$task"
     done
 

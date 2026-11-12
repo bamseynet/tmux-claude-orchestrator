@@ -164,6 +164,17 @@ run_sl() { # <stdin> <args...>
   [[ "$output" == *"BAR-local"* ]]
 }
 
+@test "chain: the skip-path layer is skipped by identity, not only by the script-name filter" {
+  # Own layer holds a bar WITHOUT worker-statusline.sh in its command, so only
+  # the <skip-settings-path> (-ef) check can keep it from being chained to.
+  mkbar own "$CWD/.claude/settings.local.json"
+  mkbar repo "$CWD/.claude/settings.json"
+  run_sl "$(cat "$FIXTURE")" w1 "$CWD/.claude/settings.local.json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BAR-repo"* ]]
+  [[ "$output" != *"BAR-own"* ]]
+}
+
 @test "chain: no bar anywhere -> a minimal line, never empty" {
   jq -n --arg c "$SL w1 $CWD/.claude/settings.local.json" '{statusLine:{type:"command",command:$c}}' > "$CWD/.claude/settings.local.json"
   run_sl "$(cat "$FIXTURE")" w1 "$CWD/.claude/settings.local.json"
@@ -280,6 +291,16 @@ ostatus() { run env -u PROJECT_ROOT -u ORCH_TARGET_REPO ORCH_ALLOW_UNRELATED_REP
   [[ "$la" == *"72%"* ]]
   [[ "$lb" == *" - "* ]]
   [[ "$lb" != *"0%"* ]]
+}
+
+@test "status: CTX% truncates like the heartbeat (69.6 shows 69%, never a 70% with no context-high)" {
+  mkworker a working
+  mkctx a 69.6
+  ostatus
+  [ "$status" -eq 0 ]
+  la="$(grep -E '^a ' <<<"$output")"
+  [[ "$la" == *"69%"* ]]
+  [[ "$la" != *"70%"* ]]
 }
 
 @test "status: a reset record renders '-' (unknown), not a stale pct" {
