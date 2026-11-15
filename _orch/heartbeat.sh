@@ -702,9 +702,9 @@ channel_deliver() {
 # ever read those lines. Lines past the server's persisted cursor were never
 # emitted; they go back to the inbox (original text) and take whatever path the
 # next batch takes. Lines before the cursor were already emitted and are not
-# replayed. The outbox is renamed away first, so a straggling server (it reopens
+# replayed. The outbox is renamed away first (to <outbox>.replay), so a straggling server (it reopens
 # the outbox by path on every poll) cannot emit the same lines as well.
-# No outbox files (channel delivery never used) = one glob, no forks.
+# No outbox files (channel delivery never used) = two globs, no forks.
 channel_replay_orphans() {
   local fresh="${1:-15}" ob pid live rp cur n now spid
   case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
@@ -729,13 +729,23 @@ channel_replay_orphans() {
     case "$spid" in ''|*[!0-9]*) ;; *)
       [ "$(ps -o ppid= -p "$spid" 2>/dev/null | tr -d ' ')" = "$pid" ] && continue ;;
     esac
-    rp="$ob.replay.$$"
-    mv -f "$ob" "$rp" 2>/dev/null || continue
+    # Claim it: a fixed name, so a heartbeat killed before requeueing leaves a
+    # file the next tick (or the next heartbeat) still finds below. If a claim
+    # is already pending for this pid, leave the new outbox for the next tick.
+    [ -e "$ob.replay" ] || mv -f "$ob" "$ob.replay" 2>/dev/null || true
+  done
+  # Requeue every claimed file, including one left by a heartbeat that died
+  # between claiming and requeueing. A crash after the requeue but before the
+  # rm replays the lines again on the next tick: at-least-once, never lost.
+  for rp in "$STATE_DIR"/channel-outbox-*.jsonl.replay; do
+    [ -f "$rp" ] || continue
+    pid="${rp##*/channel-outbox-}"; pid="${pid%.jsonl.replay}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
     cur="$(cat "$STATE_DIR/channel-cursor-$pid" 2>/dev/null)" || cur=0
     case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
     n="$(tail -c +"$((cur + 1))" "$rp" | jq -Rr 'try (fromjson | .text // empty | strings) catch empty' 2>/dev/null \
       | tee -a "$INBOX" | grep -c .)" || n=0
-    rm -f "$rp" "$STATE_DIR/channel-cursor-$pid" "$live"
+    rm -f "$rp" "$STATE_DIR/channel-cursor-$pid" "$STATE_DIR/channel-$pid.json"
     [ "${n:-0}" -eq 0 ] || log "requeued $n undelivered channel event(s) from orphaned outbox (claude pid $pid)"
   done
   return 0

@@ -65,7 +65,7 @@ wait_for() { for _ in $(seq 1 100); do "$@" && return 0; sleep 0.02; done; retur
 # <ppid> <loaded:true|false> <age_s>
 liveness() {
   mkdir -p "$STATE_DIR"
-  # server pid: an exited process, so channel_replay_orphans' kill -0 sees it dead
+  # server pid: an exited process, so channel_replay_orphans' ps -o ppid= check sees it dead
   local dead; dead="$(sh -c 'echo $$')"
   jq -n --argjson p "$1" --argjson l "$2" --argjson ts "$(( $(date +%s) - $3 ))" --argjson sp "$dead" \
     '{pid:$sp, ppid:$p, started:$ts, loaded:$l, ts:$ts}' > "$STATE_DIR/channel-$1.json"
@@ -288,4 +288,14 @@ orphan_outbox() {
   touch "$STATE_DIR/.stop"; wait "$HB_PID" 2>/dev/null || true
   grep -q 'master showing a dialog' "$LOG"
   refute_grep_in_existing 'paste-buffer' "$CALLS"
+}
+
+@test "replay: a claimed file left by a heartbeat killed before requeueing is still requeued (never lost)" {
+  orphan_outbox 4242 sent1 lost1
+  head -1 "$STATE_DIR/channel-outbox-4242.jsonl" | wc -c | tr -d ' ' > "$STATE_DIR/channel-cursor-4242"
+  mv "$STATE_DIR/channel-outbox-4242.jsonl" "$STATE_DIR/channel-outbox-4242.jsonl.replay"
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ "$(jq -r .id "$INBOX")" = "lost1" ]
+  [ ! -e "$STATE_DIR/channel-outbox-4242.jsonl.replay" ]
 }

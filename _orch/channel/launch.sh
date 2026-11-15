@@ -17,6 +17,12 @@ channel_launch_flags() { # <orch dir> -> prints " --mcp-config <f> --dangerously
   # bare "sdk dir exists" check would keep running the old pinned version).
   local stamp="$dir/node_modules/.orch-lock-stamp" want=""
   [ -f "$dir/package-lock.json" ] && want="$(cksum < "$dir/package-lock.json" 2>/dev/null)"
+  # An unstamped but present install (the operator's own `npm ci --prefix`, as the
+  # README suggests) is adopted as current: npm ci deletes node_modules before it
+  # installs, so re-running it offline would destroy a working install.
+  if [ -d "$dir/node_modules/@modelcontextprotocol/sdk" ] && [ ! -e "$stamp" ] && [ -n "$want" ]; then
+    printf '%s\n' "$want" > "$stamp" 2>/dev/null || true
+  fi
   if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
     if command -v npm >/dev/null 2>&1 && [ -n "$want" ]; then
       npm ci --prefix "$dir" --silent >>"$LOG" 2>&1 && printf '%s\n' "$want" > "$stamp" || true

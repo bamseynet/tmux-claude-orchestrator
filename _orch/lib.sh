@@ -652,7 +652,7 @@ TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│
 # one read as idle and the heartbeat's tmux path pasted into it. Both are
 # full-screen and vanish once answered (verified live, Claude Code 2.1.325), so
 # they do not linger as stale text. Workers are never launched with channels.
-TUI_CHANNEL_DIALOG_REGEX="$(_tui_pattern channel_dialog_regex '^[[:space:]│]*(WARNING: Loading development channels|New MCP server found in this project)')"
+TUI_CHANNEL_DIALOG_REGEX="$(_tui_pattern channel_dialog_regex '^[[:space:]│]*(WARNING: Loading development channels|New MCP server found)')"
 TUI_CHANNEL_CHOICE_REGEX="$(_tui_pattern channel_dialog_choice_regex '^[[:space:]│❯]*[0-9]+\.[[:space:]]*(I am using this for local development|Use this MCP server|Continue without using this MCP server)')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
