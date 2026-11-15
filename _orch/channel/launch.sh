@@ -12,9 +12,14 @@ channel_launch_flags() { # <orch dir> -> prints " --mcp-config <f> --dangerously
   if ! command -v "$node_bin" >/dev/null 2>&1; then
     log "delivery.channel on but node is missing; falling back to tmux injection"; return 1
   fi
-  if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ]; then
-    if command -v npm >/dev/null 2>&1 && [ -f "$dir/package-lock.json" ]; then
-      npm ci --prefix "$dir" --silent >>"$LOG" 2>&1 || true
+  # Re-run npm ci when the lockfile changed since the last install (an `orch
+  # update` swaps in a new package-lock.json but leaves node_modules alone, so a
+  # bare "sdk dir exists" check would keep running the old pinned version).
+  local stamp="$dir/node_modules/.orch-lock-stamp" want=""
+  [ -f "$dir/package-lock.json" ] && want="$(cksum < "$dir/package-lock.json" 2>/dev/null)"
+  if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+    if command -v npm >/dev/null 2>&1 && [ -n "$want" ]; then
+      npm ci --prefix "$dir" --silent >>"$LOG" 2>&1 && printf '%s\n' "$want" > "$stamp" || true
     fi
     if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ]; then
       log "delivery.channel on but channel deps are not installed (npm ci --prefix $dir); falling back to tmux injection"
@@ -55,14 +60,19 @@ channel_answer_startup_dialogs() { # <target> [timeout_s]
     elif [ "$dev_up" -eq 1 ] && [ "$dev_done" -eq 0 ]; then
       tmux send-keys -t "$1" Enter; dev_done=1
       log "channel launch: accepted development-channels warning (Enter)"
-    elif [ "$dev_done" -eq 1 ] && [ "$mcp_up" -eq 0 ] && [ "$dev_up" -eq 0 ] && is_ready "$1"; then
-      # Only with no channel dialog text in view: its "❯ 1." row satisfies is_ready.
+    elif [ "$dev_done" -eq 1 ] && [ "$dev_up" -eq 0 ] && { [ "$mcp_up" -eq 0 ] || [ "$mcp_done" -eq 1 ]; } && is_ready "$1"; then
+      # Only with no LIVE channel dialog in view: its "❯ 1." row satisfies is_ready.
+      # MCP-dialog text after both were answered is stale scrollback (the dev
+      # warning only renders once the MCP dialog is gone), so it must not block.
       return 0
     fi
     sleep 1; i=$((i + 1))
   done
   log "channel launch: startup dialogs not resolved within ${t}s; heartbeat will use tmux injection"
   # Re-look once: a dialog that rendered late, or one whose keypress did not take.
-  pane_tail "$1" 40 | grep -qE 'New MCP server found|Loading development channels' && return 2
+  tail_="$(pane_tail "$1" 40)"
+  printf '%s\n' "$tail_" | grep -q 'Loading development channels' && return 2
+  # MCP text only counts while the dev warning was never reached (answered = stale).
+  [ "$dev_done" -eq 0 ] && printf '%s\n' "$tail_" | grep -q 'New MCP server found' && return 2
   return 1
 }

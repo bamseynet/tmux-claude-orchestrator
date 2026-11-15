@@ -24,7 +24,10 @@ function parentCmdline() {
   try { return execFileSync('ps', ['-o', 'command=', '-p', String(ppid)], { encoding: 'utf8' }) } catch {}
   return ''
 }
-const loaded = parentCmdline().includes(FLAG)
+// The flag alone is not enough: `--dangerously-load-development-channels server:other`
+// loads some other channel, and ours would still be silently dropped.
+const cmdline = parentCmdline()
+const loaded = cmdline.includes(FLAG) && /(^|[\s,=])server:orch(?=$|[\s,])/.test(cmdline)
 
 function writeAtomic(p, data) {
   const tmp = `${p}.tmp.${process.pid}`
@@ -60,9 +63,14 @@ process.stdin.on('end', () => { cleanup(); process.exit(0) })
 // character and the byte cursor stays exact.
 let cursor = 0
 try { cursor = parseInt(fs.readFileSync(cursorPath, 'utf8'), 10) || 0 } catch {}
+// Bind the persisted cursor to the outbox that exists NOW: with no outbox there
+// is nothing to skip (the heartbeat may have renamed it away right after we read
+// the cursor), and recording its inode lets pump() detect a later replacement
+// instead of skipping `cursor` bytes of an unrelated new file.
+let ino = null
+try { ino = fs.statSync(outbox).ino } catch { cursor = 0 }
 let readOff = cursor
 let buf = Buffer.alloc(0)
-let ino = null
 beat(); setInterval(beat, 2000)
 
 let busy = false
@@ -75,7 +83,11 @@ async function pump() {
     try { st = fs.statSync(outbox) } catch { return }
     // Truncated, or replaced (the heartbeat renames an orphaned outbox away and a
     // new one appears at the same path): start the new file from byte 0.
-    if (st.size < readOff || (ino !== null && st.ino !== ino)) { cursor = 0; readOff = 0; buf = Buffer.alloc(0) }
+    if (st.size < readOff || (ino !== null && st.ino !== ino)) {
+      cursor = 0; readOff = 0; buf = Buffer.alloc(0)
+      // Persist the reset too, or a restart before the next line reuses the old offset.
+      try { writeAtomic(cursorPath, '0') } catch {}
+    }
     ino = st.ino
     if (st.size > readOff) {
       const fd = fs.openSync(outbox, 'r')
@@ -93,6 +105,9 @@ async function pump() {
       const line = buf.subarray(0, i).toString('utf8')
       if (line.trim()) {
         let j; try { j = JSON.parse(line) } catch { j = { text: line } }
+        // A non-object line (e.g. `null`) would throw on j.ppid every pump and
+        // wedge the whole outbox behind it while the liveness file stays fresh.
+        if (j === null || typeof j !== 'object') j = { text: line }
         if (j.ppid === undefined || Number(j.ppid) === ppid) {
           await mcp.notification({ method: 'notifications/claude/channel', params: {
             content: String(j.text ?? line),

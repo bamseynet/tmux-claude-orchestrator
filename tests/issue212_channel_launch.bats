@@ -131,3 +131,12 @@ DEV_DLG='WARNING: Loading development channels
   [ "$status" -eq 0 ]
   [ "$(cat "$KEYS")" = "Enter" ]
 }
+
+@test "dialogs: stale MCP-dialog text still in the tail after both dialogs were answered -> ready (0), not 2" {
+  printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
+  printf '%s\n%s\n' "$MCP_DLG" "$DEV_DLG" > "$PD/pane.1"
+  printf '%s\n%s\n' "$MCP_DLG" '❯ ' > "$PD/pane.2"
+  run channel_answer_startup_dialogs orch:orchestrator 5
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$KEYS")" -eq 2 ]
+}

@@ -234,7 +234,7 @@ fi
 # gitignore runtime + worker state
 gi="$target/.gitignore"
 touch "$gi"
-for line in "_orch/state/" "wt/" ".claude/settings.local.json"; do
+for line in "_orch/state/" "_orch/channel/node_modules/" "wt/" ".claude/settings.local.json"; do
   grep -qxF "$line" "$gi" || echo "$line" >> "$gi"
 done
 
