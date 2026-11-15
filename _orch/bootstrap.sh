@@ -203,8 +203,8 @@ if ! session_exists "$S"; then
   tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}${channel_flags}" Enter
   wr=0
   if [ -n "$channel_flags" ]; then
-    # 2 = a channel dialog is still up: pane_has_dialog does not know it, so a
-    # wait_ready below would call it "ready" and paste the role prompt into it.
+    # 2 = a channel dialog is still up: skip the wait below and leave it for the
+    # operator (pane_has_dialog recognises it too, so nothing is pasted into it).
     channel_answer_startup_dialogs "$S:$ORCH_WINDOW" \
       "$(jq -r '.delivery.channel_startup_timeout_seconds // 30' "$here/config.json" 2>/dev/null || echo 30)" || wr=$?
     [ "$wr" -eq 2 ] || wr=0

@@ -30,7 +30,7 @@ setup() {
 echo "\$@" >> "$CALLS"
 case "\${1:-}" in
   list-sessions) printf '%s\n' "$SESSION_NAME" ;;
-  capture-pane) printf '❯ ' ;;
+  capture-pane) cat "$BATS_TEST_TMPDIR/pane" 2>/dev/null || printf '❯ ' ;;
   display-message) cat "$BATS_TEST_TMPDIR/panepid" ;;
   load-buffer)  cat > /dev/null ;;
   show-buffer)  exit 1 ;;
@@ -244,4 +244,31 @@ orphan_outbox() {
   grep -q 'requeued 1 undelivered channel event' "$LOG"
   grep 'woke master with' "$LOG" | grep -q '"w9"'
   [ ! -e "$STATE_DIR/channel-outbox-4242.jsonl" ]
+}
+
+# A channel startup dialog left up (bootstrap timed out, rc 2) must read as a
+# dialog, not as an idle prompt: its "❯ 1." row matches TUI_READY_REGEX, so
+# without this the tmux fallback pasted the heartbeat into it and pressed Enter.
+@test "fallback: master pane showing the dev-channels warning -> requeued as a dialog, nothing pasted" {
+  printf '%s\n' '  WARNING: Loading development channels' '  Channels: server:orch' \
+    '  ❯ 1. I am using this for local development' '    2. Exit' '  Enter to confirm · Esc to cancel' > "$BATS_TEST_TMPDIR/pane"
+  heartbeat_main & HB_PID=$!
+  wait_for grep -q 'heartbeat start' "$LOG"
+  printf '%s\n' '{"id":"d1","event":"turn-end"}' >> "$INBOX"
+  wait_for sh -c "grep -q 'master showing a dialog\|woke master' '$LOG'"
+  touch "$STATE_DIR/.stop"; wait "$HB_PID" 2>/dev/null || true
+  grep -q 'master showing a dialog' "$LOG"
+  refute_grep_in_existing 'paste-buffer' "$CALLS"
+}
+
+@test "fallback: master pane showing the New MCP server dialog -> requeued as a dialog, nothing pasted" {
+  printf '%s\n' 'New MCP server found in this project: orch' '  1. Use this MCP server' \
+    '  2. Use this and all future MCP servers in this project' '❯ 3. Continue without using this MCP server' > "$BATS_TEST_TMPDIR/pane"
+  heartbeat_main & HB_PID=$!
+  wait_for grep -q 'heartbeat start' "$LOG"
+  printf '%s\n' '{"id":"d2","event":"turn-end"}' >> "$INBOX"
+  wait_for sh -c "grep -q 'master showing a dialog\|woke master' '$LOG'"
+  touch "$STATE_DIR/.stop"; wait "$HB_PID" 2>/dev/null || true
+  grep -q 'master showing a dialog' "$LOG"
+  refute_grep_in_existing 'paste-buffer' "$CALLS"
 }

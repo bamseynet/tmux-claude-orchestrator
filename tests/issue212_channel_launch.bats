@@ -132,10 +132,14 @@ DEV_DLG='WARNING: Loading development channels
   [ "$(cat "$KEYS")" = "Enter" ]
 }
 
-@test "dialogs: stale MCP-dialog text still in the tail after both dialogs were answered -> ready (0), not 2" {
+# A stale header line (scrollback) is not a live dialog: pane_has_dialog needs the
+# header AND a highlighted choice row. Live, both dialogs are full-screen and
+# vanish entirely once answered (Claude Code 2.1.325), so a full stale dialog
+# (choices included) is not a real state; the header-only remnant is the one to tolerate.
+@test "dialogs: stale MCP-dialog header still in the tail after both dialogs were answered -> ready (0), not 2" {
   printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
   printf '%s\n%s\n' "$MCP_DLG" "$DEV_DLG" > "$PD/pane.1"
-  printf '%s\n%s\n' "$MCP_DLG" '❯ ' > "$PD/pane.2"
+  printf '%s\n%s\n' 'New MCP server found in this project: orch' '❯ ' > "$PD/pane.2"
   run channel_answer_startup_dialogs orch:orchestrator 5
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$KEYS")" -eq 2 ]

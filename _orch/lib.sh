@@ -645,6 +645,15 @@ TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:
 TUI_ASKUSER_TEXT_REGEX="$(_tui_pattern askuser_text_entry_regex '^[[:space:]│]*Enter to select.*ctrl\+g to edit.*Esc to cancel')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.[[:space:]]*(Yes|No)')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
+# Issue #212: the master's channel startup dialogs ("WARNING: Loading development
+# channels" -> "1. I am using this for local development", and "New MCP server
+# found in this project" -> "Use this MCP server" / "Continue without ...").
+# Their "❯ 1." row satisfies TUI_READY_REGEX, so without these a master left on
+# one read as idle and the heartbeat's tmux path pasted into it. Both are
+# full-screen and vanish once answered (verified live, Claude Code 2.1.325), so
+# they do not linger as stale text. Workers are never launched with channels.
+TUI_CHANNEL_DIALOG_REGEX="$(_tui_pattern channel_dialog_regex '^[[:space:]│]*(WARNING: Loading development channels|New MCP server found in this project)')"
+TUI_CHANNEL_CHOICE_REGEX="$(_tui_pattern channel_dialog_choice_regex '^[[:space:]│❯]*[0-9]+\.[[:space:]]*(I am using this for local development|Use this MCP server|Continue without using this MCP server)')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -793,7 +802,8 @@ pane_has_dialog() {
   local p; p="$(pane_tail "$1" 25)"
   _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
     _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" ||
-    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_CHANNEL_DIALOG_REGEX" "$TUI_CHANNEL_CHOICE_REGEX"
 }
 
 # --- Claude Code folder-trust state (issue #204) ----------------------------------
