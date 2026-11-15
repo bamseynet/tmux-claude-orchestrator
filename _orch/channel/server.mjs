@@ -36,7 +36,11 @@ const beat = () => {
     writeAtomic(livePath, JSON.stringify({ pid: process.pid, ppid, started, loaded, ts: Math.floor(Date.now() / 1000) }))
   } catch (e) { console.error('liveness write failed', e) }
 }
-const cleanup = () => { try { fs.unlinkSync(livePath) } catch {} }
+// Only remove OUR liveness file: when Claude Code restarts this server (same
+// ppid), the replacement may already have written its own before we exit.
+const cleanup = () => {
+  try { if (JSON.parse(fs.readFileSync(livePath, 'utf8')).pid === process.pid) fs.unlinkSync(livePath) } catch {}
+}
 for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => { cleanup(); process.exit(0) })
 process.on('exit', cleanup)
 
@@ -50,11 +54,15 @@ await mcp.connect(new StdioServerTransport())
 process.stdin.on('end', () => { cleanup(); process.exit(0) })
 
 // cursor = bytes of the outbox already emitted (persisted); readOff = bytes read so far.
-// A trailing partial line stays in buf until its newline arrives.
+// A trailing partial line stays in buf until its newline arrives. buf holds raw
+// bytes (split on 0x0A only), so a read that ends mid UTF-8 sequence -- a large
+// append can reach the file in several write()s -- never decodes a half
+// character and the byte cursor stays exact.
 let cursor = 0
 try { cursor = parseInt(fs.readFileSync(cursorPath, 'utf8'), 10) || 0 } catch {}
 let readOff = cursor
-let buf = ''
+let buf = Buffer.alloc(0)
+let ino = null
 beat(); setInterval(beat, 2000)
 
 let busy = false
@@ -65,18 +73,24 @@ async function pump() {
   try {
     let st
     try { st = fs.statSync(outbox) } catch { return }
-    if (st.size < readOff) { cursor = 0; readOff = 0; buf = '' } // truncated
-    if (st.size === readOff) return
-    const fd = fs.openSync(outbox, 'r')
-    const b = Buffer.alloc(st.size - readOff)
-    fs.readSync(fd, b, 0, b.length, readOff); fs.closeSync(fd)
-    readOff = st.size
-    buf += b.toString('utf8')
+    // Truncated, or replaced (the heartbeat renames an orphaned outbox away and a
+    // new one appears at the same path): start the new file from byte 0.
+    if (st.size < readOff || (ino !== null && st.ino !== ino)) { cursor = 0; readOff = 0; buf = Buffer.alloc(0) }
+    ino = st.ino
+    if (st.size > readOff) {
+      const fd = fs.openSync(outbox, 'r')
+      const b = Buffer.alloc(st.size - readOff)
+      try { fs.readSync(fd, b, 0, b.length, readOff) } finally { fs.closeSync(fd) }
+      readOff = st.size
+      buf = Buffer.concat([buf, b])
+    }
+    // Runs even with no new bytes, so a line whose notification failed last time
+    // (still at the head of buf) is retried on the next pump.
     let i
-    while ((i = buf.indexOf('\n')) >= 0) {
+    while ((i = buf.indexOf(0x0a)) >= 0) {
       // Consume the line only after it was sent: a failed notification leaves it
       // in buf (and the cursor unadvanced) so the next pump retries it.
-      const line = buf.slice(0, i)
+      const line = buf.subarray(0, i).toString('utf8')
       if (line.trim()) {
         let j; try { j = JSON.parse(line) } catch { j = { text: line } }
         if (j.ppid === undefined || Number(j.ppid) === ppid) {
@@ -86,8 +100,8 @@ async function pump() {
             meta: { id: String(j.id ?? ''), event: String(j.event ?? ''), ts: String(j.ts ?? '') } } })
         }
       }
-      buf = buf.slice(i + 1)
-      cursor += Buffer.byteLength(line) + 1
+      buf = buf.subarray(i + 1)
+      cursor += i + 1
       try { writeAtomic(cursorPath, String(cursor)) } catch {}
     }
   } finally { busy = false }

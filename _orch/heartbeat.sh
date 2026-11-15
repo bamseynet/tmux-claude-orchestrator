@@ -683,7 +683,8 @@ channel_path_ready() {
 }
 
 # <claude pid> <events> -- append each event as one JSON line to that pid's outbox.
-# One write() of whole lines, so the tailing server never sees a torn record.
+# Whole lines only; a large batch may reach the file in several write()s, so the
+# server holds a torn tail line (raw bytes) until its newline arrives.
 channel_deliver() {
   local pid="$1" events="$2" out
   out="$(jq -Rc --argjson ppid "$pid" '
@@ -705,7 +706,7 @@ channel_deliver() {
 # the outbox by path on every poll) cannot emit the same lines as well.
 # No outbox files (channel delivery never used) = one glob, no forks.
 channel_replay_orphans() {
-  local fresh="${1:-15}" ob pid live rp cur n now
+  local fresh="${1:-15}" ob pid live rp cur n now spid
   case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
   for ob in "$STATE_DIR"/channel-outbox-*.jsonl; do
     [ -f "$ob" ] || continue
@@ -717,6 +718,14 @@ channel_replay_orphans() {
         '(.ts | type) == "number" and ($now - .ts) <= $fresh' "$live" >/dev/null 2>&1; then
       continue   # a live server owns this outbox
     fi
+    # Stale but its server process is still running (host suspend, a stalled
+    # event loop, a failed liveness write): it may hold read-but-unsent lines in
+    # memory and will emit them when it resumes, so replaying now would deliver
+    # them twice. Only a dead server's outbox is orphaned. Its claude ($pid) must
+    # be alive too: a dead claude means the server got EOF and exited, so a live
+    # "$spid" can only be a reused pid -- skipping then would lose the lines forever.
+    spid=""; [ -f "$live" ] && { spid="$(jq -r '.pid // empty' "$live" 2>/dev/null)" || spid=""; }
+    case "$spid" in ''|*[!0-9]*) ;; *) kill -0 "$spid" 2>/dev/null && kill -0 "$pid" 2>/dev/null && continue ;; esac
     rp="$ob.replay.$$"
     mv -f "$ob" "$rp" 2>/dev/null || continue
     cur="$(cat "$STATE_DIR/channel-cursor-$pid" 2>/dev/null)" || cur=0

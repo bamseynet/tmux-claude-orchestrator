@@ -63,8 +63,10 @@ wait_for() { for _ in $(seq 1 100); do "$@" && return 0; sleep 0.02; done; retur
 # <ppid> <loaded:true|false> <age_s>
 liveness() {
   mkdir -p "$STATE_DIR"
-  jq -n --argjson p "$1" --argjson l "$2" --argjson ts "$(( $(date +%s) - $3 ))" \
-    '{pid:99999, ppid:$p, started:$ts, loaded:$l, ts:$ts}' > "$STATE_DIR/channel-$1.json"
+  # server pid: an exited process, so channel_replay_orphans' kill -0 sees it dead
+  local dead; dead="$(sh -c 'echo $$')"
+  jq -n --argjson p "$1" --argjson l "$2" --argjson ts "$(( $(date +%s) - $3 ))" --argjson sp "$dead" \
+    '{pid:$sp, ppid:$p, started:$ts, loaded:$l, ts:$ts}' > "$STATE_DIR/channel-$1.json"
 }
 
 run_one_event() { # <event-json>
@@ -205,6 +207,26 @@ orphan_outbox() {
   channel_replay_orphans 15
   [ "$(jq -r .id "$INBOX")" = "lost1" ]
   [ ! -e "$STATE_DIR/channel-4242.json" ]
+}
+
+@test "replay: stale liveness file whose server AND claude are still alive is left alone (no double delivery)" {
+  P="$FAKE_CLAUDE_PID"
+  orphan_outbox "$P" held1
+  liveness "$P" true 600
+  jq --argjson sp "$$" '.pid = $sp' "$STATE_DIR/channel-$P.json" > "$STATE_DIR/l.tmp" && mv "$STATE_DIR/l.tmp" "$STATE_DIR/channel-$P.json"
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ ! -s "$INBOX" ]
+  grep -q '"held1"' "$STATE_DIR/channel-outbox-$P.jsonl"
+}
+
+@test "replay: claude dead but its recorded server pid is alive (reused pid) -> still replayed, never lost" {
+  orphan_outbox 4242 lost1
+  liveness 4242 true 600
+  jq --argjson sp "$$" '.pid = $sp' "$STATE_DIR/channel-4242.json" > "$STATE_DIR/l.tmp" && mv "$STATE_DIR/l.tmp" "$STATE_DIR/channel-4242.json"
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ "$(jq -r .id "$INBOX")" = "lost1" ]
 }
 
 @test "replay: a fresh liveness file means a live server owns the outbox -- untouched" {

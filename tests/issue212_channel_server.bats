@@ -100,3 +100,30 @@ notifs() { jq -c 'select(.method=="notifications/claude/channel")' "$OUT" 2>/dev
   [[ "$output" == *'"claude/channel"'* ]]
   [[ "$output" != *'"tools"'* ]]
 }
+
+@test "server: a multibyte character split across two appends is emitted intact, cursor exact" {
+  start_server 1
+  o="$ST/channel-outbox-$PPID_SRV.jsonl"
+  line="{\"ppid\":$PPID_SRV,\"id\":\"u\",\"event\":\"e\",\"ts\":\"1\",\"text\":\"a—b\"}"
+  full="$BATS_TEST_TMPDIR/line"; printf '%s\n' "$line" > "$full"
+  n="$(grep -bo '—' "$full" | head -1 | cut -d: -f1)"
+  head -c "$((n + 1))" "$full" >> "$o"   # ends inside the 3-byte em dash
+  sleep 1
+  tail -c +"$((n + 2))" "$full" >> "$o"
+  wait_for sh -c "[ -n \"\$(jq -c 'select(.method==\"notifications/claude/channel\")' '$OUT' 2>/dev/null)\" ]"
+  [ "$(notifs | jq -r .params.content)" = "a—b" ]
+  wait_for test -s "$ST/channel-cursor-$PPID_SRV"
+  [ "$(cat "$ST/channel-cursor-$PPID_SRV")" -eq "$(wc -c < "$o")" ]
+}
+
+@test "server: an outbox replaced at the same path is read from byte 0" {
+  start_server 1
+  o="$ST/channel-outbox-$PPID_SRV.jsonl"
+  printf '%s\n' "{\"ppid\":$PPID_SRV,\"id\":\"old\",\"event\":\"e\",\"ts\":\"1\",\"text\":\"old-line-padding-padding-padding\"}" >> "$o"
+  wait_for sh -c "[ \"\$(jq -c 'select(.method==\"notifications/claude/channel\")' '$OUT' 2>/dev/null | wc -l)\" -ge 1 ]"
+  mv "$o" "$o.replay"
+  printf '%s\n' "{\"ppid\":$PPID_SRV,\"id\":\"n1\",\"event\":\"e\",\"ts\":\"1\",\"text\":\"new-one-and-it-is-a-much-longer-line-than-before\"}" > "$o.new"
+  mv "$o.new" "$o"
+  wait_for sh -c "[ \"\$(jq -c 'select(.method==\"notifications/claude/channel\")' '$OUT' 2>/dev/null | wc -l)\" -ge 2 ]"
+  [ "$(notifs | sed -n 2p | jq -r .params.content)" = "new-one-and-it-is-a-much-longer-line-than-before" ]
+}
