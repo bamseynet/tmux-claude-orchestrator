@@ -639,12 +639,129 @@ worker_context_tick() {
   done <<<"$recs"
   return 0
 }
+# --- issue #212: opt-in channel delivery path -----------------------------------
+# The channel server (_orch/channel/server.mjs) runs as a child of the master's
+# claude and tails $STATE_DIR/channel-outbox-<claude pid>.jsonl, emitting one
+# notifications/claude/channel per line. It publishes $STATE_DIR/channel-<ppid>.json
+# ({pid,ppid,started,loaded,ts}); loaded = the parent claude's argv carries the
+# development-channels flag. The server spawns even WITHOUT the flag (events are
+# then silently dropped), so process presence is never the signal -- only a fresh
+# file whose ppid is the master's claude pid with loaded=true.
+_cmdline_of() { # <pid> -> argv joined by spaces (empty if gone)
+  if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null
+  else ps -o command= -p "$1" 2>/dev/null; fi
+}
+
+# <session:window> -> prints the pid of the claude process in that pane (the pane
+# pid itself or one of its direct children whose argv names claude); fails if none.
+master_claude_pid() {
+  local pp c cmd
+  pp="$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null)" || return 1
+  case "$pp" in ''|*[!0-9]*) return 1 ;; esac
+  for c in "$pp" $(pgrep -P "$pp" 2>/dev/null); do
+    cmd="$(_cmdline_of "$c")"
+    case "$cmd" in *claude*) printf '%s\n' "$c"; return 0 ;; esac
+  done
+  return 1
+}
+
+# <session:window> [fresh_s] -> 0 and prints the claude pid iff the channel path
+# may carry this event: a fresh liveness file for exactly that pid, loaded=true.
+# The caller checks delivery_channel_enabled (heartbeat_main does it once, not
+# per batch); fresh_s defaults to 15.
+channel_path_ready() {
+  local pid fresh="${2:-15}" f now
+  case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
+  pid="$(master_claude_pid "$1")" || return 1
+  f="$STATE_DIR/channel-$pid.json"
+  [ -f "$f" ] || return 1
+  now="$(date +%s)"
+  jq -e --argjson pid "$pid" --argjson now "$now" --argjson fresh "$fresh" \
+    '.ppid == $pid and .loaded == true and (.ts | type) == "number" and ($now - .ts) <= $fresh' \
+    "$f" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$pid"
+}
+
+# <claude pid> <events> -- append each event as one JSON line to that pid's outbox.
+# Whole lines only; a large batch may reach the file in several write()s, so the
+# server holds a torn tail line (raw bytes) until its newline arrives.
+channel_deliver() {
+  local pid="$1" events="$2" out
+  out="$(jq -Rc --argjson ppid "$pid" '
+    select(test("\\S")) | (try fromjson catch {} | if type == "object" then . else {} end) as $e
+    | {ppid:$ppid, id:(($e.id // "")|tostring), event:(($e.event // "")|tostring),
+       ts:(($e.ts // "")|tostring), text:.}' <<<"$events")" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" >> "$STATE_DIR/channel-outbox-$pid.jsonl"
+}
+
+# [fresh_s] -- requeue undelivered lines from ORPHANED outboxes back into the inbox.
+# An outbox is orphaned when its server no longer publishes a fresh liveness file
+# (the master claude, or just its server, died or restarted after the heartbeat
+# drained the inbox into it). Its new claude has a new pid, so nothing else would
+# ever read those lines. Lines past the server's persisted cursor were never
+# emitted; they go back to the inbox (original text) and take whatever path the
+# next batch takes. Lines before the cursor were already emitted and are not
+# replayed. The outbox is renamed away first (to <outbox>.replay), so a straggling server (it reopens
+# the outbox by path on every poll) cannot emit the same lines as well.
+# No outbox files (channel delivery never used) = two globs, no forks.
+channel_replay_orphans() {
+  local fresh="${1:-15}" ob pid live rp cur n now spid
+  case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
+  for ob in "$STATE_DIR"/channel-outbox-*.jsonl; do
+    [ -f "$ob" ] || continue
+    pid="${ob##*/channel-outbox-}"; pid="${pid%.jsonl}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    live="$STATE_DIR/channel-$pid.json"
+    now="${now:-$(date +%s)}"
+    if [ -f "$live" ] && jq -e --argjson now "$now" --argjson fresh "$fresh" \
+        '(.ts | type) == "number" and ($now - .ts) <= $fresh' "$live" >/dev/null 2>&1; then
+      continue   # a live server owns this outbox
+    fi
+    # Stale but its server process is still running (host suspend, a stalled
+    # event loop, a failed liveness write): it may hold read-but-unsent lines in
+    # memory and will emit them when it resumes, so replaying now would deliver
+    # them twice. Only a dead server's outbox is orphaned. "Still running" means
+    # "$spid" is alive AND still a child of its claude ($pid): a bare kill -0 on
+    # either pid would also match a reused pid (a dead claude means the server
+    # got EOF and exited), and skipping then would lose the lines forever.
+    spid=""; [ -f "$live" ] && { spid="$(jq -r '.pid // empty' "$live" 2>/dev/null)" || spid=""; }
+    case "$spid" in ''|*[!0-9]*) ;; *)
+      [ "$(ps -o ppid= -p "$spid" 2>/dev/null | tr -d ' ')" = "$pid" ] && continue ;;
+    esac
+    # Claim it: a fixed name, so a heartbeat killed before requeueing leaves a
+    # file the next tick (or the next heartbeat) still finds below. If a claim
+    # is already pending for this pid, leave the new outbox for the next tick.
+    [ -e "$ob.replay" ] || mv -f "$ob" "$ob.replay" 2>/dev/null || true
+  done
+  # Requeue every claimed file, including one left by a heartbeat that died
+  # between claiming and requeueing. A crash after the requeue but before the
+  # rm replays the lines again on the next tick: at-least-once, never lost.
+  for rp in "$STATE_DIR"/channel-outbox-*.jsonl.replay; do
+    [ -f "$rp" ] || continue
+    pid="${rp##*/channel-outbox-}"; pid="${pid%.jsonl.replay}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    cur="$(cat "$STATE_DIR/channel-cursor-$pid" 2>/dev/null)" || cur=0
+    case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    n="$(tail -c +"$((cur + 1))" "$rp" | jq -Rr 'try (fromjson | .text // empty | strings) catch empty' 2>/dev/null \
+      | tee -a "$INBOX" | grep -c .)" || n=0
+    rm -f "$rp" "$STATE_DIR/channel-cursor-$pid" "$STATE_DIR/channel-$pid.json"
+    [ "${n:-0}" -eq 0 ] || log "requeued $n undelivered channel event(s) from orphaned outbox (claude pid $pid)"
+  done
+  return 0
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
   # path — needed so hermetic tests can point config at a temp dir.
-  local normal idle events
+  local normal idle events chan_pid chan_on=0 chan_fresh=15
   normal="$(jq -r '.intervals.normal_seconds // 20' "$CONFIG")"
+  # Issue #212: read the channel opt-in ONCE (like normal/idle), not per batch.
+  if delivery_channel_enabled; then
+    chan_on=1
+    chan_fresh="$(jq -r '.delivery.channel_fresh_seconds // 15' "$CONFIG" 2>/dev/null)"
+  fi
   idle="$(jq -r '.intervals.idle_seconds // 60' "$CONFIG")"
   local master_alert_interval
   master_alert_interval="$(jq -r '.heartbeat.master_alert_interval_seconds // 60' "$CONFIG")"
@@ -718,6 +835,9 @@ heartbeat_main() {
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi
 
+    # Issue #212: no event may be lost to a dead master's channel outbox.
+    channel_replay_orphans "$chan_fresh"
+
     if events="$(drain_inbox)"; then
       # Issue #122: decide noise-only-ness BEFORE anything else in this
       # branch -- before master_window_alive/wait_ready and before the
@@ -777,6 +897,13 @@ heartbeat_main() {
         # of burning that timeout; master_dead_alert above already surfaced it.
         printf '%s\n' "$events" >> "$INBOX"
         log "master window down; requeued events"
+      elif [ "$chan_on" -eq 1 ] && chan_pid="$(channel_path_ready "$S:$ORCH_WINDOW" "$chan_fresh")" && channel_deliver "$chan_pid" "$events"; then
+        # Issue #212: ONE path per batch. A fresh loaded channel server owns
+        # delivery: nothing is typed into the pane (no draft hazard, no busy
+        # wait). The inbox is already drained, so the tmux path cannot also
+        # deliver these events.
+        draft_requeue_count=0; draft_requeue_since=0
+        log "delivered via channel (claude pid $chan_pid): $(echo "$events" | tr '\n' ' ')"
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
       # issue #155: a dialog (already up, or rendering mid-wait) ends the wait at
       # once -- is_ready refuses dialogs, so a plain wait_ready would burn its

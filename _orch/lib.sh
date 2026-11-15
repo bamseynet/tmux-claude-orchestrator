@@ -645,6 +645,15 @@ TUI_ASKUSER_CHOICE_REGEX="$(_tui_pattern askuser_dialog_choice_regex '^[[:space:
 TUI_ASKUSER_TEXT_REGEX="$(_tui_pattern askuser_text_entry_regex '^[[:space:]│]*Enter to select.*ctrl\+g to edit.*Esc to cancel')"
 TUI_PERMISSION_CHOICE_REGEX="$(_tui_pattern permission_dialog_choice_regex '^[[:space:]│]*❯[[:space:]]*[0-9]+\.[[:space:]]*(Yes|No)')"
 TUI_TRUST_CHOICE_REGEX="$(_tui_pattern trust_dialog_choice_regex '^[[:space:]│❯]*([0-9]+\.[[:space:]]*)?No, exit')"
+# Issue #212: the master's channel startup dialogs ("WARNING: Loading development
+# channels" -> "1. I am using this for local development", and "New MCP server
+# found in this project" -> "Use this MCP server" / "Continue without ...").
+# Their "❯ 1." row satisfies TUI_READY_REGEX, so without these a master left on
+# one read as idle and the heartbeat's tmux path pasted into it. Both are
+# full-screen and vanish once answered (verified live, Claude Code 2.1.325), so
+# they do not linger as stale text. Workers are never launched with channels.
+TUI_CHANNEL_DIALOG_REGEX="$(_tui_pattern channel_dialog_regex '^[[:space:]│]*(WARNING: Loading development channels|New MCP server found)')"
+TUI_CHANNEL_CHOICE_REGEX="$(_tui_pattern channel_dialog_choice_regex '^[[:space:]│❯]*[0-9]+\.[[:space:]]*(I am using this for local development|Use this MCP server|Continue without using this MCP server)')"
 
 # Busy if Claude Code is mid-turn. The strongest, most version-stable signal is the
 # "esc to interrupt" hint it shows while working. TUNE HERE if a future TUI changes it.
@@ -793,7 +802,8 @@ pane_has_dialog() {
   local p; p="$(pane_tail "$1" 25)"
   _dialog_in "$p" "$TUI_PERMISSION_DIALOG_REGEX" "$TUI_PERMISSION_CHOICE_REGEX" ||
     _dialog_in "$p" "$TUI_TRUST_DIALOG_REGEX" "$TUI_TRUST_CHOICE_REGEX" ||
-    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX"
+    _dialog_in "$p" "$TUI_ASKUSER_DIALOG_REGEX" "$TUI_ASKUSER_CHOICE_REGEX" ||
+    _dialog_in "$p" "$TUI_CHANNEL_DIALOG_REGEX" "$TUI_CHANNEL_CHOICE_REGEX"
 }
 
 # --- Claude Code folder-trust state (issue #204) ----------------------------------
@@ -1731,6 +1741,17 @@ queue_pop() {
   first="$(head -n 1 "$QUEUE")"
   tail -n +2 "$QUEUE" > "$QUEUE.tmp" && mv "$QUEUE.tmp" "$QUEUE"
   printf '%s\n' "$first"
+}
+
+# issue #212: opt-in channel delivery. ORCH_DELIVERY_CHANNEL (1|true / 0|false)
+# overrides config.delivery.channel; default OFF. Raw jq read: `// default` would
+# treat a literal false as absent.
+delivery_channel_enabled() { # -> 0 if channel delivery is opted in
+  case "${ORCH_DELIVERY_CHANNEL:-}" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off) return 1 ;;
+  esac
+  [ "$(jq -r '.delivery.channel' "$CONFIG" 2>/dev/null)" = "true" ]
 }
 
 # The master's role prompt (issue #159): sent by bootstrap.sh at launch and

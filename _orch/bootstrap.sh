@@ -192,8 +192,24 @@ if ! session_exists "$S"; then
       log "WARNING: master_context.autocompact_window invalid (want integer 100000-1000000); ignoring"
     fi
   fi
-  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}" Enter
-  wr=0; wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
+  # issue #212: opt-in channel delivery (delivery.channel / ORCH_DELIVERY_CHANNEL).
+  # Off by default: channel_flags stays empty and the launch line is unchanged.
+  channel_flags=""
+  if delivery_channel_enabled; then
+    # shellcheck disable=SC1091
+    source "$here/channel/launch.sh"
+    channel_flags="$(channel_launch_flags "$here")" || channel_flags=""
+  fi
+  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}${channel_flags}" Enter
+  wr=0
+  if [ -n "$channel_flags" ]; then
+    # 2 = a channel dialog is still up: skip the wait below and leave it for the
+    # operator (pane_has_dialog recognises it too, so nothing is pasted into it).
+    channel_answer_startup_dialogs "$S:$ORCH_WINDOW" \
+      "$(jq -r '.delivery.channel_startup_timeout_seconds // 30' "$here/config.json" 2>/dev/null || echo 30)" || wr=$?
+    [ "$wr" -eq 2 ] || wr=0
+  fi
+  [ "$wr" -eq 2 ] || wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
   if [ "$wr" -eq 0 ]; then
     send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt "$here")"
   elif [ "$wr" -eq 2 ]; then
