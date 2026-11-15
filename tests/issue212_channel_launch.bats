@@ -2,6 +2,9 @@
 # Issue #212: master launch helpers (_orch/channel/launch.sh) with a scripted tmux:
 # capture-pane prints pane.<N> where N = number of send-keys calls so far.
 
+# shellcheck disable=SC1091
+source "$BATS_TEST_DIRNAME/helpers/refute.bash"
+
 setup() {
   unset SESSION_NAME
   STUBBIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUBBIN"
@@ -66,7 +69,7 @@ DEV_DLG='WARNING: Loading development channels
 @test "dialogs: a lone MCP dialog never receives a bare Enter" {
   printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
   run channel_answer_startup_dialogs orch:orchestrator 2
-  ! grep -qx 'Enter' "$KEYS"
+  refute_grep_in_existing '^Enter$' "$KEYS"
   [ "$(sed -n 1p "$KEYS")" = "Up Up Enter" ]
 }
 

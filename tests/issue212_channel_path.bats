@@ -90,7 +90,7 @@ assert_tmux_path() {
   refute_grep_in_existing 'paste-buffer' "$CALLS"
   refute_grep_in_existing 'send-keys' "$CALLS"
   # inbox drained: event is not left to be re-delivered
-  ! grep -q '"id":"w1"' "$INBOX" 2>/dev/null
+  refute_grep '"id":"w1"' "$INBOX"
 }
 
 @test "channel path: exactly one outbox line per event (no double delivery)" {
