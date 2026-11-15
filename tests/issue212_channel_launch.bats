@@ -39,13 +39,13 @@ DEV_DLG='WARNING: Loading development channels
 ❯ 1. I am using this for local development
   2. Exit'
 
-@test "dialogs: MCP-approval dialog gets Up Up Enter (never a bare Enter), then the dev warning gets Enter" {
+@test "dialogs: MCP-approval dialog gets the digit of its Use-this-MCP-server row (never a bare Enter), then the dev warning gets Enter" {
   printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
   printf '%s\n' "$DEV_DLG" > "$PD/pane.1"
   printf '%s\n' '❯ ' > "$PD/pane.2"
   run channel_answer_startup_dialogs orch:orchestrator 10
   [ "$status" -eq 0 ]
-  [ "$(sed -n 1p "$KEYS")" = "Up Up Enter" ]
+  [ "$(sed -n 1p "$KEYS")" = "-l 1" ]
   [ "$(sed -n 2p "$KEYS")" = "Enter" ]
   [ "$(wc -l < "$KEYS")" -eq 2 ]
 }
@@ -70,7 +70,25 @@ DEV_DLG='WARNING: Loading development channels
   printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
   run channel_answer_startup_dialogs orch:orchestrator 2
   refute_grep_in_existing '^Enter$' "$KEYS"
-  [ "$(sed -n 1p "$KEYS")" = "Up Up Enter" ]
+  [ "$(sed -n 1p "$KEYS")" = "-l 1" ]
+}
+
+@test "dialogs: MCP option is chosen by its number, whatever the row order (never 'all future')" {
+  printf '%s\n' 'New MCP server found in this project: orch' \
+    '  1. Use this and all future MCP servers in this project' \
+    '  2. Use this MCP server' \
+    '❯ 3. Continue without using this MCP server' > "$PD/pane.0"
+  run channel_answer_startup_dialogs orch:orchestrator 2
+  [ "$(sed -n 1p "$KEYS")" = "-l 2" ]
+}
+
+@test "dialogs: dev warning Enter is re-sent while the warning stays up (a lost early keypress)" {
+  printf '%s\n' "$DEV_DLG" > "$PD/pane.0"
+  printf '%s\n' "$DEV_DLG" > "$PD/pane.1"
+  printf '%s\n' '❯ ' > "$PD/pane.2"
+  run channel_answer_startup_dialogs orch:orchestrator 10
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KEYS" | tr '\n' ' ')" = "Enter Enter " ]
 }
 
 @test "flags: node missing -> no flags, returns 1 (launch unchanged)" {
@@ -107,7 +125,7 @@ DEV_DLG='WARNING: Loading development channels
   printf '%s\n' '❯ ' > "$PD/pane.2"
   run channel_answer_startup_dialogs orch:orchestrator 10
   [ "$status" -eq 0 ]
-  [ "$(sed -n 1p "$KEYS")" = "Up Up Enter" ]
+  [ "$(sed -n 1p "$KEYS")" = "-l 1" ]
   [ "$(sed -n 2p "$KEYS")" = "Enter" ]
 }
 

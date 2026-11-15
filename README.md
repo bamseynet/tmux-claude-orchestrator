@@ -189,8 +189,9 @@ startup (an `orch up` that finds it running reuses it), so adopt it by restartin
 (your repo's `.mcp.json` is untouched, and the "New MCP server found" approval does not appear) and
 `--dangerously-load-development-channels server:orch`, then presses Enter on the **development
 channels warning** (shown on every launch; its default is "I am using this for local development").
-If a "New MCP server found" dialog does appear, it is answered with Up Up Enter, never a bare
-Enter (the cursor starts on "Continue without", which would silently refuse the server). On
+If a "New MCP server found" dialog does appear, it is answered by typing the number of its
+"Use this MCP server" row, never a bare Enter (the cursor starts on "Continue without", which
+would silently refuse the server) and never "Use this and all future MCP servers". On
 timeout (`delivery.channel_startup_timeout_seconds`, 30) it gives up and you stay on tmux injection.
 The dev flag is required because the orchestrator's server is not on Anthropic's approved-channel
 allowlist.

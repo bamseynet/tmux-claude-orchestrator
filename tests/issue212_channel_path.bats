@@ -56,6 +56,8 @@ teardown() {
   [ -n "${HB_PID:-}" ] && kill "$HB_PID" 2>/dev/null || true
   wait "${HB_PID:-}" 2>/dev/null || true
   [ -n "${FAKE_CLAUDE_PID:-}" ] && kill "$FAKE_CLAUDE_PID" 2>/dev/null || true
+  [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null || true
+  [ -n "${PAIR_PID:-}" ] && kill "$PAIR_PID" 2>/dev/null || true
 }
 
 wait_for() { for _ in $(seq 1 100); do "$@" && return 0; sleep 0.02; done; return 1; }
@@ -209,15 +211,30 @@ orphan_outbox() {
   [ ! -e "$STATE_DIR/channel-4242.json" ]
 }
 
-@test "replay: stale liveness file whose server AND claude are still alive is left alone (no double delivery)" {
-  P="$FAKE_CLAUDE_PID"
+@test "replay: stale liveness file whose server is still running under its claude is left alone (no double delivery)" {
+  # A real parent/child pair: "claude" P with a live "server" child SRV.
+  bash -c 'sleep 300 & echo $! > "$1"; wait' _ "$BATS_TEST_TMPDIR/srvpid" &
+  PAIR_PID=$!
+  wait_for test -s "$BATS_TEST_TMPDIR/srvpid"
+  SRV_PID="$(cat "$BATS_TEST_TMPDIR/srvpid")"
+  P="$PAIR_PID"
   orphan_outbox "$P" held1
   liveness "$P" true 600
-  jq --argjson sp "$$" '.pid = $sp' "$STATE_DIR/channel-$P.json" > "$STATE_DIR/l.tmp" && mv "$STATE_DIR/l.tmp" "$STATE_DIR/channel-$P.json"
+  jq --argjson sp "$SRV_PID" '.pid = $sp' "$STATE_DIR/channel-$P.json" > "$STATE_DIR/l.tmp" && mv "$STATE_DIR/l.tmp" "$STATE_DIR/channel-$P.json"
   : > "$INBOX"
   channel_replay_orphans 15
   [ ! -s "$INBOX" ]
   grep -q '"held1"' "$STATE_DIR/channel-outbox-$P.jsonl"
+}
+
+@test "replay: claude AND recorded server pid both alive but not parent/child (reused pid) -> replayed" {
+  P="$FAKE_CLAUDE_PID"
+  orphan_outbox "$P" lost1
+  liveness "$P" true 600
+  jq --argjson sp "$$" '.pid = $sp' "$STATE_DIR/channel-$P.json" > "$STATE_DIR/l.tmp" && mv "$STATE_DIR/l.tmp" "$STATE_DIR/channel-$P.json"
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ "$(jq -r .id "$INBOX")" = "lost1" ]
 }
 
 @test "replay: claude dead but its recorded server pid is alive (reused pid) -> still replayed, never lost" {

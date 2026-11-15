@@ -721,11 +721,14 @@ channel_replay_orphans() {
     # Stale but its server process is still running (host suspend, a stalled
     # event loop, a failed liveness write): it may hold read-but-unsent lines in
     # memory and will emit them when it resumes, so replaying now would deliver
-    # them twice. Only a dead server's outbox is orphaned. Its claude ($pid) must
-    # be alive too: a dead claude means the server got EOF and exited, so a live
-    # "$spid" can only be a reused pid -- skipping then would lose the lines forever.
+    # them twice. Only a dead server's outbox is orphaned. "Still running" means
+    # "$spid" is alive AND still a child of its claude ($pid): a bare kill -0 on
+    # either pid would also match a reused pid (a dead claude means the server
+    # got EOF and exited), and skipping then would lose the lines forever.
     spid=""; [ -f "$live" ] && { spid="$(jq -r '.pid // empty' "$live" 2>/dev/null)" || spid=""; }
-    case "$spid" in ''|*[!0-9]*) ;; *) kill -0 "$spid" 2>/dev/null && kill -0 "$pid" 2>/dev/null && continue ;; esac
+    case "$spid" in ''|*[!0-9]*) ;; *)
+      [ "$(ps -o ppid= -p "$spid" 2>/dev/null | tr -d ' ')" = "$pid" ] && continue ;;
+    esac
     rp="$ob.replay.$$"
     mv -f "$ob" "$rp" 2>/dev/null || continue
     cur="$(cat "$STATE_DIR/channel-cursor-$pid" 2>/dev/null)" || cur=0
