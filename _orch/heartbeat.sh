@@ -665,14 +665,14 @@ master_claude_pid() {
   return 1
 }
 
-# <session:window> -> 0 and prints the claude pid iff the channel path may carry
-# this event: opted in AND a fresh liveness file for exactly that pid, loaded=true.
+# <session:window> [fresh_s] -> 0 and prints the claude pid iff the channel path
+# may carry this event: a fresh liveness file for exactly that pid, loaded=true.
+# The caller checks delivery_channel_enabled (heartbeat_main does it once, not
+# per batch); fresh_s defaults to 15.
 channel_path_ready() {
-  delivery_channel_enabled || return 1
-  local pid fresh f now
-  pid="$(master_claude_pid "$1")" || return 1
-  fresh="$(jq -r '.delivery.channel_fresh_seconds // 15' "$CONFIG" 2>/dev/null)"
+  local pid fresh="${2:-15}" f now
   case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
+  pid="$(master_claude_pid "$1")" || return 1
   f="$STATE_DIR/channel-$pid.json"
   [ -f "$f" ] || return 1
   now="$(date +%s)"
@@ -687,7 +687,7 @@ channel_path_ready() {
 channel_deliver() {
   local pid="$1" events="$2" out
   out="$(jq -Rc --argjson ppid "$pid" '
-    select(test("\\S")) | (try fromjson catch {}) as $e
+    select(test("\\S")) | (try fromjson catch {} | if type == "object" then . else {} end) as $e
     | {ppid:$ppid, id:(($e.id // "")|tostring), event:(($e.event // "")|tostring),
        ts:(($e.ts // "")|tostring), text:.}' <<<"$events")" || return 1
   [ -n "$out" ] || return 1
@@ -698,8 +698,13 @@ heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
   # path — needed so hermetic tests can point config at a temp dir.
-  local normal idle events chan_pid
+  local normal idle events chan_pid chan_on=0 chan_fresh=15
   normal="$(jq -r '.intervals.normal_seconds // 20' "$CONFIG")"
+  # Issue #212: read the channel opt-in ONCE (like normal/idle), not per batch.
+  if delivery_channel_enabled; then
+    chan_on=1
+    chan_fresh="$(jq -r '.delivery.channel_fresh_seconds // 15' "$CONFIG" 2>/dev/null)"
+  fi
   idle="$(jq -r '.intervals.idle_seconds // 60' "$CONFIG")"
   local master_alert_interval
   master_alert_interval="$(jq -r '.heartbeat.master_alert_interval_seconds // 60' "$CONFIG")"
@@ -832,7 +837,7 @@ heartbeat_main() {
         # of burning that timeout; master_dead_alert above already surfaced it.
         printf '%s\n' "$events" >> "$INBOX"
         log "master window down; requeued events"
-      elif chan_pid="$(channel_path_ready "$S:$ORCH_WINDOW")" && channel_deliver "$chan_pid" "$events"; then
+      elif [ "$chan_on" -eq 1 ] && chan_pid="$(channel_path_ready "$S:$ORCH_WINDOW" "$chan_fresh")" && channel_deliver "$chan_pid" "$events"; then
         # Issue #212: ONE path per batch. A fresh loaded channel server owns
         # delivery: nothing is typed into the pane (no draft hazard, no busy
         # wait). The inbox is already drained, so the tmux path cannot also

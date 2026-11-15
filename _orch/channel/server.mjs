@@ -42,7 +42,8 @@ process.on('exit', cleanup)
 
 const mcp = new Server({ name: 'orch', version: '0.1.0' }, {
   capabilities: { experimental: { 'claude/channel': {} } },
-  instructions: 'Events arrive as <channel source="orch" id=".." event=".." ts="..">. They are one-way worker events from the tmux orchestrator, equivalent to an "[orchestrator heartbeat]" message: read _orch/state/workers/*.json, then decide and dispatch. No reply is expected.',
+  // Absolute paths: the master's cwd is the target repo, which need not hold _orch/.
+  instructions: `Events arrive as <channel source="orch" id=".." event=".." ts="..">. They are one-way worker events from the tmux orchestrator, equivalent to an "[orchestrator heartbeat]" message: read ${path.join(state, 'workers')}/*.json, then decide and dispatch next steps (assign, review, or shut down). If you're at all unsure of current orchestration state (e.g. right after a compaction), run ${path.join(state, '..', 'rehydrate.sh')} first. No reply is expected.`,
 })
 await mcp.connect(new StdioServerTransport())
 // Parent (claude) closing our stdin means the session is over.
@@ -73,8 +74,9 @@ async function pump() {
     buf += b.toString('utf8')
     let i
     while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i); buf = buf.slice(i + 1)
-      cursor += Buffer.byteLength(line) + 1
+      // Consume the line only after it was sent: a failed notification leaves it
+      // in buf (and the cursor unadvanced) so the next pump retries it.
+      const line = buf.slice(0, i)
       if (line.trim()) {
         let j; try { j = JSON.parse(line) } catch { j = { text: line } }
         if (j.ppid === undefined || Number(j.ppid) === ppid) {
@@ -84,6 +86,8 @@ async function pump() {
             meta: { id: String(j.id ?? ''), event: String(j.event ?? ''), ts: String(j.ts ?? '') } } })
         }
       }
+      buf = buf.slice(i + 1)
+      cursor += Buffer.byteLength(line) + 1
       try { writeAtomic(cursorPath, String(cursor)) } catch {}
     }
   } finally { busy = false }

@@ -7,7 +7,7 @@
 # Registration goes through a generated --mcp-config file under $STATE_DIR, so the
 # target repo's own .mcp.json is never touched.
 channel_launch_flags() { # <orch dir> -> prints " --mcp-config <f> --dangerously-load-development-channels server:orch"
-  local here_="$1" dir="$1/channel" cfg="$STATE_DIR/channel-mcp.json"
+  local dir="$1/channel" cfg="$STATE_DIR/channel-mcp.json"
   local node_bin="${ORCH_NODE_BIN:-node}"
   if ! command -v "$node_bin" >/dev/null 2>&1; then
     log "delivery.channel on but node is missing; falling back to tmux injection"; return 1
@@ -33,28 +33,36 @@ channel_launch_flags() { # <orch dir> -> prints " --mcp-config <f> --dangerously
 #                                    without", so a bare Enter would REFUSE the
 #                                    server and the channel would silently never load)
 #   "Loading development channels" -> Enter        (cursor starts on "I am using this")
-# Returns 0 once the prompt is ready with no dialog showing, 1 on timeout -- the
-# caller then simply carries on and the heartbeat falls back to tmux injection
-# because no loaded liveness file ever appears.
+# Each dialog is checked on its own (not if/elif on the raw text): an answered
+# dialog's text can linger in the 40-row tail and must not shadow the next one.
+# Returns 0 once the prompt is ready with no dialog showing, 1 on timeout, 2 on
+# timeout with a channel dialog on screen at the end -- neither is in pane_has_dialog,
+# and its "❯ 1." row matches TUI_READY_REGEX, so the caller must NOT treat the
+# pane as ready (a pasted role prompt would land in the dialog). On 1 the caller
+# carries on and the heartbeat falls back to tmux injection because no loaded
+# liveness file ever appears.
 channel_answer_startup_dialogs() { # <target> [timeout_s]
-  local t="${2:-30}" i=0 tail_ mcp_done=0 dev_done=0
+  local t="${2:-30}" i=0 tail_ mcp_done=0 dev_done=0 mcp_up dev_up
+  case "$t" in ''|*[!0-9]*) t=30 ;; esac
   while [ "$i" -lt "$t" ]; do
     tail_="$(pane_tail "$1" 40)"
-    if printf '%s\n' "$tail_" | grep -q 'New MCP server found'; then
-      if [ "$mcp_done" -eq 0 ]; then
-        tmux send-keys -t "$1" Up Up Enter; mcp_done=1
-        log "channel launch: answered 'New MCP server found' (Up Up Enter -> Use this MCP server)"
-      fi
-    elif printf '%s\n' "$tail_" | grep -q 'Loading development channels'; then
-      if [ "$dev_done" -eq 0 ]; then
-        tmux send-keys -t "$1" Enter; dev_done=1
-        log "channel launch: accepted development-channels warning (Enter)"
-      fi
-    elif [ "$dev_done" -eq 1 ] && is_ready "$1"; then
+    mcp_up=0; dev_up=0
+    printf '%s\n' "$tail_" | grep -q 'New MCP server found' && mcp_up=1
+    printf '%s\n' "$tail_" | grep -q 'Loading development channels' && dev_up=1
+    if [ "$mcp_up" -eq 1 ] && [ "$mcp_done" -eq 0 ]; then
+      tmux send-keys -t "$1" Up Up Enter; mcp_done=1
+      log "channel launch: answered 'New MCP server found' (Up Up Enter -> Use this MCP server)"
+    elif [ "$dev_up" -eq 1 ] && [ "$dev_done" -eq 0 ]; then
+      tmux send-keys -t "$1" Enter; dev_done=1
+      log "channel launch: accepted development-channels warning (Enter)"
+    elif [ "$dev_done" -eq 1 ] && [ "$mcp_up" -eq 0 ] && [ "$dev_up" -eq 0 ] && is_ready "$1"; then
+      # Only with no channel dialog text in view: its "❯ 1." row satisfies is_ready.
       return 0
     fi
     sleep 1; i=$((i + 1))
   done
   log "channel launch: startup dialogs not resolved within ${t}s; heartbeat will use tmux injection"
+  # Re-look once: a dialog that rendered late, or one whose keypress did not take.
+  pane_tail "$1" 40 | grep -qE 'New MCP server found|Loading development channels' && return 2
   return 1
 }

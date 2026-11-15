@@ -100,3 +100,34 @@ DEV_DLG='WARNING: Loading development channels
   [ "$init" -lt "$gate" ] && [ "$gate" -lt "$call" ] && [ "$call" -lt "$launch" ]
   grep -q 'claude --dangerously-skip-permissions.*\${channel_flags}' "$b"
 }
+
+@test "dialogs: stale MCP-dialog text left in the tail does not shadow the dev warning" {
+  printf '%s\n' "$MCP_DLG" > "$PD/pane.0"
+  printf '%s\n%s\n' "$MCP_DLG" "$DEV_DLG" > "$PD/pane.1"
+  printf '%s\n' '❯ ' > "$PD/pane.2"
+  run channel_answer_startup_dialogs orch:orchestrator 10
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 1p "$KEYS")" = "Up Up Enter" ]
+  [ "$(sed -n 2p "$KEYS")" = "Enter" ]
+}
+
+@test "dialogs: timeout with a channel dialog still on screen returns 2 (caller must not treat the pane as ready)" {
+  printf '%s\n' "$DEV_DLG" > "$PD/pane.0"   # Enter "does not take": every pane shows it
+  run channel_answer_startup_dialogs orch:orchestrator 2
+  [ "$status" -eq 2 ]
+  [ "$(cat "$KEYS")" = "Enter" ]
+}
+
+@test "bootstrap: a channel-dialog timeout (rc 2) skips wait_ready_or_dialog and the role-prompt paste" {
+  b="$BATS_TEST_DIRNAME/../_orch/bootstrap.sh"
+  grep -q 'channel_answer_startup_dialogs .*' "$b"
+  grep -q '\[ "\$wr" -eq 2 \] || wait_ready_or_dialog' "$b"
+}
+
+@test "dialogs: non-numeric timeout falls back to 30s instead of erroring out at once" {
+  printf '%s\n' "$DEV_DLG" > "$PD/pane.0"
+  printf '%s\n' '❯ ' > "$PD/pane.1"
+  run channel_answer_startup_dialogs orch:orchestrator 30s
+  [ "$status" -eq 0 ]
+  [ "$(cat "$KEYS")" = "Enter" ]
+}

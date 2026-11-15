@@ -201,11 +201,15 @@ if ! session_exists "$S"; then
     channel_flags="$(channel_launch_flags "$here")" || channel_flags=""
   fi
   tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}${channel_flags}" Enter
+  wr=0
   if [ -n "$channel_flags" ]; then
+    # 2 = a channel dialog is still up: pane_has_dialog does not know it, so a
+    # wait_ready below would call it "ready" and paste the role prompt into it.
     channel_answer_startup_dialogs "$S:$ORCH_WINDOW" \
-      "$(jq -r '.delivery.channel_startup_timeout_seconds // 30' "$here/config.json" 2>/dev/null || echo 30)" || true
+      "$(jq -r '.delivery.channel_startup_timeout_seconds // 30' "$here/config.json" 2>/dev/null || echo 30)" || wr=$?
+    [ "$wr" -eq 2 ] || wr=0
   fi
-  wr=0; wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
+  [ "$wr" -eq 2 ] || wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
   if [ "$wr" -eq 0 ]; then
     send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt "$here")"
   elif [ "$wr" -eq 2 ]; then
