@@ -77,6 +77,7 @@ cp -R "$src/_orch/." "$stage/_orch/"
 cp -R "$src/tmux/." "$stage/tmux/"
 cp "$src/orch" "$stage/orch"
 rm -rf "$stage/_orch/state"   # defensive: never stage runtime state either
+rm -rf "$stage/_orch/channel/node_modules"   # issue #212: per-install npm deps, never shipped
 have_cfg=0
 [ -f "$target/_orch/config.json" ] && have_cfg=1
 [ "$have_cfg" = 1 ] && rm -f "$stage/_orch/config.json"

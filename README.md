@@ -181,7 +181,9 @@ with it off nothing below applies and behaviour is unchanged.
 **Enable:** set `"delivery": {"channel": true}` in `_orch/config.json`, or `ORCH_DELIVERY_CHANNEL=1`
 (`=0` forces it off). Needs Node >= 18; `orch up` runs `npm ci --prefix _orch/channel` if the pinned
 `@modelcontextprotocol/sdk` is missing (otherwise it logs and falls back). It only affects a master
-launched by `orch up` after you enable it, so restart the master to adopt it.
+launched by `orch up` after you enable it, and the heartbeat reads the setting once at its own
+startup (an `orch up` that finds it running reuses it), so adopt it by restarting both: `./orch down`,
+`tmux kill-session -t <session>` (`orch up` only launches a master into a new session), then `orch up`.
 
 **What `orch up` does:** launches the master with `--mcp-config _orch/state/channel-mcp.json`
 (your repo's `.mcp.json` is untouched, and the "New MCP server found" approval does not appear) and
