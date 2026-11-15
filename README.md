@@ -206,8 +206,11 @@ Claude Code silently drops events, so process presence is never used as the sign
 - **Team/Enterprise**: an admin must enable `channelsEnabled` in managed settings, or channels are
   blocked by org policy. That is only visible as a startup warning in the pane, not detected;
   on such orgs leave this off. Claude Code requires a claude.ai login for channels.
-- Delivery cannot be acknowledged (Claude Code sends no ack), and events are not replayed if the
-  master dies between the outbox write and the model reading it.
+- Delivery cannot be acknowledged (Claude Code sends no ack). If the master claude (or its server)
+  dies after the heartbeat wrote an outbox, every line the server had not yet emitted (past its
+  persisted cursor) is requeued to the inbox on the next tick and delivered by whichever path is
+  live. A line already emitted to a claude that then died before the model read it is gone, the
+  same as text typed into a pane that dies.
 - `/clear` keeps the same server and works. A claude restart without re-running `orch up` loses the
   flag, the liveness file goes stale, and the heartbeat falls back to tmux injection.
 - Startup banner may print `server:orch · no MCP server configured with that name` while delivery

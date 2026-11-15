@@ -694,6 +694,41 @@ channel_deliver() {
   printf '%s\n' "$out" >> "$STATE_DIR/channel-outbox-$pid.jsonl"
 }
 
+# [fresh_s] -- requeue undelivered lines from ORPHANED outboxes back into the inbox.
+# An outbox is orphaned when its server no longer publishes a fresh liveness file
+# (the master claude, or just its server, died or restarted after the heartbeat
+# drained the inbox into it). Its new claude has a new pid, so nothing else would
+# ever read those lines. Lines past the server's persisted cursor were never
+# emitted; they go back to the inbox (original text) and take whatever path the
+# next batch takes. Lines before the cursor were already emitted and are not
+# replayed. The outbox is renamed away first, so a straggling server (it reopens
+# the outbox by path on every poll) cannot emit the same lines as well.
+# No outbox files (channel delivery never used) = one glob, no forks.
+channel_replay_orphans() {
+  local fresh="${1:-15}" ob pid live rp cur n now
+  case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
+  for ob in "$STATE_DIR"/channel-outbox-*.jsonl; do
+    [ -f "$ob" ] || continue
+    pid="${ob##*/channel-outbox-}"; pid="${pid%.jsonl}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    live="$STATE_DIR/channel-$pid.json"
+    now="${now:-$(date +%s)}"
+    if [ -f "$live" ] && jq -e --argjson now "$now" --argjson fresh "$fresh" \
+        '(.ts | type) == "number" and ($now - .ts) <= $fresh' "$live" >/dev/null 2>&1; then
+      continue   # a live server owns this outbox
+    fi
+    rp="$ob.replay.$$"
+    mv -f "$ob" "$rp" 2>/dev/null || continue
+    cur="$(cat "$STATE_DIR/channel-cursor-$pid" 2>/dev/null)" || cur=0
+    case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    n="$(tail -c +"$((cur + 1))" "$rp" | jq -Rr 'try (fromjson | .text // empty | strings) catch empty' 2>/dev/null \
+      | tee -a "$INBOX" | grep -c .)" || n=0
+    rm -f "$rp" "$STATE_DIR/channel-cursor-$pid" "$live"
+    [ "${n:-0}" -eq 0 ] || log "requeued $n undelivered channel event(s) from orphaned outbox (claude pid $pid)"
+  done
+  return 0
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
@@ -777,6 +812,9 @@ heartbeat_main() {
     else
       master_dead_alert "$S:$ORCH_WINDOW" "$(date +%s)" "$master_alert_interval"
     fi
+
+    # Issue #212: no event may be lost to a dead master's channel outbox.
+    channel_replay_orphans "$chan_fresh"
 
     if events="$(drain_inbox)"; then
       # Issue #122: decide noise-only-ness BEFORE anything else in this

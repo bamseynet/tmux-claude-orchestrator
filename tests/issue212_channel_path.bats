@@ -172,3 +172,54 @@ assert_tmux_path() {
   run jq -r '[.ppid, .event, .id] | @tsv' "$OUTBOX"
   [ "$output" = "$(printf '%s\t%s\t%s' "$FAKE_CLAUDE_PID" worker-done w4)" ]
 }
+
+# --- orphaned outbox replay: no event is lost when the master claude (or its
+# server) dies after the heartbeat drained the inbox into its outbox -----------
+
+# <pid> <id>... -- outbox lines exactly as channel_deliver writes them
+orphan_outbox() {
+  local p="$1"; shift; mkdir -p "$STATE_DIR"
+  for id in "$@"; do
+    jq -nc --argjson p "$p" --arg id "$id" \
+      '{ppid:$p, id:$id, event:"turn-end", ts:"", text:({id:$id, event:"turn-end"}|tojson)}'
+  done >> "$STATE_DIR/channel-outbox-$p.jsonl"
+}
+
+@test "replay: orphaned outbox (no liveness file) requeues only lines past the cursor, then removes it" {
+  orphan_outbox 4242 sent1 lost1 lost2
+  head -1 "$STATE_DIR/channel-outbox-4242.jsonl" | wc -c | tr -d ' ' > "$STATE_DIR/channel-cursor-4242"
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ "$(grep -c . "$INBOX")" -eq 2 ]
+  [ "$(jq -r .id "$INBOX" | tr '\n' ' ')" = "lost1 lost2 " ]
+  refute_grep '"sent1"' "$INBOX"
+  [ ! -e "$STATE_DIR/channel-outbox-4242.jsonl" ]
+  [ ! -e "$STATE_DIR/channel-cursor-4242" ]
+  grep -q 'requeued 2 undelivered channel event' "$LOG"
+}
+
+@test "replay: stale liveness file counts as orphaned" {
+  orphan_outbox 4242 lost1
+  liveness 4242 true 600
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ "$(jq -r .id "$INBOX")" = "lost1" ]
+  [ ! -e "$STATE_DIR/channel-4242.json" ]
+}
+
+@test "replay: a fresh liveness file means a live server owns the outbox -- untouched" {
+  orphan_outbox 4242 mine1
+  liveness 4242 true 0
+  : > "$INBOX"
+  channel_replay_orphans 15
+  [ ! -s "$INBOX" ]
+  grep -q '"mine1"' "$STATE_DIR/channel-outbox-4242.jsonl"
+}
+
+@test "replay: master restarted (new claude pid, no channel) -> dead pid's undelivered event is delivered via tmux" {
+  orphan_outbox 4242 w9
+  run_one_event '{"id":"w10","event":"turn-end"}'
+  grep -q 'requeued 1 undelivered channel event' "$LOG"
+  grep 'woke master with' "$LOG" | grep -q '"w9"'
+  [ ! -e "$STATE_DIR/channel-outbox-4242.jsonl" ]
+}
