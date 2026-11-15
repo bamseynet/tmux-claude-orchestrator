@@ -92,6 +92,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Install channel server deps (issue #212, lockfile-pinned)
+        # Without this the node-dependent channel-server bats tests skip (with a reason).
+        run: npm ci --prefix _orch/channel
+
       - name: Install bats (pinned)
         env:
           BATS_VERSION: 1.11.0

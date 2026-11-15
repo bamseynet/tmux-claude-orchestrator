@@ -192,7 +192,19 @@ if ! session_exists "$S"; then
       log "WARNING: master_context.autocompact_window invalid (want integer 100000-1000000); ignoring"
     fi
   fi
-  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}" Enter
+  # issue #212: opt-in channel delivery (delivery.channel / ORCH_DELIVERY_CHANNEL).
+  # Off by default: channel_flags stays empty and the launch line is unchanged.
+  channel_flags=""
+  if delivery_channel_enabled; then
+    # shellcheck disable=SC1091
+    source "$here/channel/launch.sh"
+    channel_flags="$(channel_launch_flags "$here")" || channel_flags=""
+  fi
+  tmux send-keys -t "$S:$ORCH_WINDOW" "${ORCH_GHOST_ENV}${compact_env}claude --dangerously-skip-permissions${master_model:+ --model $master_model}${settings_flag}${channel_flags}" Enter
+  if [ -n "$channel_flags" ]; then
+    channel_answer_startup_dialogs "$S:$ORCH_WINDOW" \
+      "$(jq -r '.delivery.channel_startup_timeout_seconds // 30' "$here/config.json" 2>/dev/null || echo 30)" || true
+  fi
   wr=0; wait_ready_or_dialog "$S:$ORCH_WINDOW" 90 || wr=$?
   if [ "$wr" -eq 0 ]; then
     send_prompt "$S:$ORCH_WINDOW" "$(master_role_prompt "$here")"

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# _orch/channel/launch.sh -- master-launch helpers for the opt-in channel delivery
+# path (issue #212). Sourced by bootstrap.sh (after lib.sh); never run directly.
+
+# Prepare the channel server and print the extra `claude` flags, or print nothing
+# and return 1 (fail open: the master launches exactly as today, tmux injection).
+# Registration goes through a generated --mcp-config file under $STATE_DIR, so the
+# target repo's own .mcp.json is never touched.
+channel_launch_flags() { # <orch dir> -> prints " --mcp-config <f> --dangerously-load-development-channels server:orch"
+  local here_="$1" dir="$1/channel" cfg="$STATE_DIR/channel-mcp.json"
+  local node_bin="${ORCH_NODE_BIN:-node}"
+  if ! command -v "$node_bin" >/dev/null 2>&1; then
+    log "delivery.channel on but node is missing; falling back to tmux injection"; return 1
+  fi
+  if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ]; then
+    if command -v npm >/dev/null 2>&1 && [ -f "$dir/package-lock.json" ]; then
+      npm ci --prefix "$dir" --silent >>"$LOG" 2>&1 || true
+    fi
+    if [ ! -d "$dir/node_modules/@modelcontextprotocol/sdk" ]; then
+      log "delivery.channel on but channel deps are not installed (npm ci --prefix $dir); falling back to tmux injection"
+      return 1
+    fi
+  fi
+  mkdir -p "$STATE_DIR"
+  jq -n --arg srv "$dir/server.mjs" --arg st "$STATE_DIR" --arg node "$node_bin" \
+    '{mcpServers:{orch:{command:$node,args:[$srv],env:{ORCH_STATE_DIR:$st}}}}' \
+    > "$cfg.tmp.$$" && mv -f "$cfg.tmp.$$" "$cfg" || { rm -f "$cfg.tmp.$$"; return 1; }
+  printf ' --mcp-config %q --dangerously-load-development-channels server:orch' "$cfg"
+}
+
+# Answer the master's startup dialogs for the channel launch. Polls the pane:
+#   "New MCP server found"        -> Up Up Enter  (the cursor starts on "Continue
+#                                    without", so a bare Enter would REFUSE the
+#                                    server and the channel would silently never load)
+#   "Loading development channels" -> Enter        (cursor starts on "I am using this")
+# Returns 0 once the prompt is ready with no dialog showing, 1 on timeout -- the
+# caller then simply carries on and the heartbeat falls back to tmux injection
+# because no loaded liveness file ever appears.
+channel_answer_startup_dialogs() { # <target> [timeout_s]
+  local t="${2:-30}" i=0 tail_ mcp_done=0 dev_done=0
+  while [ "$i" -lt "$t" ]; do
+    tail_="$(pane_tail "$1" 40)"
+    if printf '%s\n' "$tail_" | grep -q 'New MCP server found'; then
+      if [ "$mcp_done" -eq 0 ]; then
+        tmux send-keys -t "$1" Up Up Enter; mcp_done=1
+        log "channel launch: answered 'New MCP server found' (Up Up Enter -> Use this MCP server)"
+      fi
+    elif printf '%s\n' "$tail_" | grep -q 'Loading development channels'; then
+      if [ "$dev_done" -eq 0 ]; then
+        tmux send-keys -t "$1" Enter; dev_done=1
+        log "channel launch: accepted development-channels warning (Enter)"
+      fi
+    elif [ "$dev_done" -eq 1 ] && is_ready "$1"; then
+      return 0
+    fi
+    sleep 1; i=$((i + 1))
+  done
+  log "channel launch: startup dialogs not resolved within ${t}s; heartbeat will use tmux injection"
+  return 1
+}

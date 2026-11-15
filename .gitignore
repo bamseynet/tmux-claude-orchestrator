@@ -7,3 +7,6 @@ wt/
 
 # local Claude settings (hooks/permissions are machine-specific)
 .claude/settings.local.json
+
+# channel server deps (issue #212); installed by npm ci
+_orch/channel/node_modules/

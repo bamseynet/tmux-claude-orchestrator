@@ -639,11 +639,66 @@ worker_context_tick() {
   done <<<"$recs"
   return 0
 }
+# --- issue #212: opt-in channel delivery path -----------------------------------
+# The channel server (_orch/channel/server.mjs) runs as a child of the master's
+# claude and tails $STATE_DIR/channel-outbox-<claude pid>.jsonl, emitting one
+# notifications/claude/channel per line. It publishes $STATE_DIR/channel-<ppid>.json
+# ({pid,ppid,started,loaded,ts}); loaded = the parent claude's argv carries the
+# development-channels flag. The server spawns even WITHOUT the flag (events are
+# then silently dropped), so process presence is never the signal -- only a fresh
+# file whose ppid is the master's claude pid with loaded=true.
+_cmdline_of() { # <pid> -> argv joined by spaces (empty if gone)
+  if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null
+  else ps -o command= -p "$1" 2>/dev/null; fi
+}
+
+# <session:window> -> prints the pid of the claude process in that pane (the pane
+# pid itself or one of its direct children whose argv names claude); fails if none.
+master_claude_pid() {
+  local pp c cmd
+  pp="$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null)" || return 1
+  case "$pp" in ''|*[!0-9]*) return 1 ;; esac
+  for c in "$pp" $(pgrep -P "$pp" 2>/dev/null); do
+    cmd="$(_cmdline_of "$c")"
+    case "$cmd" in *claude*) printf '%s\n' "$c"; return 0 ;; esac
+  done
+  return 1
+}
+
+# <session:window> -> 0 and prints the claude pid iff the channel path may carry
+# this event: opted in AND a fresh liveness file for exactly that pid, loaded=true.
+channel_path_ready() {
+  delivery_channel_enabled || return 1
+  local pid fresh f now
+  pid="$(master_claude_pid "$1")" || return 1
+  fresh="$(jq -r '.delivery.channel_fresh_seconds // 15' "$CONFIG" 2>/dev/null)"
+  case "$fresh" in ''|*[!0-9]*) fresh=15 ;; esac
+  f="$STATE_DIR/channel-$pid.json"
+  [ -f "$f" ] || return 1
+  now="$(date +%s)"
+  jq -e --argjson pid "$pid" --argjson now "$now" --argjson fresh "$fresh" \
+    '.ppid == $pid and .loaded == true and (.ts | type) == "number" and ($now - .ts) <= $fresh' \
+    "$f" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$pid"
+}
+
+# <claude pid> <events> -- append each event as one JSON line to that pid's outbox.
+# One write() of whole lines, so the tailing server never sees a torn record.
+channel_deliver() {
+  local pid="$1" events="$2" out
+  out="$(jq -Rc --argjson ppid "$pid" '
+    select(test("\\S")) | (try fromjson catch {}) as $e
+    | {ppid:$ppid, id:(($e.id // "")|tostring), event:(($e.event // "")|tostring),
+       ts:(($e.ts // "")|tostring), text:.}' <<<"$events")" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" >> "$STATE_DIR/channel-outbox-$pid.jsonl"
+}
+
 heartbeat_main() {
   local S="$SESSION_NAME"
   # $CONFIG (from lib.sh) honors ORCH_ROOT overrides, unlike a script-relative
   # path — needed so hermetic tests can point config at a temp dir.
-  local normal idle events
+  local normal idle events chan_pid
   normal="$(jq -r '.intervals.normal_seconds // 20' "$CONFIG")"
   idle="$(jq -r '.intervals.idle_seconds // 60' "$CONFIG")"
   local master_alert_interval
@@ -777,6 +832,13 @@ heartbeat_main() {
         # of burning that timeout; master_dead_alert above already surfaced it.
         printf '%s\n' "$events" >> "$INBOX"
         log "master window down; requeued events"
+      elif chan_pid="$(channel_path_ready "$S:$ORCH_WINDOW")" && channel_deliver "$chan_pid" "$events"; then
+        # Issue #212: ONE path per batch. A fresh loaded channel server owns
+        # delivery: nothing is typed into the pane (no draft hazard, no busy
+        # wait). The inbox is already drained, so the tmux path cannot also
+        # deliver these events.
+        draft_requeue_count=0; draft_requeue_since=0
+        log "delivered via channel (claude pid $chan_pid): $(echo "$events" | tr '\n' ' ')"
       # Only poke the master when ITS pane is idle, to avoid prompt collisions.
       # issue #155: a dialog (already up, or rendering mid-wait) ends the wait at
       # once -- is_ready refuses dialogs, so a plain wait_ready would burn its

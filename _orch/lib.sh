@@ -1733,6 +1733,17 @@ queue_pop() {
   printf '%s\n' "$first"
 }
 
+# issue #212: opt-in channel delivery. ORCH_DELIVERY_CHANNEL (1|true / 0|false)
+# overrides config.delivery.channel; default OFF. Raw jq read: `// default` would
+# treat a literal false as absent.
+delivery_channel_enabled() { # -> 0 if channel delivery is opted in
+  case "${ORCH_DELIVERY_CHANNEL:-}" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off) return 1 ;;
+  esac
+  [ "$(jq -r '.delivery.channel' "$CONFIG" 2>/dev/null)" = "true" ]
+}
+
 # The master's role prompt (issue #159): sent by bootstrap.sh at launch and
 # re-injected by master-session-start.sh after a /clear or compaction.
 # [dir]: the _orch dir whose CLAUDE.md to name (bootstrap passes its own $here,

@@ -4,6 +4,11 @@
     "normal_seconds": 20,
     "idle_seconds": 60
   },
+  "delivery": {
+    "channel": false,
+    "channel_fresh_seconds": 15,
+    "channel_startup_timeout_seconds": 30
+  },
   "heartbeat": {
     "inject_denylist": ["subagent-done"],
     "max_draft_requeue_ticks": 10,

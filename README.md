@@ -171,6 +171,48 @@ orchestrator's own pane and submits it — a keepalive/reconnect nudge you can r
 hand. It defaults to `$SESSION_NAME:$ORCH_WINDOW`, respects the same unsent-draft guard as the
 heartbeat (skip unless `--force`), and delivers via `send_prompt()`.
 
+## Channel delivery (opt-in, experimental, issue #212)
+
+By default the heartbeat wakes the master by typing into its tmux pane. Claude Code's
+**channels** feature (research preview) can push events into the session without a single
+keystroke, which removes the unsent-draft hazard (#38/#52) on that path. It is **off by default**;
+with it off nothing below applies and behaviour is unchanged.
+
+**Enable:** set `"delivery": {"channel": true}` in `_orch/config.json`, or `ORCH_DELIVERY_CHANNEL=1`
+(`=0` forces it off). Needs Node >= 18; `orch up` runs `npm ci --prefix _orch/channel` if the pinned
+`@modelcontextprotocol/sdk` is missing (otherwise it logs and falls back). It only affects a master
+launched by `orch up` after you enable it, so restart the master to adopt it.
+
+**What `orch up` does:** launches the master with `--mcp-config _orch/state/channel-mcp.json`
+(your repo's `.mcp.json` is untouched, and the "New MCP server found" approval does not appear) and
+`--dangerously-load-development-channels server:orch`, then presses Enter on the **development
+channels warning** (shown on every launch; its default is "I am using this for local development").
+If a "New MCP server found" dialog does appear, it is answered with Up Up Enter, never a bare
+Enter (the cursor starts on "Continue without", which would silently refuse the server). On
+timeout (`delivery.channel_startup_timeout_seconds`, 30) it gives up and you stay on tmux injection.
+The dev flag is required because the orchestrator's server is not on Anthropic's approved-channel
+allowlist.
+
+**How a delivery is chosen** (per batch, exactly one path): the heartbeat uses the channel only when
+`_orch/state/channel-<claude pid>.json` is fresh (`delivery.channel_fresh_seconds`, 15), names the
+master's actual claude pid, and says `loaded: true` (the server saw the dev flag in its parent's
+argv). Otherwise it types into the pane exactly as before. Events go to
+`channel-outbox-<pid>.jsonl`, which the server tails; the inbox is drained at that moment so the
+tmux path can never re-deliver them. The server also spawns *without* the flag, in which case
+Claude Code silently drops events, so process presence is never used as the signal.
+
+**Caveats:**
+- Research preview: the protocol and flag may change; versions are pinned (`_orch/channel/package-lock.json`).
+- **Team/Enterprise**: an admin must enable `channelsEnabled` in managed settings, or channels are
+  blocked by org policy. That is only visible as a startup warning in the pane, not detected;
+  on such orgs leave this off. Claude Code requires a claude.ai login for channels.
+- Delivery cannot be acknowledged (Claude Code sends no ack), and events are not replayed if the
+  master dies between the outbox write and the model reading it.
+- `/clear` keeps the same server and works. A claude restart without re-running `orch up` loses the
+  flag, the liveness file goes stale, and the heartbeat falls back to tmux injection.
+- Startup banner may print `server:orch · no MCP server configured with that name` while delivery
+  still works (observed on Claude Code 2.1.325).
+
 ## iTerm2 note (`-CC` vs plain)
 
 `tmux -CC` maps each window to a native iTerm2 tab (pretty) **but hides the tmux status line**,
